@@ -1,0 +1,349 @@
+import { app } from 'electron'
+import { join } from 'path'
+import Database from 'better-sqlite3'
+
+export interface ProviderRow {
+  apiKey: string
+  baseUrl: string
+  defaultModel: string
+}
+
+let db: Database.Database
+
+export function initDb(): void {
+  db = new Database(join(app.getPath('userData'), 'chime.db'))
+  db.pragma('journal_mode = WAL')
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS provider (
+      id            INTEGER PRIMARY KEY CHECK (id = 1),
+      api_key       TEXT NOT NULL DEFAULT '',
+      base_url      TEXT NOT NULL DEFAULT 'https://api.deepseek.com',
+      default_model TEXT NOT NULL DEFAULT ''
+    );
+    INSERT OR IGNORE INTO provider (id) VALUES (1);
+
+    CREATE TABLE IF NOT EXISTS conversation (
+      id         TEXT PRIMARY KEY,
+      title      TEXT NOT NULL DEFAULT '新对话',
+      model      TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS message (
+      id              TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      role            TEXT NOT NULL,
+      content         TEXT NOT NULL DEFAULT '',
+      reasoning       TEXT,
+      status          TEXT NOT NULL DEFAULT 'done',
+      created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_conv ON message (conversation_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS kb (
+      id          INTEGER PRIMARY KEY CHECK (id = 1),
+      root_path   TEXT NOT NULL DEFAULT '',
+      last_commit TEXT,
+      embed_model TEXT NOT NULL DEFAULT '',
+      indexed_at  INTEGER
+    );
+    INSERT OR IGNORE INTO kb (id) VALUES (1);
+
+    CREATE TABLE IF NOT EXISTS kb_file (
+      path         TEXT PRIMARY KEY,
+      content_hash TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS chunk (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_path    TEXT NOT NULL,
+      heading_path TEXT NOT NULL,
+      start_line   INTEGER NOT NULL,
+      end_line     INTEGER NOT NULL,
+      content      TEXT NOT NULL,
+      embedding    BLOB NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chunk_file ON chunk (file_path);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(seg_text);
+  `)
+  // 迁移：标题是否仍为“自动生成”（被手动改名后置 0，不再自动覆盖）
+  try {
+    db.exec('ALTER TABLE conversation ADD COLUMN title_auto INTEGER NOT NULL DEFAULT 1')
+  } catch {
+    // 列已存在
+  }
+  // 迁移：会话是否挂知识库（首条消息时定，不可改）
+  try {
+    db.exec('ALTER TABLE conversation ADD COLUMN kb_enabled INTEGER NOT NULL DEFAULT 0')
+  } catch {
+    // 列已存在
+  }
+  // 迁移：知识库回答的来源清单（JSON，重启后来源区不丢）
+  try {
+    db.exec('ALTER TABLE message ADD COLUMN sources TEXT')
+  } catch {
+    // 列已存在
+  }
+  // 迁移：知识库名称（录入时可自定义）
+  try {
+    db.exec("ALTER TABLE kb ADD COLUMN name TEXT NOT NULL DEFAULT '业务知识库'")
+  } catch {
+    // 列已存在
+  }
+}
+
+export function getProvider(): ProviderRow {
+  return db
+    .prepare(
+      'SELECT api_key AS apiKey, base_url AS baseUrl, default_model AS defaultModel FROM provider WHERE id = 1'
+    )
+    .get() as ProviderRow
+}
+
+export function saveProvider(input: {
+  apiKey: string | null
+  baseUrl: string
+  defaultModel: string
+}): void {
+  // apiKey 为 null 表示沿用已存的密钥（界面未改动）
+  const apiKey = input.apiKey === null ? getProvider().apiKey : input.apiKey
+  db.prepare('UPDATE provider SET api_key = ?, base_url = ?, default_model = ? WHERE id = 1').run(
+    apiKey,
+    input.baseUrl,
+    input.defaultModel
+  )
+}
+
+// 仅用于界面展示，明文密钥不离开主进程
+export function maskApiKey(key: string): string {
+  if (!key) return ''
+  if (key.length > 16) return `${key.slice(0, 6)}••••${key.slice(-4)}`
+  if (key.length > 8) return `${key.slice(0, 3)}••••${key.slice(-2)}`
+  return '••••'
+}
+
+export interface ConversationRow {
+  id: string
+  title: string
+  model: string
+  updatedAt: number
+  kbEnabled?: number
+}
+
+export interface MessageRow {
+  id: string
+  conversationId: string
+  role: string
+  content: string
+  reasoning: string | null
+  status: string
+  createdAt: number
+  sources?: string | null // JSON 序列化的来源清单
+}
+
+export function listConversations(): ConversationRow[] {
+  return db
+    .prepare(
+      'SELECT id, title, model, updated_at AS updatedAt, kb_enabled AS kbEnabled FROM conversation ORDER BY updated_at DESC'
+    )
+    .all() as ConversationRow[]
+}
+
+export function createConversation(id: string, model: string, now: number): ConversationRow {
+  db.prepare(
+    'INSERT INTO conversation (id, title, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, '新对话', model, now, now)
+  return { id, title: '新对话', model, updatedAt: now }
+}
+
+export function deleteConversation(id: string): void {
+  db.prepare('DELETE FROM message WHERE conversation_id = ?').run(id)
+  db.prepare('DELETE FROM conversation WHERE id = ?').run(id)
+}
+
+export function getMessages(conversationId: string): MessageRow[] {
+  return db
+    .prepare(
+      'SELECT id, conversation_id AS conversationId, role, content, reasoning, status, created_at AS createdAt, sources FROM message WHERE conversation_id = ? ORDER BY created_at'
+    )
+    .all(conversationId) as MessageRow[]
+}
+
+export function getConversationMeta(id: string): { title: string; titleAuto: boolean } | null {
+  const row = db
+    .prepare('SELECT title, title_auto AS titleAuto FROM conversation WHERE id = ?')
+    .get(id) as { title: string; titleAuto: number } | undefined
+  return row ? { title: row.title, titleAuto: !!row.titleAuto } : null
+}
+
+export function setConversationTitle(id: string, title: string, auto: boolean): void {
+  db.prepare('UPDATE conversation SET title = ?, title_auto = ? WHERE id = ?').run(
+    title,
+    auto ? 1 : 0,
+    id
+  )
+}
+
+export function saveMessage(m: MessageRow, now: number): void {
+  db.prepare(
+    `INSERT INTO message (id, conversation_id, role, content, reasoning, status, created_at, sources)
+     VALUES (@id, @conversationId, @role, @content, @reasoning, @status, @createdAt, @sources)
+     ON CONFLICT(id) DO UPDATE SET content = @content, reasoning = @reasoning, status = @status, sources = @sources`
+  ).run({ ...m, reasoning: m.reasoning ?? null, sources: m.sources ?? null })
+  db.prepare('UPDATE conversation SET updated_at = ? WHERE id = ?').run(now, m.conversationId)
+  // 首条用户消息自动作为标题
+  if (m.role === 'user') {
+    db.prepare("UPDATE conversation SET title = ? WHERE id = ? AND title = '新对话'").run(
+      m.content.slice(0, 18) || '新对话',
+      m.conversationId
+    )
+  }
+}
+
+// ── 知识库 ──────────────────────────────────────────
+
+export interface KbRow {
+  rootPath: string
+  name: string
+  lastCommit: string | null
+  embedModel: string
+  indexedAt: number | null
+}
+
+export interface ChunkInput {
+  headingPath: string
+  startLine: number
+  endLine: number
+  content: string
+  embedding: Buffer
+  segText: string // 分词后的检索文本
+}
+
+export function getKb(): KbRow {
+  return db
+    .prepare(
+      'SELECT root_path AS rootPath, name, last_commit AS lastCommit, embed_model AS embedModel, indexed_at AS indexedAt FROM kb WHERE id = 1'
+    )
+    .get() as KbRow
+}
+
+export function setKbMeta(
+  meta: Partial<{ rootPath: string; name: string; lastCommit: string | null; embedModel: string; indexedAt: number }>
+): void {
+  const cur = getKb()
+  db.prepare('UPDATE kb SET root_path = ?, name = ?, last_commit = ?, embed_model = ?, indexed_at = ? WHERE id = 1').run(
+    meta.rootPath ?? cur.rootPath,
+    meta.name ?? cur.name,
+    meta.lastCommit === undefined ? cur.lastCommit : meta.lastCommit,
+    meta.embedModel ?? cur.embedModel,
+    meta.indexedAt ?? cur.indexedAt
+  )
+}
+
+export function kbStats(): { files: number; chunks: number } {
+  const files = (db.prepare('SELECT COUNT(*) AS n FROM kb_file').get() as { n: number }).n
+  const chunks = (db.prepare('SELECT COUNT(*) AS n FROM chunk').get() as { n: number }).n
+  return { files, chunks }
+}
+
+export function listKbFiles(): { path: string; hash: string }[] {
+  return db.prepare('SELECT path, content_hash AS hash FROM kb_file').all() as { path: string; hash: string }[]
+}
+
+// 移除知识库：清空索引数据并复位配置（回到空态）
+export function resetKb(): void {
+  clearKbData()
+  db.prepare("UPDATE kb SET root_path = '', name = '业务知识库', embed_model = '' WHERE id = 1").run()
+}
+
+// 换路径 / 重新构建：整库清空
+export const clearKbData = (): void => {
+  db.transaction(() => {
+    db.prepare('DELETE FROM chunk_fts').run()
+    db.prepare('DELETE FROM chunk').run()
+    db.prepare('DELETE FROM kb_file').run()
+    db.prepare('UPDATE kb SET last_commit = NULL, indexed_at = NULL WHERE id = 1').run()
+  })()
+}
+
+// 删除一个文件的全部数据（chunk 与 FTS 同事务，防幽灵命中）
+export function deleteKbFile(path: string): void {
+  db.transaction(() => {
+    const ids = db.prepare('SELECT id FROM chunk WHERE file_path = ?').all(path) as { id: number }[]
+    const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
+    for (const { id } of ids) delFts.run(id)
+    db.prepare('DELETE FROM chunk WHERE file_path = ?').run(path)
+    db.prepare('DELETE FROM kb_file WHERE path = ?').run(path)
+  })()
+}
+
+// 写入一个文件的全部片段（先清旧数据 = 修改文件的替换语义）
+export function replaceKbFile(path: string, hash: string, chunks: ChunkInput[]): void {
+  db.transaction(() => {
+    const ids = db.prepare('SELECT id FROM chunk WHERE file_path = ?').all(path) as { id: number }[]
+    const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
+    for (const { id } of ids) delFts.run(id)
+    db.prepare('DELETE FROM chunk WHERE file_path = ?').run(path)
+
+    const insChunk = db.prepare(
+      'INSERT INTO chunk (file_path, heading_path, start_line, end_line, content, embedding) VALUES (?, ?, ?, ?, ?, ?)'
+    )
+    // FTS rowid 显式对齐 chunk.id（自动分配在删除后必然错位）
+    const insFts = db.prepare('INSERT INTO chunk_fts (rowid, seg_text) VALUES (?, ?)')
+    for (const c of chunks) {
+      const rowid = insChunk.run(path, c.headingPath, c.startLine, c.endLine, c.content, c.embedding)
+        .lastInsertRowid as number
+      insFts.run(rowid, c.segText)
+    }
+    db.prepare('INSERT INTO kb_file (path, content_hash) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET content_hash = ?').run(
+      path,
+      hash,
+      hash
+    )
+  })()
+}
+
+export function loadAllEmbeddings(): { id: number; embedding: Buffer }[] {
+  return db.prepare('SELECT id, embedding FROM chunk').all() as { id: number; embedding: Buffer }[]
+}
+
+export interface ChunkRow {
+  id: number
+  filePath: string
+  headingPath: string
+  startLine: number
+  endLine: number
+  content: string
+}
+
+export function getChunksByIds(ids: number[]): ChunkRow[] {
+  if (ids.length === 0) return []
+  const rows = db
+    .prepare(
+      `SELECT id, file_path AS filePath, heading_path AS headingPath, start_line AS startLine, end_line AS endLine, content
+       FROM chunk WHERE id IN (${ids.map(() => '?').join(',')})`
+    )
+    .all(...ids) as ChunkRow[]
+  const order = new Map(ids.map((id, i) => [id, i]))
+  return rows.sort((a, b) => order.get(a.id)! - order.get(b.id)!)
+}
+
+// BM25 检索：返回 chunk id（bm25 分数越小越相关，这里只用名次）
+export function ftsSearch(matchQuery: string, limit: number): number[] {
+  if (!matchQuery.trim()) return []
+  const rows = db
+    .prepare('SELECT rowid FROM chunk_fts WHERE chunk_fts MATCH ? ORDER BY bm25(chunk_fts) LIMIT ?')
+    .all(matchQuery, limit) as { rowid: number }[]
+  return rows.map((r) => r.rowid)
+}
+
+export function setConversationKb(id: string, enabled: boolean): void {
+  db.prepare('UPDATE conversation SET kb_enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id)
+}
+
+export function getConversationKb(id: string): boolean {
+  const row = db.prepare('SELECT kb_enabled AS k FROM conversation WHERE id = ?').get(id) as { k: number } | undefined
+  return !!row?.k
+}

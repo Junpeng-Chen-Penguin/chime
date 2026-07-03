@@ -1,0 +1,14 @@
+verifyDepsBeforeRun: false
+allowBuilds:
+  electron: true
+  electron-winstaller: true
+  esbuild: true
+  better-sqlite3: true
+  onnxruntime-node: true
+  protobufjs: false
+  sharp: false
+onlyBuiltDependencies:
+  - electron
+  - esbuild
+  - better-sqlite3
+  - electron-winstaller
