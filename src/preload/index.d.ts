@@ -26,7 +26,12 @@ export interface SourceRef {
   headingPath: string
   startLine: number
   endLine: number
+  content?: string // 片段原文快照（v3 起随消息落库，用于侧板高亮校验）
 }
+
+export type DocOpenResult =
+  | { ok: true; content: string }
+  | { ok: false; reason: 'no-kb' | 'busy' | 'missing' }
 
 export interface ChatEvent {
   type: 'chunk' | 'done' | 'stopped' | 'error' | 'sources' | 'step'
@@ -115,6 +120,7 @@ export interface ChimeApi {
   kbRename: (name: string) => Promise<void>
   kbRemove: () => Promise<{ ok: boolean; error?: string }>
   setConversationKb: (input: { id: string; enabled: boolean }) => Promise<void>
+  openDoc: (filePath: string) => Promise<DocOpenResult>
   onKbProgress: (cb: (p: KbProgress) => void) => () => void
 }
 

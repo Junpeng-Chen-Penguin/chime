@@ -45,6 +45,7 @@ const api = {
   kbRemove: () => ipcRenderer.invoke('kb:remove'),
   setConversationKb: (input: { id: string; enabled: boolean }) =>
     ipcRenderer.invoke('conv:setKb', input),
+  openDoc: (filePath: string) => ipcRenderer.invoke('doc:open', filePath),
   onKbProgress: (cb: (p: unknown) => void): (() => void) => {
     const h = (_e: IpcRendererEvent, p: unknown): void => cb(p)
     ipcRenderer.on('kb:progress', h)

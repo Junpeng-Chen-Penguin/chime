@@ -11,8 +11,9 @@ import {
   CircleCheck,
   Sparkles
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, stripCitations } from '@/lib/utils'
 import type { Msg } from '@/hooks/useChat'
+import type { SourceRef } from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { useSmoothText } from '@/hooks/useSmoothText'
 import { Markdown } from './Markdown'
@@ -39,6 +40,7 @@ interface Props {
   kbSelected: boolean
   kbLocked: boolean
   onToggleKb: () => void
+  onOpenSource: (file: string, sources: SourceRef[]) => void
 }
 
 export default function ChatArea({
@@ -61,13 +63,14 @@ export default function ChatArea({
   kbName,
   kbSelected,
   kbLocked,
-  onToggleKb
+  onToggleKb,
+  onOpenSource
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
   const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.05] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.07)]">
+    <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.05] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.07)]">
       <header
         className={cn(
           'app-drag flex h-[44px] flex-none items-center gap-1',
@@ -97,7 +100,7 @@ export default function ChatArea({
                   m.role === 'user' ? (
                     <UserMsg key={m.id}>{m.content}</UserMsg>
                   ) : (
-                    <AssistantMsg key={m.id} m={m} onRetry={() => onRetry(m.id)} />
+                    <AssistantMsg key={m.id} m={m} onRetry={() => onRetry(m.id)} onOpenSource={onOpenSource} />
                   )
                 )}
               </div>
@@ -206,10 +209,20 @@ function UserMsg({ children }: { children: ReactNode }): React.JSX.Element {
   )
 }
 
-function AssistantMsg({ m, onRetry }: { m: Msg; onRetry: () => void }): React.JSX.Element {
+function AssistantMsg({
+  m,
+  onRetry,
+  onOpenSource
+}: {
+  m: Msg
+  onRetry: () => void
+  onOpenSource: (file: string, sources: SourceRef[]) => void
+}): React.JSX.Element {
   const streaming = m.status === 'streaming'
   const finished = m.status === 'done' || m.status === 'stopped'
-  const content = useSmoothText(m.content, streaming)
+  // 正文隐去引用标记（引用关系保留于 m.content 与 sources，用于来源清单与侧板高亮）
+  const displayRaw = useMemo(() => stripCitations(m.content, streaming), [m.content, streaming])
+  const content = useSmoothText(displayRaw, streaming)
 
   // 处理过程时间线：知识库步骤 + 模型思考统一进一条时间线（思考插在「生成回复」前）
   const dispSteps = useMemo<DispStep[]>(() => {
@@ -243,34 +256,30 @@ function AssistantMsg({ m, onRetry }: { m: Msg; onRetry: () => void }): React.JS
     })
   }, [m.steps, m.reasoning, m.thinkMs, m.content, streaming])
 
-  // 引用按文章（文件）归并：正文角标与来源清单都以文章为单位编号，多个片段同文即同号
-  const { citeMap, articles } = useMemo(() => {
-    const map = new Map<number, number>()
-    const arts: { disp: number; file: string }[] = []
-    if (!m.sources?.length) return { citeMap: map, articles: arts }
+  // 引用按文章（文件）归并；每篇携带其被引用的片段（原文快照），供侧板定位高亮
+  const { cited, articles } = useMemo(() => {
+    const arts: { file: string; sources: SourceRef[] }[] = []
+    if (!m.sources?.length) return { cited: false, articles: arts }
     const byN = new Map(m.sources.map((s) => [s.n, s]))
-    const fileDisp = new Map<string, number>()
+    const byFile = new Map<string, { file: string; sources: SourceRef[] }>()
+    const add = (s: SourceRef): void => {
+      let art = byFile.get(s.filePath)
+      if (!art) {
+        art = { file: s.filePath, sources: [] }
+        byFile.set(s.filePath, art)
+        arts.push(art)
+      }
+      if (!art.sources.includes(s)) art.sources.push(s)
+    }
+    let hasCited = false
     for (const match of m.content.matchAll(/\[(\d+)\]/g)) {
       const s = byN.get(+match[1])
       if (!s) continue
-      let d = fileDisp.get(s.filePath)
-      if (!d) {
-        d = fileDisp.size + 1
-        fileDisp.set(s.filePath, d)
-        arts.push({ disp: d, file: s.filePath })
-      }
-      map.set(s.n, d)
+      hasCited = true
+      add(s)
     }
-    if (arts.length === 0) {
-      // 降级：模型没打角标，列出全部检索来源（按文章去重）
-      for (const s of m.sources) {
-        if (!fileDisp.has(s.filePath)) {
-          fileDisp.set(s.filePath, fileDisp.size + 1)
-          arts.push({ disp: fileDisp.size, file: s.filePath })
-        }
-      }
-    }
-    return { citeMap: map, articles: arts }
+    if (!hasCited) for (const s of m.sources) add(s) // 降级：模型没打标记，列全部（按文章去重）
+    return { cited: hasCited, articles: arts }
   }, [m.content, m.sources])
 
   // 一开始就失败、没有任何内容 → 单独一张错误卡片
@@ -281,15 +290,15 @@ function AssistantMsg({ m, onRetry }: { m: Msg; onRetry: () => void }): React.JS
     <div className="text-[16px] text-foreground select-text">
       {dispSteps.length > 0 && <ProcessBlock steps={dispSteps} streaming={streaming} />}
       {content ? (
-        <Markdown text={content} streaming={streaming} citeMap={citeMap} />
+        <Markdown text={content} streaming={streaming} />
       ) : streaming && dispSteps.length === 0 ? (
         <Markdown text="" streaming />
       ) : null}
       {!streaming && articles.length > 0 && (
-        <SourcesFooter articles={articles} cited={citeMap.size > 0} />
+        <SourcesFooter articles={articles} cited={cited} onOpen={onOpenSource} />
       )}
       {finished && (m.content || m.reasoning) && (
-        <MessageActions content={m.content} onRetry={onRetry} />
+        <MessageActions content={displayRaw} onRetry={onRetry} />
       )}
       {m.status === 'error' && (m.content || m.reasoning) && (
         <ErrorCard className="mt-3" text={m.error ?? '请求中断，请重试'} onRetry={onRetry} />
@@ -368,31 +377,33 @@ function ProcessBlock({ steps, streaming }: { steps: DispStep[]; streaming: bool
   )
 }
 
-// 来源清单：回答完成后展示，以文章（文件）为单位——多个片段出自同一篇只列一条（主流做法：
-// 引用单位是来源文档，片段只是检索的内部粒度）；只列被引用的，模型没打角标时降级列全部
+// 来源清单：回答完成后展示，以文章（文件）为单位去重；只列被引用的，模型没打标记时降级列全部。
+// 条目可点击 → 侧板打开该文档并定位高亮被引用片段
 function SourcesFooter({
   articles,
-  cited
+  cited,
+  onOpen
 }: {
-  articles: { disp: number; file: string }[]
+  articles: { file: string; sources: SourceRef[] }[]
   cited: boolean
+  onOpen: (file: string, sources: SourceRef[]) => void
 }): React.JSX.Element {
   return (
     <div className="animate-in fade-in slide-in-from-bottom-1 mt-3 border-t border-border pt-2.5 duration-500">
       <div className="mb-1 text-[12px] font-medium text-muted-foreground">
         {cited ? '来源' : '参考来源'}
       </div>
-      <div className="flex flex-col gap-0.5">
+      <div className="flex flex-col">
         {articles.map((a) => (
-          <div
-            key={a.disp}
-            className="flex items-baseline gap-2 text-[12.5px] leading-[1.8] text-muted-foreground"
+          <button
+            key={a.file}
+            onClick={() => onOpen(a.file, a.sources)}
+            title="点击查看原文"
+            className="flex items-center gap-2 py-0.5 text-left text-[12.5px] leading-[1.8] text-primary hover:underline"
           >
-            <span className="inline-grid h-[15px] min-w-[15px] flex-none translate-y-[1px] place-items-center rounded bg-primary-soft px-0.5 text-[10.5px] font-medium text-primary">
-              {a.disp}
-            </span>
+            <span className="size-[5px] flex-none rounded-full bg-primary/50" />
             <span className="truncate">{a.file.replace(/\.md$/, '')}</span>
-          </div>
+          </button>
         ))}
       </div>
     </div>

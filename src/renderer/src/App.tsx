@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
 import SettingsDialog from './components/SettingsDialog'
+import SidePanel, { type DocPanelData } from './components/SidePanel'
 import ConfirmDialog from './components/ConfirmDialog'
 import { useChat, type Msg, type MsgStatus } from './hooks/useChat'
 import type { Conversation, PersistedMessage } from './types'
+import type { SourceRef } from '../../preload/index.d'
 
 const toMsg = (p: PersistedMessage): Msg => ({
   id: p.id,
@@ -34,6 +36,8 @@ function App(): React.JSX.Element {
   const [inputs, setInputs] = useState<Record<string, string>>({})
   // 知识库：全局状态 + 草稿会话的选用意向（发首条消息时定性）
   const [kbState, setKbState] = useState<'none' | 'busy' | 'ready'>('none')
+  // 侧板（本版唯一内容：来源文档阅读）
+  const [doc, setDoc] = useState<DocPanelData | null>(null)
   const [kbName, setKbName] = useState('业务知识库')
   const [kbDraftSel, setKbDraftSel] = useState<Record<string, boolean>>({})
 
@@ -51,6 +55,28 @@ function App(): React.JSX.Element {
       else setKbState('busy')
     })
   }, [reloadKb])
+
+  // 会话变更（切换 / 新建 / 删除当前）统一关闭侧板——内容与原会话强相关
+  useEffect(() => {
+    setDoc(null)
+  }, [activeId])
+
+  const openSource = useCallback(
+    async (file: string, sources: SourceRef[]) => {
+      // 重复点击同一来源（同文件同片段）不重开不重滚
+      if (
+        doc &&
+        doc.file === file &&
+        doc.sources.map((s) => s.chunkId).join() === sources.map((s) => s.chunkId).join()
+      )
+        return
+      const r = await window.api.openDoc(file)
+      // 点来源永远打开侧板；异常时由侧板内容区呈现空态（不再用 toast 原地拦截）
+      setDoc(r.ok ? { file, content: r.content, sources } : { file, content: null, sources, error: r.reason })
+      setCollapsed(true) // 侧板打开 → 侧边栏自动收起
+    },
+    [doc]
+  )
 
   const refresh = useCallback(() => {
     window.api.listConversations().then(setConversations)
@@ -167,7 +193,10 @@ function App(): React.JSX.Element {
         model={activeModel}
         models={models}
         onPickModel={(m) => setConvModel((cm) => ({ ...cm, [activeId]: m }))}
+        onOpenSource={openSource}
       />
+
+      {doc && <SidePanel doc={doc} onClose={() => setDoc(null)} />}
 
       {collapsed && (
         <div

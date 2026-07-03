@@ -1,4 +1,6 @@
 import { ipcMain } from 'electron'
+import { existsSync, readFileSync } from 'fs'
+import { join, resolve } from 'path'
 import {
   getProvider,
   saveProvider,
@@ -113,6 +115,21 @@ export function registerIpc(): void {
   ipcMain.handle('conv:setKb', (_e, input: { id: string; enabled: boolean }) =>
     setConversationKb(input.id, input.enabled)
   )
+
+  // 打开来源文档（侧板阅读视图）：读磁盘现状；校验片段用消息自带的原文快照，此处不查库
+  ipcMain.handle('doc:open', (_e, filePath: string) => {
+    const kb = getKb()
+    if (!kb.rootPath) return { ok: false, reason: 'no-kb' }
+    if (kbBusy()) return { ok: false, reason: 'busy' }
+    const root = resolve(kb.rootPath)
+    const abs = resolve(join(root, filePath))
+    if (!abs.startsWith(root + '/') || !existsSync(abs)) return { ok: false, reason: 'missing' }
+    try {
+      return { ok: true, content: readFileSync(abs, 'utf8') }
+    } catch {
+      return { ok: false, reason: 'missing' }
+    }
+  })
 
   // 首轮回复后用模型生成精炼标题；标题被手动改过则跳过；失败兜底保留首句标题
   ipcMain.handle(

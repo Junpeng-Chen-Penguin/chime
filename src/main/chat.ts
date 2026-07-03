@@ -76,15 +76,17 @@ export async function startChat(wc: WebContents, payload: SendPayload): Promise<
       )
       step('generate', '生成回复', 'start')
       if (r.status === 'hit') {
+        // content = 片段原文快照，随消息落库——侧板高亮校验不依赖知识库当前状态
         wc.send('chat:sources', {
           streamId,
-          sources: r.sources.map(({ n, chunkId, filePath, headingPath, startLine, endLine }) => ({
+          sources: r.sources.map(({ n, chunkId, filePath, headingPath, startLine, endLine, content }) => ({
             n,
             chunkId,
             filePath,
             headingPath,
             startLine,
-            endLine
+            endLine,
+            content
           }))
         })
         sysPrompt = kbHitPrompt(r.sources)

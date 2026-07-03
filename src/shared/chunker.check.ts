@@ -1,4 +1,4 @@
-// chunker 最小自检：node --experimental-strip-types src/main/chunker.check.ts
+// chunker 最小自检：node --experimental-strip-types src/shared/chunker.check.ts
 import { strict as assert } from 'node:assert'
 // eslint-disable-next-line -- strip-types 直跑需要带扩展名,electron-vite 构建不含本文件
 import { chunkMarkdown, estimateTokens } from './chunker.ts'

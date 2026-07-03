@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import type { WebContents } from 'electron'
-import { chunkMarkdown } from './chunker'
+import { chunkMarkdown } from '../shared/chunker'
 import { embed, loadModels, EMBED_MODEL_ID, type ModelProgress } from './model'
 import * as db from './db'
 

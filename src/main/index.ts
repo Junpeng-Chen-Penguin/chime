@@ -1,16 +1,17 @@
-import { app, shell, BrowserWindow } from 'electron'
-import { join } from 'path'
+import { app, shell, BrowserWindow, protocol, net } from 'electron'
+import { join, dirname, resolve } from 'path'
+import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { initDb } from './db'
+import { initDb, getKb } from './db'
 import { registerIpc } from './ipc'
 
 function createWindow(): BrowserWindow {
   // Create the browser window.
   const mainWindow = new BrowserWindow({
-    width: 1080,
+    width: 1200,
     height: 720,
-    minWidth: 880,
+    minWidth: 1160, // 三栏全开下限（256+480+380）+ 卡片边距与间距 32，留余量
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
@@ -49,6 +50,11 @@ if (!app.requestSingleInstanceLock()) {
   app.exit(0)
 }
 
+// 文档内相对路径图片的自定义协议（须在 app ready 前注册 privileged）
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'chime-doc', privileges: { standard: true, secure: true, supportFetchAPI: true } }
+])
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
@@ -65,6 +71,22 @@ app.whenReady().then(() => {
 
   initDb()
   registerIpc()
+
+  // chime-doc://img/?doc=<相对文档路径>&src=<图片相对路径>：按文档所在目录解析，限制在知识库根内
+  protocol.handle('chime-doc', (req) => {
+    try {
+      const u = new URL(req.url)
+      const doc = decodeURIComponent(u.searchParams.get('doc') ?? '')
+      const src = decodeURIComponent(u.searchParams.get('src') ?? '')
+      const root = getKb().rootPath
+      if (!root || !doc || !src) return new Response('bad request', { status: 400 })
+      const abs = resolve(join(root, dirname(doc)), src)
+      if (!abs.startsWith(resolve(root) + '/')) return new Response('forbidden', { status: 403 })
+      return net.fetch(pathToFileURL(abs).toString())
+    } catch {
+      return new Response('error', { status: 500 })
+    }
+  })
 
   const win = createWindow()
 
