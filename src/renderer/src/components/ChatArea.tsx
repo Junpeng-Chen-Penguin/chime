@@ -383,32 +383,33 @@ function NoticeRow({ text }: { text: string }): React.JSX.Element {
   )
 }
 
-// 思考：星形图标起头（与过程圆点区分），步骤行常显，内容默认折叠、点击展开
+// 思考：星形图标 + 标签同处一个居中的行（图标与文字水平对齐），内容默认折叠。
+// 展开内容挂左侧竖线成「归属块」，与主流程分开（与检索命中列表同一处理）。
 function ThinkRow({ text, running }: { text: string; running: boolean }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   return (
-    <div className="flex gap-2.5">
-      <Sparkles
+    <div className="flex flex-col">
+      <button
+        onClick={() => setOpen((o) => !o)}
         className={cn(
-          'mt-[4px] size-[13px] flex-none',
-          running ? 'animate-pulse text-primary' : 'text-muted-foreground/70'
+          '-ml-1 flex w-fit items-center gap-2.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted',
+          PROCESS_ROW
         )}
-      />
-      <div className="min-w-0 flex-1">
-        <button
-          onClick={() => setOpen((o) => !o)}
+      >
+        <Sparkles
           className={cn(
-            '-ml-1 flex items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:bg-muted',
-            PROCESS_ROW
+            'size-[13px] flex-none',
+            running ? 'animate-pulse text-primary' : 'text-muted-foreground/70'
           )}
-        >
-          <span>{running ? '思考中' : '思考'}</span>
-          <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
-        </button>
-        {open && (
-          <div className={cn('mt-1 whitespace-pre-wrap', PROCESS_ROW)}>{text}</div>
-        )}
-      </div>
+        />
+        <span>{running ? '思考中' : '思考'}</span>
+        <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+      </button>
+      {open && (
+        <div className={cn('mt-1.5 ml-[6px] border-l-2 border-border pl-3 whitespace-pre-wrap', PROCESS_ROW)}>
+          {text}
+        </div>
+      )}
     </div>
   )
 }
@@ -466,7 +467,7 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
           )}
         </button>
         {open && (
-          <div className="mt-0.5 ml-4 flex flex-col gap-0.5">
+          <div className="mt-1 ml-[7px] flex flex-col gap-0.5 border-l-2 border-border pl-3">
             {detail.map((d, i) => (
               <div key={i}>{d}</div>
             ))}

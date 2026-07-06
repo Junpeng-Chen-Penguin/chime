@@ -25,7 +25,6 @@ function App(): React.JSX.Element {
   // 草稿会话：新建但还没发消息，不入库不进列表
   const [draftId, setDraftId] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(false)
-  const [peek, setPeek] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
   const [defaultModel, setDefaultModel] = useState('deepseek-v4-pro')
@@ -88,7 +87,6 @@ function App(): React.JSX.Element {
     setDraftId(id)
     setActiveId(id)
     chat.hydrate(id, [])
-    setPeek(false)
   }, [chat])
 
   useEffect(() => {
@@ -153,7 +151,6 @@ function App(): React.JSX.Element {
     activeId,
     onSelect: (id: string) => {
       setActiveId(id)
-      setPeek(false)
     },
     onNewChat: openDraft,
     onOpenSettings: () => setSettingsOpen(true),
@@ -197,27 +194,6 @@ function App(): React.JSX.Element {
       />
 
       {doc && <SidePanel doc={doc} onClose={() => setDoc(null)} />}
-
-      {collapsed && (
-        <div
-          onMouseEnter={() => setPeek(true)}
-          className="absolute top-0 bottom-0 left-0 z-30 w-3"
-        />
-      )}
-      {collapsed && peek && (
-        <div
-          onMouseLeave={() => setPeek(false)}
-          className="absolute top-2 bottom-2 left-2 z-40 w-[256px]"
-        >
-          <Sidebar
-            {...sidebarProps}
-            onCollapse={() => {
-              setCollapsed(false)
-              setPeek(false)
-            }}
-          />
-        </div>
-      )}
 
       <SettingsDialog
         open={settingsOpen}
