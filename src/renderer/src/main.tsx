@@ -1,4 +1,4 @@
-import '@fontsource-variable/geist'
+import './assets/fonts/misans/misans.css'
 import './assets/main.css'
 
 import { StrictMode } from 'react'
