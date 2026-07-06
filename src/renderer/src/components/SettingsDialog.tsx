@@ -191,7 +191,7 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
             />
           </Section>
 
-          <Section title="默认上下文窗口" hint="模型可容纳的 token 数；未能识别的模型按此值估算，DeepSeek 等常见模型自动识别">
+          <Section title="上下文窗口" hint="未能自动识别窗口大小的模型按此值估算（token 数）">
             <input
               type="number"
               value={defaultWindow}
@@ -618,7 +618,7 @@ function Section({
   return (
     <div className="mb-7 last:mb-0">
       <div className="mb-2.5 flex items-baseline gap-2">
-        <div className="text-[13.5px] font-semibold">{title}</div>
+        <div className="flex-none whitespace-nowrap text-[13.5px] font-semibold">{title}</div>
         {hint && <div className="text-[12px] text-muted-foreground">{hint}</div>}
       </div>
       {children}
