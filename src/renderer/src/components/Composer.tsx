@@ -93,7 +93,7 @@ export default function Composer({
                 className="group flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
                 title={kbLocked ? '本会话基于该知识库回答' : '已选用知识库'}
               >
-                <BookOpen className="size-3.5 text-muted-foreground" />
+                <BookOpen className="size-4 text-muted-foreground" />
                 {kbName}
                 {!kbLocked && (
                   <button

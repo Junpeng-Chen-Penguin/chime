@@ -98,7 +98,7 @@ export default function ChatArea({
   )
 
   return (
-    <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.07)]">
+    <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.09] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)]">
       <header
         className={cn(
           'app-drag flex h-[44px] flex-none items-center gap-1',
@@ -121,11 +121,9 @@ export default function ChatArea({
       {empty ? (
         // 空态 onboarding：wordmark + tagline + 居中输入框（最简，无起手提示）
         <div className="flex flex-1 flex-col items-center justify-center pb-16">
-          <div className="mb-7 text-center">
-            <div className="text-[40px] leading-none font-semibold tracking-tight text-foreground">
-              Chime
-            </div>
-            <div className="mt-3 text-[16px] text-muted-foreground">Chime with your work!</div>
+          {/* 仅一句 tagline，左对齐输入框左边缘，常规字重 */}
+          <div className="mx-auto mb-3 w-full max-w-[840px] px-8">
+            <div className="text-[24px] text-foreground">Chime with your work!</div>
           </div>
           <div className="w-full">{composer}</div>
         </div>
@@ -452,14 +450,8 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
     <div className="flex gap-2.5">
       <Dot tone={running ? 'running' : failed ? 'error' : 'neutral'} />
       <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
-        {/* 调用行：检索词用等宽字体，读作「一次机器动作」——与文字叙述区分，但字号一致 */}
-        <div>
-          检索(
-          <span className="font-mono text-[13px] text-muted-foreground">
-            &quot;{item.args.query ?? ''}&quot;
-          </span>
-          )
-        </div>
+        {/* 调用行：整行同字体、同字号、同色，不再换等宽或改色 */}
+        <div>检索(&quot;{item.args.query ?? ''}&quot;)</div>
         <button
           onClick={() => detail.length && setOpen((o) => !o)}
           className={cn(
