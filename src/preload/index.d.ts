@@ -14,11 +14,6 @@ export interface DetectResult {
   error?: string
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-}
-
 export interface SourceRef {
   n: number
   chunkId: number
@@ -33,18 +28,37 @@ export type DocOpenResult =
   | { ok: true; content: string }
   | { ok: false; reason: 'no-kb' | 'busy' | 'missing' }
 
-export interface ChatEvent {
-  type: 'chunk' | 'done' | 'stopped' | 'error' | 'sources' | 'step'
-  streamId: string
-  delta?: string
-  kind?: 'content' | 'reasoning'
+// 检索工具的返回（进 items 的 tool.result）：四态 + 截断标注
+export interface SearchToolResult {
+  results?: { n: number; file: string; heading: string; content: string }[]
+  truncated?: string
   error?: string
-  sources?: SourceRef[]
-  key?: string
-  label?: string
-  status?: 'start' | 'end'
-  detail?: string
+  denied?: string
+  notice?: string
 }
+
+// 一轮的有序过程记录的元素（与主进程 engine/store 的 TurnItem 一致）
+export type TurnItem =
+  | { t: 'reasoning'; text: string }
+  | { t: 'text'; text: string } // 位置即语义：工具步骤前为意图叙述，末位为最终回答
+  | { t: 'tool'; name: string; args: { query?: string }; result?: SearchToolResult; ms?: number }
+  | { t: 'sources'; list: SourceRef[] }
+  | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
+
+export type ChatEvent =
+  | { type: 'turn-start'; streamId: string }
+  | { type: 'item-start'; streamId: string; index: number; t: TurnItem['t']; item: TurnItem }
+  | { type: 'item-delta'; streamId: string; index: number; text: string }
+  | { type: 'item-done'; streamId: string; index: number; item: TurnItem }
+  | {
+      type: 'turn-done'
+      streamId: string
+      status: 'done' | 'stopped' | 'error'
+      error?: string
+      usage?: { inputTokens: number; outputTokens: number }
+      contextRatio: number
+    }
+  | { type: 'notice'; streamId: string; text: string }
 
 export interface Conversation {
   id: string
@@ -59,10 +73,9 @@ export interface PersistedMessage {
   conversationId: string
   role: 'user' | 'assistant'
   content: string
-  reasoning: string | null
+  items: string | null // TurnItem[] 的 JSON，仅 assistant 行有
   status: string
   createdAt: number
-  sources?: string | null
 }
 
 export interface KbSummary {
@@ -105,13 +118,13 @@ export interface ChimeApi {
   deleteConversation: (id: string) => Promise<void>
   renameConversation: (id: string, title: string) => Promise<void>
   getMessages: (id: string) => Promise<PersistedMessage[]>
-  saveMessage: (m: PersistedMessage) => Promise<void>
   autoTitle: (input: {
     convId: string
     userText: string
     assistantText: string
   }) => Promise<string | null>
-  sendChat: (payload: { streamId: string; model: string; messages: ChatMessage[]; kb?: boolean }) => void
+  sendChat: (payload: { streamId: string; convId: string; text: string; model: string }) => void
+  retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
   getKb: () => Promise<KbInfo>

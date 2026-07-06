@@ -12,10 +12,9 @@ const toMsg = (p: PersistedMessage): Msg => ({
   id: p.id,
   role: p.role,
   content: p.content,
-  reasoning: p.reasoning ?? undefined,
+  items: p.items ? JSON.parse(p.items) : undefined,
   status: p.status as MsgStatus,
-  createdAt: p.createdAt,
-  sources: p.sources ? JSON.parse(p.sources) : undefined
+  createdAt: p.createdAt
 })
 
 const newId = (): string => crypto.randomUUID()
@@ -133,7 +132,7 @@ function App(): React.JSX.Element {
       setDraftId(null)
     }
     setInputs((m) => ({ ...m, [activeId]: '' }))
-    chat.send(activeId, activeModel, text, kbSelected)
+    chat.send(activeId, activeModel, text)
   }
 
   const confirmDelete = async (): Promise<void> => {
@@ -172,11 +171,12 @@ function App(): React.JSX.Element {
         onExpand={() => setCollapsed(false)}
         messages={messages}
         sending={sending}
+        contextRatio={chat.contextRatio[activeId] ?? 0}
         input={input}
         onInput={(v) => setInputs((m) => ({ ...m, [activeId]: v }))}
         onSubmit={submit}
         onStop={chat.stop}
-        onRetry={(msgId) => chat.retry(activeId, activeModel, msgId, !!active?.kbEnabled)}
+        onRetry={() => chat.retry(activeId, activeModel)}
         kbState={kbState}
         kbName={kbName}
         kbSelected={kbSelected}

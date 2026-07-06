@@ -1,19 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { SourceRef } from '../../../preload/index.d'
+import type { TurnItem } from '../../../preload/index.d'
 
 export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error'
 
 export interface Msg {
   id: string
   role: 'user' | 'assistant'
-  content: string
-  reasoning?: string
-  thinkMs?: number
+  content: string // assistant：最终回答文本（复制、自动标题用）
+  items?: TurnItem[] // assistant：一轮的有序过程
   status: MsgStatus
   error?: string
+  notice?: string // 一次性提示（如知识库需重建），不落库
   createdAt: number
-  sources?: SourceRef[]
-  steps?: { key: string; label: string; detail?: string; done: boolean }[] // 知识库会话的处理过程（不落库）
 }
 
 let seq = 0
@@ -22,23 +20,20 @@ const uid = (p: string): string => `${p}-${Date.now()}-${seq++}`
 export interface ChatHandle {
   threads: Record<string, Msg[]>
   streamingConv: string | null
+  contextRatio: Record<string, number> // 每会话最近一轮的上下文用量比例（>0.7 轻提示）
   hydrate: (convId: string, msgs: Msg[]) => void
-  send: (convId: string, model: string, text: string, kb?: boolean) => void
+  send: (convId: string, model: string, text: string) => void
   stop: () => void
-  retry: (convId: string, model: string, msgId: string, kb?: boolean) => void
+  retry: (convId: string, model: string) => void
 }
 
+// chat:event 的 items 归约器：对话历史所有权在主进程，这里只维护展示态
 export function useChat(onChange?: () => void): ChatHandle {
   const [threads, setThreads] = useState<Record<string, Msg[]>>({})
   const [streamingConv, setStreamingConv] = useState<string | null>(null)
+  const [contextRatio, setContextRatio] = useState<Record<string, number>>({})
   const threadsRef = useRef(threads)
-  const routeRef = useRef<{ convId: string; msgId: string; streamId: string; createdAt: number } | null>(null)
-  const liveRef = useRef<{ content: string; reasoning: string; sources?: SourceRef[] }>({
-    content: '',
-    reasoning: ''
-  })
-  const thinkStartRef = useRef(0)
-  const thinkDoneRef = useRef(false)
+  const routeRef = useRef<{ convId: string; msgId: string; streamId: string } | null>(null)
   const titledRef = useRef(new Set<string>())
   const onChangeRef = useRef(onChange)
 
@@ -56,137 +51,90 @@ export function useChat(onChange?: () => void): ChatHandle {
     }))
   }, [])
 
-  const persist = useCallback((convId: string, m: Msg) => {
-    window.api.saveMessage({
-      id: m.id,
-      conversationId: convId,
-      role: m.role,
-      content: m.content,
-      reasoning: m.reasoning ?? null,
-      status: m.status,
-      createdAt: m.createdAt,
-      sources: m.sources?.length ? JSON.stringify(m.sources) : null
-    })
-  }, [])
-
   useEffect(() => {
     const off = window.api.onChatEvent((evt) => {
       const r = routeRef.current
       if (!r || r.streamId !== evt.streamId) return
-      if (evt.type === 'step') {
-        patch(r.convId, r.msgId, (m) => {
-          const steps = [...(m.steps ?? [])]
-          const i = steps.findIndex((s) => s.key === evt.key)
-          if (evt.status === 'start') {
-            if (i < 0) steps.push({ key: evt.key!, label: evt.label!, done: false })
-          } else if (i >= 0) {
-            steps[i] = { ...steps[i], done: true, detail: evt.detail }
-          } else {
-            steps.push({ key: evt.key!, label: evt.label!, done: true, detail: evt.detail })
+      switch (evt.type) {
+        case 'turn-start':
+          onChangeRef.current?.() // 主进程已写入用户消息（首条自动成标题），刷新侧栏
+          return
+        case 'item-start':
+          patch(r.convId, r.msgId, (m) => {
+            const items = [...(m.items ?? [])]
+            items[evt.index] = evt.item
+            return { ...m, items }
+          })
+          return
+        case 'item-delta':
+          patch(r.convId, r.msgId, (m) => {
+            const items = [...(m.items ?? [])]
+            const it = items[evt.index]
+            if (it && (it.t === 'text' || it.t === 'reasoning')) {
+              items[evt.index] = { ...it, text: it.text + evt.text }
+            }
+            return { ...m, items }
+          })
+          return
+        case 'item-done':
+          patch(r.convId, r.msgId, (m) => {
+            const items = [...(m.items ?? [])]
+            items[evt.index] = evt.item
+            return { ...m, items }
+          })
+          return
+        case 'notice':
+          patch(r.convId, r.msgId, (m) => ({ ...m, notice: evt.text }))
+          return
+        case 'turn-done': {
+          const status: MsgStatus = evt.status
+          let answer = ''
+          patch(r.convId, r.msgId, (m) => {
+            answer =
+              [...(m.items ?? [])]
+                .reverse()
+                .find((i): i is { t: 'text'; text: string } => i.t === 'text' && !!i.text.trim())
+                ?.text ?? ''
+            return { ...m, status, error: evt.error, content: answer }
+          })
+          setContextRatio((c) => ({ ...c, [r.convId]: evt.contextRatio }))
+          onChangeRef.current?.()
+          // 首轮回复成功后，让模型生成精炼标题（每会话仅一次）
+          if (status === 'done') {
+            const thread = threadsRef.current[r.convId] ?? []
+            const userText = thread.find((m) => m.role === 'user')?.content ?? ''
+            const userCount = thread.filter((m) => m.role === 'user').length
+            if (userText && userCount === 1 && !titledRef.current.has(r.convId)) {
+              titledRef.current.add(r.convId)
+              window.api
+                .autoTitle({ convId: r.convId, userText, assistantText: answer })
+                .then((t) => {
+                  if (t) onChangeRef.current?.()
+                })
+            }
           }
-          return { ...m, steps }
-        })
-        return
-      }
-      if (evt.type === 'sources') {
-        // 来源清单先于流式到达；随消息保留（即使随后停止/报错）
-        liveRef.current.sources = evt.sources ?? []
-        patch(r.convId, r.msgId, (m) => ({ ...m, sources: evt.sources ?? [] }))
-        return
-      }
-      if (evt.type === 'chunk') {
-        const delta = evt.delta ?? ''
-        if (evt.kind === 'reasoning') {
-          if (!thinkStartRef.current) thinkStartRef.current = Date.now()
-          liveRef.current.reasoning += delta
-          patch(r.convId, r.msgId, (m) => ({ ...m, reasoning: (m.reasoning ?? '') + delta }))
-        } else {
-          liveRef.current.content += delta
-          let dur: number | undefined
-          if (thinkStartRef.current && !thinkDoneRef.current) {
-            thinkDoneRef.current = true
-            dur = Date.now() - thinkStartRef.current
-          }
-          patch(r.convId, r.msgId, (m) => ({
-            ...m,
-            content: m.content + delta,
-            thinkMs: m.thinkMs ?? dur
-          }))
-        }
-        return
-      }
-      const status: MsgStatus =
-        evt.type === 'done' ? 'done' : evt.type === 'stopped' ? 'stopped' : 'error'
-      // 只思考未出正文就结束：也记下思考时长
-      const tailDur =
-        thinkStartRef.current && !thinkDoneRef.current ? Date.now() - thinkStartRef.current : undefined
-      patch(r.convId, r.msgId, (m) => ({
-        ...m,
-        status,
-        error: evt.error,
-        thinkMs: m.thinkMs ?? tailDur,
-        steps: m.steps?.map((s) => ({ ...s, done: true })) // 收尾时全部步骤置完成
-      }))
-      persist(r.convId, {
-        id: r.msgId,
-        role: 'assistant',
-        content: liveRef.current.content,
-        reasoning: liveRef.current.reasoning || undefined,
-        status,
-        createdAt: r.createdAt,
-        sources: liveRef.current.sources
-      })
-      onChangeRef.current?.()
-      // 首轮回复成功后，让模型生成精炼标题（每会话仅一次）
-      if (status === 'done') {
-        const thread = threadsRef.current[r.convId] ?? []
-        const userText = thread.find((m) => m.role === 'user')?.content ?? ''
-        if (userText && !titledRef.current.has(r.convId)) {
-          const userCount = thread.filter((m) => m.role === 'user').length
-          if (userCount === 1) {
-            titledRef.current.add(r.convId)
-            window.api
-              .autoTitle({ convId: r.convId, userText, assistantText: liveRef.current.content })
-              .then((t) => {
-                if (t) onChangeRef.current?.()
-              })
-          }
+          routeRef.current = null
+          setStreamingConv(null)
+          return
         }
       }
-      routeRef.current = null
-      setStreamingConv(null)
     })
     return off
-  }, [patch, persist])
-
-  const startStream = useCallback(
-    (
-      convId: string,
-      model: string,
-      history: Msg[],
-      assistant: { id: string; createdAt: number },
-      kb: boolean
-    ) => {
-      const streamId = uid('s')
-      routeRef.current = { convId, msgId: assistant.id, streamId, createdAt: assistant.createdAt }
-      liveRef.current = { content: '', reasoning: '' }
-      thinkStartRef.current = 0
-      thinkDoneRef.current = false
-      setStreamingConv(convId)
-      const messages = history
-        .filter((m) => m.status !== 'error' && m.content !== '')
-        .map((m) => ({ role: m.role, content: m.content }))
-      window.api.sendChat({ streamId, model, messages, kb })
-    },
-    []
-  )
+  }, [patch])
 
   const hydrate = useCallback((convId: string, msgs: Msg[]) => {
     setThreads((t) => (t[convId] ? t : { ...t, [convId]: msgs }))
   }, [])
 
+  const begin = useCallback((convId: string, msgId: string): string => {
+    const streamId = uid('s')
+    routeRef.current = { convId, msgId, streamId }
+    setStreamingConv(convId)
+    return streamId
+  }, [])
+
   const send = useCallback(
-    (convId: string, model: string, text: string, kb = false) => {
+    (convId: string, model: string, text: string) => {
       if (routeRef.current) return
       const now = Date.now()
       const userMsg: Msg = { id: uid('u'), role: 'user', content: text, status: 'done', createdAt: now }
@@ -194,37 +142,36 @@ export function useChat(onChange?: () => void): ChatHandle {
         id: uid('a'),
         role: 'assistant',
         content: '',
+        items: [],
         status: 'streaming',
         createdAt: now + 1
       }
       setThreads((t) => ({ ...t, [convId]: [...(t[convId] ?? []), userMsg, asstMsg] }))
-      const history = [...(threadsRef.current[convId] ?? []), userMsg]
-      persist(convId, userMsg)
-      onChangeRef.current?.()
-      startStream(convId, model, history, asstMsg, kb)
+      const streamId = begin(convId, asstMsg.id)
+      window.api.sendChat({ streamId, convId, text, model })
     },
-    [persist, startStream]
+    [begin]
   )
 
+  // 重试 / 重新生成：只对末轮回答有效（主进程删末轮 assistant 行后按历史重跑）
   const retry = useCallback(
-    (convId: string, model: string, msgId: string, kb = false) => {
+    (convId: string, model: string) => {
       if (routeRef.current) return
       const thread = threadsRef.current[convId] ?? []
-      const idx = thread.findIndex((m) => m.id === msgId)
-      if (idx < 0) return
-      const history = thread.slice(0, idx)
-      const createdAt = thread[idx].createdAt
-      patch(convId, msgId, (m) => ({
+      const last = [...thread].reverse().find((m) => m.role === 'assistant')
+      if (!last) return
+      patch(convId, last.id, (m) => ({
         ...m,
         content: '',
-        reasoning: undefined,
-        sources: undefined,
+        items: [],
         status: 'streaming',
-        error: undefined
+        error: undefined,
+        notice: undefined
       }))
-      startStream(convId, model, history, { id: msgId, createdAt }, kb)
+      const streamId = begin(convId, last.id)
+      window.api.retryChat({ streamId, convId, model })
     },
-    [patch, startStream]
+    [begin, patch]
   )
 
   const stop = useCallback(() => {
@@ -232,5 +179,5 @@ export function useChat(onChange?: () => void): ChatHandle {
     if (r) window.api.stopChat(r.streamId)
   }, [])
 
-  return { threads, streamingConv, hydrate, send, stop, retry }
+  return { threads, streamingConv, contextRatio, hydrate, send, stop, retry }
 }

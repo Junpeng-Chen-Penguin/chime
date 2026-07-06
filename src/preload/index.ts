@@ -1,17 +1,11 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
+// 统一事件通道 chat:event：一轮 = turn-start → item-* 序列 → turn-done（结构见主进程 engine）
 interface ChatEvent {
-  type: 'chunk' | 'done' | 'stopped' | 'error' | 'sources' | 'step'
+  type: 'turn-start' | 'item-start' | 'item-delta' | 'item-done' | 'turn-done' | 'notice'
   streamId: string
-  delta?: string
-  kind?: 'content' | 'reasoning'
-  error?: string
-  sources?: unknown[]
-  key?: string
-  label?: string
-  status?: 'start' | 'end'
-  detail?: string
+  [k: string]: unknown
 }
 
 // 暴露给渲染进程的 API（明文密钥始终留在主进程）
@@ -30,12 +24,14 @@ const api = {
   renameConversation: (id: string, title: string) =>
     ipcRenderer.invoke('conv:rename', { id, title }),
   getMessages: (id: string) => ipcRenderer.invoke('conv:messages', id),
-  saveMessage: (m: unknown) => ipcRenderer.invoke('msg:save', m),
   autoTitle: (input: { convId: string; userText: string; assistantText: string }) =>
     ipcRenderer.invoke('conv:autotitle', input),
 
-  sendChat: (payload: { streamId: string; model: string; messages: unknown[]; kb?: boolean }) =>
+  // 渲染层只发「会话 + 一句话」，历史组装与落库都在主进程
+  sendChat: (payload: { streamId: string; convId: string; text: string; model: string }) =>
     ipcRenderer.send('chat:send', payload),
+  retryChat: (payload: { streamId: string; convId: string; model: string }) =>
+    ipcRenderer.send('chat:retry', payload),
   stopChat: (streamId: string) => ipcRenderer.send('chat:stop', streamId),
 
   getKb: () => ipcRenderer.invoke('kb:get'),
@@ -52,38 +48,11 @@ const api = {
     return () => ipcRenderer.removeListener('kb:progress', h)
   },
 
-  // 订阅流式事件，返回取消订阅函数
+  // 订阅统一事件通道，返回取消订阅函数
   onChatEvent: (cb: (evt: ChatEvent) => void): (() => void) => {
-    const chunk = (
-      _e: IpcRendererEvent,
-      d: { streamId: string; delta: string; kind: 'content' | 'reasoning' }
-    ): void => cb({ type: 'chunk', ...d })
-    const done = (_e: IpcRendererEvent, d: { streamId: string }): void =>
-      cb({ type: 'done', ...d })
-    const stopped = (_e: IpcRendererEvent, d: { streamId: string }): void =>
-      cb({ type: 'stopped', ...d })
-    const error = (_e: IpcRendererEvent, d: { streamId: string; error: string }): void =>
-      cb({ type: 'error', ...d })
-    const sources = (_e: IpcRendererEvent, d: { streamId: string; sources: unknown[] }): void =>
-      cb({ type: 'sources', ...d })
-    const step = (
-      _e: IpcRendererEvent,
-      d: { streamId: string; key: string; label: string; status: 'start' | 'end'; detail?: string }
-    ): void => cb({ type: 'step', ...d })
-    ipcRenderer.on('chat:step', step)
-    ipcRenderer.on('chat:chunk', chunk)
-    ipcRenderer.on('chat:done', done)
-    ipcRenderer.on('chat:stopped', stopped)
-    ipcRenderer.on('chat:error', error)
-    ipcRenderer.on('chat:sources', sources)
-    return () => {
-      ipcRenderer.removeListener('chat:step', step)
-      ipcRenderer.removeListener('chat:chunk', chunk)
-      ipcRenderer.removeListener('chat:done', done)
-      ipcRenderer.removeListener('chat:stopped', stopped)
-      ipcRenderer.removeListener('chat:error', error)
-      ipcRenderer.removeListener('chat:sources', sources)
-    }
+    const h = (_e: IpcRendererEvent, evt: ChatEvent): void => cb(evt)
+    ipcRenderer.on('chat:event', h)
+    return () => ipcRenderer.removeListener('chat:event', h)
   }
 }
 

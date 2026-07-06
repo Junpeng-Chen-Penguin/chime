@@ -50,6 +50,27 @@ export function saveAssistantTurn(
   db.prepare('UPDATE conversation SET updated_at = ? WHERE id = ?').run(now, convId)
 }
 
+// chat:retry 的支撑：取末条用户消息原文；删除末行（仅当它是 assistant 时）
+export function lastUserText(convId: string): string | null {
+  const row = getDb()
+    .prepare(
+      "SELECT content FROM message WHERE conversation_id = ? AND role = 'user' ORDER BY created_at DESC LIMIT 1"
+    )
+    .get(convId) as { content: string } | undefined
+  return row?.content ?? null
+}
+
+export function deleteLastAssistant(convId: string): void {
+  getDb()
+    .prepare(
+      `DELETE FROM message WHERE id = (
+         SELECT id FROM message WHERE conversation_id = ? AND role = 'assistant'
+         ORDER BY created_at DESC LIMIT 1
+       )`
+    )
+    .run(convId)
+}
+
 // 历史 → 模型上下文映射：user 原文；assistant 取最终回答 + 检索概要（结果全文不进上下文）。
 // stopped 轮照常进（停止是正常收场）；error 轮跳过（无有效回应）。
 export function loadHistoryMessages(convId: string): ModelMessage[] {

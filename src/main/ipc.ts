@@ -13,7 +13,8 @@ import {
   setConversationTitle
 } from './db'
 import { detect, listModels, generateTitle } from './ai'
-import { startChat, stopChat, type SendPayload } from './chat'
+import { runTurn, stopTurn, type ChatEvent } from './engine/orchestrator'
+import { lastUserText, deleteLastAssistant } from './engine/store'
 import { getKb, kbStats, setConversationKb, setKbMeta, resetKb } from './db'
 import { kbBusy, runIndexJob, validateRepoPath, getLastSummary } from './kb'
 
@@ -53,12 +54,30 @@ export function registerIpc(): void {
     }
   })
 
-  // 流式对话：事件单向推送，不用 invoke
-  ipcMain.on('chat:send', (e, payload: SendPayload) => {
-    startChat(e.sender, payload)
+  // 流式对话：渲染层只发「会话 + 一句话」，事件从统一通道 chat:event 单向推回
+  ipcMain.on(
+    'chat:send',
+    (e, payload: { streamId: string; convId: string; text: string; model: string }) => {
+      const wc = e.sender
+      const emit = (ev: ChatEvent): void => {
+        if (!wc.isDestroyed()) wc.send('chat:event', ev)
+      }
+      void runTurn({ ...payload, emit })
+    }
+  )
+  // 重试 / 重新生成：删除末轮回答后按库内历史重跑
+  ipcMain.on('chat:retry', (e, payload: { streamId: string; convId: string; model: string }) => {
+    const text = lastUserText(payload.convId)
+    if (!text) return
+    deleteLastAssistant(payload.convId)
+    const wc = e.sender
+    const emit = (ev: ChatEvent): void => {
+      if (!wc.isDestroyed()) wc.send('chat:event', ev)
+    }
+    void runTurn({ ...payload, text, saveUser: false, emit })
   })
   ipcMain.on('chat:stop', (_e, streamId: string) => {
-    stopChat(streamId)
+    stopTurn(streamId)
   })
 
   // 会话管理

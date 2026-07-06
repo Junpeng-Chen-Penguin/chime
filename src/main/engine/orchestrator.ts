@@ -15,7 +15,7 @@ import { saveUserMessage, saveAssistantTurn, loadHistoryMessages, type TurnItem,
 
 export type ChatEvent =
   | { type: 'turn-start'; streamId: string }
-  | { type: 'item-start'; streamId: string; index: number; t: TurnItem['t'] }
+  | { type: 'item-start'; streamId: string; index: number; t: TurnItem['t']; item: TurnItem }
   | { type: 'item-delta'; streamId: string; index: number; text: string }
   | { type: 'item-done'; streamId: string; index: number; item: TurnItem }
   | {
@@ -54,11 +54,12 @@ export async function runTurn(opts: {
   text: string
   model: string
   emit: Emit
+  saveUser?: boolean // 重试时为 false：用户消息已在库里，不重复写
 }): Promise<void> {
   const { streamId, convId, text, model, emit } = opts
   const p = getProvider()
 
-  saveUserMessage(convId, text)
+  if (opts.saveUser !== false) saveUserMessage(convId, text)
   emit({ type: 'turn-start', streamId })
 
   const items: TurnItem[] = []
@@ -66,7 +67,7 @@ export async function runTurn(opts: {
   const startItem = (t: TurnItem['t'], item: TurnItem): void => {
     items.push(item)
     cur = items.length - 1
-    emit({ type: 'item-start', streamId, index: cur, t })
+    emit({ type: 'item-start', streamId, index: cur, t, item })
   }
   const appendText = (delta: string): void => {
     ;(items[cur] as { text: string }).text += delta

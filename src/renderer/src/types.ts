@@ -13,8 +13,7 @@ export interface PersistedMessage {
   conversationId: string
   role: 'user' | 'assistant'
   content: string
-  reasoning: string | null
+  items: string | null // TurnItem[] 的 JSON，仅 assistant 行有
   status: string
   createdAt: number
-  sources?: string | null
 }

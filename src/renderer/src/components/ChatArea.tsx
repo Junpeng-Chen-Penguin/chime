@@ -1,23 +1,24 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   PanelLeft,
   ChevronRight,
   RotateCw,
-  Loader2,
   AlertCircle,
   ArrowDown,
   Copy,
   Check,
-  CircleCheck,
-  Sparkles
+  Info
 } from 'lucide-react'
 import { cn, stripCitations } from '@/lib/utils'
 import type { Msg } from '@/hooks/useChat'
-import type { SourceRef } from '../../../preload/index.d'
+import type { SourceRef, TurnItem, SearchToolResult } from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { useSmoothText } from '@/hooks/useSmoothText'
 import { Markdown } from './Markdown'
 import Composer, { type KbState } from './Composer'
+
+// 规则 5：单条消息上限（字符），发送前就地拦下；与主进程常量同值（engine/budget SEND_CHAR_LIMIT）
+const SEND_CHAR_LIMIT = 30000
 
 interface Props {
   title: string
@@ -26,11 +27,12 @@ interface Props {
   onExpand: () => void
   messages: Msg[]
   sending: boolean
+  contextRatio: number
   input: string
   onInput: (v: string) => void
   onSubmit: () => void
   onStop: () => void
-  onRetry: (msgId: string) => void
+  onRetry: () => void
   onRename: (title: string) => void
   model: string
   models: string[]
@@ -50,6 +52,7 @@ export default function ChatArea({
   onExpand,
   messages,
   sending,
+  contextRatio,
   input,
   onInput,
   onSubmit,
@@ -68,6 +71,8 @@ export default function ChatArea({
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
   const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
+  const overLimit = input.length > SEND_CHAR_LIMIT
+  const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
 
   return (
     <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.05] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.07)]">
@@ -100,10 +105,18 @@ export default function ChatArea({
                   m.role === 'user' ? (
                     <UserMsg key={m.id}>{m.content}</UserMsg>
                   ) : (
-                    <AssistantMsg key={m.id} m={m} onRetry={() => onRetry(m.id)} onOpenSource={onOpenSource} />
+                    <AssistantMsg
+                      key={m.id}
+                      m={m}
+                      isLast={m.id === lastAssistantId}
+                      onRetry={onRetry}
+                      onOpenSource={onOpenSource}
+                    />
                   )
                 )}
               </div>
+              {/* 整轮进度指示：从提交到整轮结束常驻，完成即消失 */}
+              {sending && <ProgressIndicator />}
             </div>
           )}
         </div>
@@ -118,6 +131,19 @@ export default function ChatArea({
         )}
       </div>
 
+      {/* 输入框上方轻提示：过长消息就地拦下；对话较长建议新开（均不阻断界面其他操作） */}
+      {(overLimit || contextRatio > 0.7) && (
+        <div className="mx-auto w-full max-w-[800px] px-8 pb-1">
+          {overLimit ? (
+            <div className="text-[12.5px] text-destructive">
+              消息过长，请精简或拆分（当前 {input.length.toLocaleString()} 字，上限{' '}
+              {SEND_CHAR_LIMIT.toLocaleString()} 字）
+            </div>
+          ) : (
+            <div className="text-[12.5px] text-muted-foreground">对话较长，建议新开会话</div>
+          )}
+        </div>
+      )}
       <Composer
         model={model}
         models={models}
@@ -125,7 +151,9 @@ export default function ChatArea({
         sending={sending}
         value={input}
         onChange={onInput}
-        onSubmit={onSubmit}
+        onSubmit={() => {
+          if (!overLimit) onSubmit()
+        }}
         onStop={onStop}
         kbState={kbState}
         kbName={kbName}
@@ -209,190 +237,258 @@ function UserMsg({ children }: { children: ReactNode }): React.JSX.Element {
   )
 }
 
+// 整轮进度指示：轻趣味中文词表轮播（多数中性、偶穿轻俏词），几秒一换
+const PROGRESS_WORDS = ['梳理中', '翻查中', '琢磨中', '核对中', '斟酌中', '串联中', '查证中', '整理中', '推敲中', '落笔中']
+
+function ProgressIndicator(): React.JSX.Element {
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * PROGRESS_WORDS.length))
+  useEffect(() => {
+    const timer = setInterval(() => setIdx((i) => (i + 1) % PROGRESS_WORDS.length), 3000)
+    return () => clearInterval(timer)
+  }, [])
+  return (
+    <div className="mt-6 flex items-center gap-2.5 text-[14px] text-muted-foreground">
+      <span className="size-[9px] flex-none animate-pulse rounded-full border-[1.5px] border-primary" />
+      <span>{PROGRESS_WORDS[idx]}…</span>
+    </div>
+  )
+}
+
+// ── 对话流：按 items 渲染，每个元素圆点起头，折叠只发生在单步内部 ──────────────
+
 function AssistantMsg({
   m,
+  isLast,
   onRetry,
   onOpenSource
 }: {
   m: Msg
+  isLast: boolean
   onRetry: () => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
 }): React.JSX.Element {
   const streaming = m.status === 'streaming'
   const finished = m.status === 'done' || m.status === 'stopped'
-  // 正文隐去引用标记（引用关系保留于 m.content 与 sources，用于来源清单与侧板高亮）
-  const displayRaw = useMemo(() => stripCitations(m.content, streaming), [m.content, streaming])
-  const content = useSmoothText(displayRaw, streaming)
+  const items = m.items ?? []
 
-  // 处理过程时间线：知识库步骤 + 模型思考统一进一条时间线（思考插在「生成回复」前）
-  const dispSteps = useMemo<DispStep[]>(() => {
-    const base: DispStep[] = (m.steps ?? []).map((s) => ({
-      key: s.key,
-      label: s.label,
-      detail: s.detail,
-      state: s.done ? 'done' : 'pending'
-    }))
-    if (m.reasoning) {
-      const think: DispStep = {
-        key: 'think',
-        label: '思考',
-        detail: m.thinkMs != null ? `${(m.thinkMs / 1000).toFixed(1)}s` : undefined,
-        state: !!m.content || !streaming ? 'done' : 'pending',
-        expand: m.reasoning
-      }
-      const gi = base.findIndex((s) => s.key === 'generate')
-      if (gi >= 0) base.splice(gi, 0, think)
-      else base.push(think)
+  // 位置即语义：末位非空 text 为最终回答，之前的 text 为意图叙述
+  const lastTextIdx = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]
+      if (it.t === 'text' && it.text.trim()) return i
     }
-    // 流式中：第一个未完成的步骤为进行中，其后为待办；结束后全部完成
-    let running = false
-    return base.map((s) => {
-      if (s.state === 'done') return s
-      if (streaming && !running) {
-        running = true
-        return { ...s, state: 'running' }
-      }
-      return { ...s, state: streaming ? 'pending' : 'done' }
-    })
-  }, [m.steps, m.reasoning, m.thinkMs, m.content, streaming])
+    return -1
+  }, [items])
+  const answer = lastTextIdx >= 0 ? (items[lastTextIdx] as { text: string }).text : ''
+  const sources = items.find((i): i is Extract<TurnItem, { t: 'sources' }> => i.t === 'sources')
 
-  // 引用按文章（文件）归并；每篇携带其被引用的片段（原文快照），供侧板定位高亮
-  const { cited, articles } = useMemo(() => {
-    const arts: { file: string; sources: SourceRef[] }[] = []
-    if (!m.sources?.length) return { cited: false, articles: arts }
-    const byN = new Map(m.sources.map((s) => [s.n, s]))
+  const hasBody = items.some((i) => (i.t === 'text' || i.t === 'reasoning') && i.text.trim())
+  // 一开始就失败、没有任何内容 → 单独一张错误卡片
+  if (m.status === 'error' && !hasBody) {
+    return <ErrorCard text={m.error ?? '请求中断，请重试'} onRetry={isLast ? onRetry : undefined} />
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5 text-[16px] text-foreground select-text">
+      {m.notice && <NoticeRow text={m.notice} />}
+      {items.map((it, i) => {
+        if ((it.t === 'text' || it.t === 'reasoning') && !it.text.trim()) return null
+        switch (it.t) {
+          case 'reasoning':
+            return <ThinkRow key={i} text={it.text} running={streaming && i === items.length - 1} />
+          case 'text':
+            return i === lastTextIdx ? (
+              <AnswerRow key={i} text={it.text} streaming={streaming} />
+            ) : (
+              <IntentRow key={i} text={it.text} />
+            )
+          case 'tool':
+            return <ToolRow key={i} item={it} />
+          case 'boundary':
+            return it.kind === 'limit' ? (
+              <PlainRow key={i} text="已达工具调用上限，基于已有结果作答" />
+            ) : null // error 边界由下方错误卡片呈现
+          default:
+            return null // sources 在回答之后统一渲染
+        }
+      })}
+      {m.status === 'stopped' && <PlainRow text="已停止" />}
+      {!streaming && sources && sources.list.length > 0 && (
+        <SourcesFooter list={sources.list} onOpen={onOpenSource} />
+      )}
+      {finished && answer && (
+        <MessageActions
+          content={stripCitations(answer, false)}
+          onRetry={isLast ? onRetry : undefined}
+        />
+      )}
+      {m.status === 'error' && hasBody && (
+        <ErrorCard text={m.error ?? '请求中断，请重试'} onRetry={isLast ? onRetry : undefined} />
+      )}
+    </div>
+  )
+}
+
+// 元素行首的圆点。tone：单步状态点三态 + 中性缺省
+function Dot({ tone = 'neutral' }: { tone?: 'neutral' | 'running' | 'error' }): React.JSX.Element {
+  return (
+    <span
+      className={cn(
+        'mt-[9px] size-[7px] flex-none rounded-full',
+        tone === 'running' && 'animate-pulse bg-primary',
+        tone === 'neutral' && 'bg-foreground/25',
+        tone === 'error' && 'bg-destructive'
+      )}
+    />
+  )
+}
+
+// 意图叙述：常显短句，不折叠
+function IntentRow({ text }: { text: string }): React.JSX.Element {
+  return (
+    <div className="flex gap-2.5">
+      <Dot />
+      <div className="min-w-0 flex-1 leading-[1.7] text-muted-foreground">{text}</div>
+    </div>
+  )
+}
+
+// 固定文案的普通行（边界与停止事件：设计内的正常收场，不用警告色）
+function PlainRow({ text }: { text: string }): React.JSX.Element {
+  return (
+    <div className="flex gap-2.5">
+      <Dot />
+      <div className="min-w-0 flex-1 leading-[1.7] text-muted-foreground">{text}</div>
+    </div>
+  )
+}
+
+function NoticeRow({ text }: { text: string }): React.JSX.Element {
+  return (
+    <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+      <Info className="size-3.5 flex-none" />
+      <span>{text}</span>
+    </div>
+  )
+}
+
+// 思考：步骤行常显，内容默认折叠、点击展开
+function ThinkRow({ text, running }: { text: string; running: boolean }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="flex gap-2.5">
+      <Dot tone={running ? 'running' : 'neutral'} />
+      <div className="min-w-0 flex-1">
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="-ml-1 flex items-center gap-1 rounded-md px-1 py-0.5 text-[14px] text-muted-foreground transition-colors hover:bg-muted"
+        >
+          <span>{running ? '思考中' : '思考'}</span>
+          <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+        </button>
+        {open && (
+          <div className="mt-1 text-[13.5px] leading-[1.7] whitespace-pre-wrap text-muted-foreground">
+            {text}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// 工具步骤成对两行：调用行（状态点三态）+ 缩进结果行（点击展开命中列表 / 错误说明）
+function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const r: SearchToolResult | undefined = item.result as SearchToolResult | undefined
+  const running = r === undefined
+  const failed = !!r?.error
+  const summary = running
+    ? '检索中…'
+    : r.results
+      ? `${r.results.length} 条结果${r.truncated ? '（已截断）' : ''}`
+      : r.denied
+        ? '已达检索上限'
+        : r.notice
+          ? '知识库更新中'
+          : '检索出错'
+  const detail = r?.results?.length
+    ? [...new Set(r.results.map((x) => `${x.file.replace(/\.md$/, '')}${x.heading ? ' › ' + x.heading : ''}`))]
+    : r?.error
+      ? [r.error]
+      : r?.denied
+        ? [r.denied]
+        : r?.notice
+          ? [r.notice]
+          : []
+  return (
+    <div className="flex gap-2.5">
+      <Dot tone={running ? 'running' : failed ? 'error' : 'neutral'} />
+      <div className="min-w-0 flex-1 text-[14px]">
+        <div className="leading-[1.7] text-foreground/80">
+          检索(<span className="text-foreground">&quot;{item.args.query ?? ''}&quot;</span>)
+        </div>
+        <button
+          onClick={() => detail.length && setOpen((o) => !o)}
+          className={cn(
+            '-ml-1 flex items-center gap-1 rounded-md px-1 py-0.5 text-[13.5px] text-muted-foreground',
+            detail.length && 'transition-colors hover:bg-muted'
+          )}
+        >
+          <span className="text-muted-foreground/60">⎿</span>
+          <span>{summary}</span>
+          {detail.length > 0 && (
+            <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+          )}
+        </button>
+        {open && (
+          <div className="mt-0.5 ml-4 flex flex-col gap-0.5 text-[13px] leading-[1.7] text-muted-foreground">
+            {detail.map((d, i) => (
+              <div key={i}>{d}</div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// 最终回答：圆点起头 + Markdown 流式；正文隐去 [n] 角标（引用关系保留，供来源清单与侧板）
+function AnswerRow({ text, streaming }: { text: string; streaming: boolean }): React.JSX.Element {
+  const displayRaw = useMemo(() => stripCitations(text, streaming), [text, streaming])
+  const content = useSmoothText(displayRaw, streaming)
+  return (
+    <div className="flex gap-2.5">
+      <Dot />
+      <div className="min-w-0 flex-1">
+        <Markdown text={content} streaming={streaming} />
+      </div>
+    </div>
+  )
+}
+
+// 来源清单：按文章（文件）去重，只列实际引用；点击进侧板定位高亮
+function SourcesFooter({
+  list,
+  onOpen
+}: {
+  list: SourceRef[]
+  onOpen: (file: string, sources: SourceRef[]) => void
+}): React.JSX.Element {
+  const articles = useMemo(() => {
     const byFile = new Map<string, { file: string; sources: SourceRef[] }>()
-    const add = (s: SourceRef): void => {
+    for (const s of list) {
       let art = byFile.get(s.filePath)
       if (!art) {
         art = { file: s.filePath, sources: [] }
         byFile.set(s.filePath, art)
-        arts.push(art)
       }
-      if (!art.sources.includes(s)) art.sources.push(s)
+      art.sources.push(s)
     }
-    let hasCited = false
-    for (const match of m.content.matchAll(/\[(\d+)\]/g)) {
-      const s = byN.get(+match[1])
-      if (!s) continue
-      hasCited = true
-      add(s)
-    }
-    if (!hasCited) for (const s of m.sources) add(s) // 降级：模型没打标记，列全部（按文章去重）
-    return { cited: hasCited, articles: arts }
-  }, [m.content, m.sources])
-
-  // 一开始就失败、没有任何内容 → 单独一张错误卡片
-  if (m.status === 'error' && !m.content && !m.reasoning) {
-    return <ErrorCard text={m.error ?? '请求中断，请重试'} onRetry={onRetry} />
-  }
+    return [...byFile.values()]
+  }, [list])
   return (
-    <div className="text-[16px] text-foreground select-text">
-      {dispSteps.length > 0 && <ProcessBlock steps={dispSteps} streaming={streaming} />}
-      {content ? (
-        <Markdown text={content} streaming={streaming} />
-      ) : streaming && dispSteps.length === 0 ? (
-        <Markdown text="" streaming />
-      ) : null}
-      {!streaming && articles.length > 0 && (
-        <SourcesFooter articles={articles} cited={cited} onOpen={onOpenSource} />
-      )}
-      {finished && (m.content || m.reasoning) && (
-        <MessageActions content={displayRaw} onRetry={onRetry} />
-      )}
-      {m.status === 'error' && (m.content || m.reasoning) && (
-        <ErrorCard className="mt-3" text={m.error ?? '请求中断，请重试'} onRetry={onRetry} />
-      )}
-    </div>
-  )
-}
-
-// 处理过程：折叠态一行（进行中显示当前步骤；完成后为「已思考 · Xs」星星样式），
-// 点开为 Claude 式时间线——每步一个对应图标、竖线相连，思考内容直接展开在步骤下方。不落库。
-interface DispStep {
-  key: string
-  label: string
-  detail?: string
-  state: 'done' | 'running' | 'pending'
-  expand?: string
-}
-
-function ProcessBlock({ steps, streaming }: { steps: DispStep[]; streaming: boolean }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const running = steps.find((s) => s.state === 'running')
-  const thinkStep = steps.find((s) => s.key === 'think')
-  const headLabel =
-    streaming && running
-      ? `正在${running.label}…`
-      : thinkStep?.detail
-        ? `已思考 · ${thinkStep.detail}`
-        : (steps.find((s) => s.key === 'retrieve')?.detail ?? '处理过程')
-  return (
-    <div className="mb-3">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="-ml-2 flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
-      >
-        {streaming && running ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : (
-          <Sparkles className="size-3.5" />
-        )}
-        <span>{headLabel}</span>
-        <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
-      </button>
-      {open && (
-        <div className="mt-1.5 flex flex-col">
-          {/* 只显示已到达的步骤：未开始的不出现，「完成」仅在结束后出现 */}
-          {[
-            ...steps.filter((s) => s.state !== 'pending'),
-            ...(streaming ? [] : [{ key: 'end', label: '完成', state: 'done' } as DispStep])
-          ].map((s, i, all) => (
-            <div key={s.key} className="flex gap-2.5">
-              <div className="flex flex-col items-center self-stretch">
-                <span className="grid size-6 flex-none place-items-center text-muted-foreground">
-                  {s.state === 'running' ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <CircleCheck className="size-3.5" />
-                  )}
-                </span>
-                {i < all.length - 1 && <span className="w-px min-h-2 flex-1 bg-border" />}
-              </div>
-              <div
-                className={cn(
-                  'min-w-0 flex-1 pt-0.5 text-[13px] leading-[1.6] text-muted-foreground',
-                  i < all.length - 1 && 'pb-3.5'
-                )}
-              >
-                {s.label}
-                {s.detail && ` · ${s.detail}`}
-                {s.expand && <div className="mt-1.5 leading-[1.7] whitespace-pre-wrap">{s.expand}</div>}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// 来源清单：回答完成后展示，以文章（文件）为单位去重；只列被引用的，模型没打标记时降级列全部。
-// 条目可点击 → 侧板打开该文档并定位高亮被引用片段
-function SourcesFooter({
-  articles,
-  cited,
-  onOpen
-}: {
-  articles: { file: string; sources: SourceRef[] }[]
-  cited: boolean
-  onOpen: (file: string, sources: SourceRef[]) => void
-}): React.JSX.Element {
-  return (
-    <div className="animate-in fade-in slide-in-from-bottom-1 mt-3 border-t border-border pt-2.5 duration-500">
-      <div className="mb-1 text-[12px] font-medium text-muted-foreground">
-        {cited ? '来源' : '参考来源'}
-      </div>
+    <div className="animate-in fade-in slide-in-from-bottom-1 mt-1 ml-[17px] border-t border-border pt-2.5 duration-500">
+      <div className="mb-1 text-[12px] font-medium text-muted-foreground">来源</div>
       <div className="flex flex-col">
         {articles.map((a) => (
           <button
@@ -415,7 +511,7 @@ function MessageActions({
   onRetry
 }: {
   content: string
-  onRetry: () => void
+  onRetry?: () => void
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const copy = async (): Promise<void> => {
@@ -424,15 +520,17 @@ function MessageActions({
     setTimeout(() => setCopied(false), 1500)
   }
   return (
-    <div className="-ml-1.5 mt-2.5 flex items-center gap-0.5">
+    <div className="-ml-1.5 flex items-center gap-0.5">
       {content && (
         <ActionBtn title={copied ? '已复制' : '复制'} onClick={copy}>
           {copied ? <Check className="size-4 text-emerald-600" /> : <Copy className="size-4" />}
         </ActionBtn>
       )}
-      <ActionBtn title="重新生成" onClick={onRetry}>
-        <RotateCw className="size-4" />
-      </ActionBtn>
+      {onRetry && (
+        <ActionBtn title="重新生成" onClick={onRetry}>
+          <RotateCw className="size-4" />
+        </ActionBtn>
+      )}
     </div>
   )
 }
@@ -463,7 +561,7 @@ function ErrorCard({
   className
 }: {
   text: string
-  onRetry: () => void
+  onRetry?: () => void
   className?: string
 }): React.JSX.Element {
   return (
@@ -475,14 +573,15 @@ function ErrorCard({
     >
       <AlertCircle className="size-[18px] flex-none text-destructive" />
       <span className="flex-1 text-[13.5px] text-foreground">{text}</span>
-      <button
-        onClick={onRetry}
-        className="flex flex-none items-center gap-1.5 rounded-md border border-destructive/30 px-2.5 py-1 text-[13px] font-medium text-destructive transition-colors hover:bg-destructive/10"
-      >
-        <RotateCw className="size-3.5" />
-        重试
-      </button>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="flex flex-none items-center gap-1.5 rounded-md border border-destructive/30 px-2.5 py-1 text-[13px] font-medium text-destructive transition-colors hover:bg-destructive/10"
+        >
+          <RotateCw className="size-3.5" />
+          重试
+        </button>
+      )}
     </div>
   )
 }
-

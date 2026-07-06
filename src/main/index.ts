@@ -54,7 +54,17 @@ function createWindow(): BrowserWindow {
   return mainWindow
 }
 
-// 测试走独立数据目录：不碰真实数据，且单实例锁随数据目录区分——须先于加锁
+// 独立数据目录（环境隔离）：--data-dir 与测试钩子都须先于单实例锁——锁按数据目录区分，
+// 否则开着 Chime 就跑不了评估 / 测试
+const dataDirFlag = ((): string | null => {
+  const eq = process.argv.find((a) => a.startsWith('--data-dir='))
+  if (eq) return eq.slice('--data-dir='.length)
+  const i = process.argv.indexOf('--data-dir')
+  return i >= 0 ? (process.argv[i + 1] ?? null) : null
+})()
+if (dataDirFlag) {
+  app.setPath('userData', resolve(dataDirFlag))
+}
 if (process.env.CHIME_ENGINE_TEST) {
   app.setPath('userData', join(tmpdir(), 'chime-engine-test'))
 }
