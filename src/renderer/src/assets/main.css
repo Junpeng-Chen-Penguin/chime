@@ -68,6 +68,15 @@
     'Microsoft YaHei', sans-serif;
 }
 
+/*
+ * ── 排版规范（新增元素照此选值，勿再引入半步字号或随手透明度）──────────────
+ * 字号 6 档：16 正文/回答 · 15 标题 · 14 常规(过程行/按钮/输入) · 13 次级(详情/提示/来源) · 12 说明(标签/元信息) · 11 微标
+ * 文字色 4 角色：text-foreground 主 · text-muted-foreground 次 · text-primary 强调/链接 · text-destructive 错误
+ *   非文字装饰标记(⎿/圆点/faint 图标)统一 text-muted-foreground/50，不再用 /35 /70 /75 /80 等杂档
+ * 图标 3 档：size-3.5(14 行内) · size-4(16 动作) · size-[18px](头部/导航)
+ * 层级靠 字号 + 字重(font-medium/semibold) + 颜色 三杠杆，不堆砌字号
+ */
+
 /* 原生标题栏（hiddenInset）的拖拽区 */
 @utility app-drag {
   -webkit-app-region: drag;
