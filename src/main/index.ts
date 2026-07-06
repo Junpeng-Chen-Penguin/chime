@@ -161,15 +161,36 @@ app.whenReady().then(() => {
         }
         await runTurn({ streamId: 't1', convId, text: '用一句话介绍你自己', model, emit })
         await runTurn({ streamId: 't2', convId, text: '把刚才的介绍精简到十个字以内', model, emit })
+        // 停止键（流式中）：首个增量一到就停，验「已流出内容保留、标 stopped」
+        const { stopTurn } = await import('./engine/orchestrator')
+        let stopSent = false
+        await runTurn({
+          streamId: 't3',
+          convId,
+          text: '写一段 200 字的短文介绍茶的历史',
+          model,
+          emit: (e) => {
+            emit(e)
+            if (!stopSent && e.type === 'item-delta') {
+              stopSent = true
+              stopTurn('t3')
+            }
+          }
+        })
         const rows = getMessages(convId)
         const assistants = rows.filter((r) => r.role === 'assistant')
+        const stoppedRow = assistants[2]
         const ok =
-          rows.length === 4 &&
-          assistants.length === 2 &&
-          assistants.every(
-            (r) => r.status === 'done' && r.content.trim() && Array.isArray(JSON.parse(r.items ?? ''))
-          ) &&
-          events.filter((t) => t === 'turn-done').length === 2
+          rows.length === 6 &&
+          assistants.length === 3 &&
+          assistants
+            .slice(0, 2)
+            .every(
+              (r) => r.status === 'done' && r.content.trim() && Array.isArray(JSON.parse(r.items ?? ''))
+            ) &&
+          stoppedRow?.status === 'stopped' &&
+          events.filter((t) => t === 'turn-done').length === 3
+        console.log(`[engine-test] 停止轮 status=${stoppedRow?.status} 留痕=${!!stoppedRow?.items}`)
         console.log(ok ? '[engine-test] OK' : `[engine-test] FAIL rows=${rows.length}`)
         app.exit(ok ? 0 : 1)
       } catch (e) {
@@ -209,6 +230,22 @@ app.whenReady().then(() => {
         await runTurn({ streamId: 't2', convId, text: '帮我把这句话改通顺：今天天气很好我们去公园玩。', model, emit })
         // 追问旧话题：不能吃历史老本，须本轮重新检索、带来源（行为规则回归点）
         await runTurn({ streamId: 't3', convId, text: '那暂停服务的天数收费吗？', model, emit })
+        // 停止键（工具执行中）：检索一开始就停，验「等本步算完即收场、标 stopped」
+        const { stopTurn } = await import('./engine/orchestrator')
+        let stopSent = false
+        await runTurn({
+          streamId: 't4',
+          convId,
+          text: '退款多久能到账？',
+          model,
+          emit: (e) => {
+            emit(e)
+            if (!stopSent && e.type === 'item-start' && e.t === 'tool') {
+              stopSent = true
+              stopTurn('t4')
+            }
+          }
+        })
 
         const rows = getMessages(convId).filter((r) => r.role === 'assistant')
         const items1 = JSON.parse(rows[0]?.items ?? '[]') as { t: string }[]
@@ -218,6 +255,8 @@ app.whenReady().then(() => {
         const bizSourced = items1.some((i) => i.t === 'sources')
         const chatClean = !items2.some((i) => i.t === 'tool')
         const followupSearched = items3.some((i) => i.t === 'tool') && items3.some((i) => i.t === 'sources')
+        const stopRow = rows[3]
+        const stopKept = stopRow?.status === 'stopped' && Array.isArray(JSON.parse(stopRow?.items ?? ''))
 
         // 闸门（工具级计数）：第 4 次检索请求应被拒绝、不执行
         const ctx = { pool: [], searches: 0 }
@@ -230,9 +269,9 @@ app.whenReady().then(() => {
         const gate = 'denied' in (await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] }))
 
         console.log(
-          `[tool-test] 业务问题走检索=${bizSearched} 出来源=${bizSourced} 闲聊不检索=${chatClean} 追问重查带来源=${followupSearched} 闸门拒绝=${gate}`
+          `[tool-test] 业务问题走检索=${bizSearched} 出来源=${bizSourced} 闲聊不检索=${chatClean} 追问重查带来源=${followupSearched} 工具中停止留痕=${stopKept} 闸门拒绝=${gate}`
         )
-        const ok = bizSearched && bizSourced && chatClean && followupSearched && gate
+        const ok = bizSearched && bizSourced && chatClean && followupSearched && stopKept && gate
         console.log(ok ? '[tool-test] OK' : '[tool-test] FAIL')
         app.exit(ok ? 0 : 1)
       } catch (e) {
