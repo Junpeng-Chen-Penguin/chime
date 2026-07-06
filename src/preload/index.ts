@@ -54,6 +54,13 @@ const api = {
     const h = (_e: IpcRendererEvent, evt: ChatEvent): void => cb(evt)
     ipcRenderer.on('chat:event', h)
     return () => ipcRenderer.removeListener('chat:event', h)
+  },
+
+  // 窗口全屏态（全屏时红绿灯隐藏，界面据此调左上角内边距）
+  onFullscreen: (cb: (v: boolean) => void): (() => void) => {
+    const h = (_e: IpcRendererEvent, v: boolean): void => cb(v)
+    ipcRenderer.on('window:fullscreen', h)
+    return () => ipcRenderer.removeListener('window:fullscreen', h)
   }
 }
 

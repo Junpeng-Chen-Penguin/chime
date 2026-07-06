@@ -25,6 +25,7 @@ interface Props {
   title: string
   convId: string
   collapsed: boolean
+  fullscreen: boolean
   onExpand: () => void
   messages: Msg[]
   sending: boolean
@@ -50,6 +51,7 @@ export default function ChatArea({
   title,
   convId,
   collapsed,
+  fullscreen,
   onExpand,
   messages,
   sending,
@@ -80,7 +82,8 @@ export default function ChatArea({
       <header
         className={cn(
           'app-drag flex h-[44px] flex-none items-center gap-1',
-          collapsed ? 'pr-4 pl-[72px]' : 'px-4'
+          // 收起时为红绿灯留空；但全屏时红绿灯隐藏，回到常规内边距
+          collapsed && !fullscreen ? 'pr-4 pl-[72px]' : 'px-4'
         )}
       >
         {collapsed && (
@@ -100,7 +103,7 @@ export default function ChatArea({
           {empty ? (
             <EmptyState />
           ) : (
-            <div className="mx-auto w-full max-w-[800px] px-8 pt-3 pb-10">
+            <div className="mx-auto w-full max-w-[760px] px-8 pt-3 pb-10">
               <div className="flex flex-col gap-8">
                 {messages.map((m) =>
                   m.role === 'user' ? (
@@ -295,7 +298,8 @@ function AssistantMsg({
   }
 
   return (
-    <div className="flex flex-col gap-2 text-foreground select-text">
+    // 回复右侧留出缩进，右边缘不顶齐用户气泡右边（参照 Claude）
+    <div className="flex flex-col gap-2 pr-10 text-foreground select-text">
       {m.notice && <NoticeRow text={m.notice} />}
       {items.map((it, i) => {
         if ((it.t === 'text' || it.t === 'reasoning') && !it.text.trim()) return null
@@ -517,7 +521,7 @@ function SourcesFooter({
   }, [list])
   return (
     <div className="animate-in fade-in slide-in-from-bottom-1 mt-2 duration-500">
-      <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">来源</div>
+      <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">来源</div>
       {/* 带框的一列来源：每条显示完整相对路径，整行可点、悬停高亮；超宽尾部省略、悬停看全路径 */}
       <div className="overflow-hidden rounded-lg border border-border bg-muted/30">
         {articles.map((a) => (
@@ -525,10 +529,10 @@ function SourcesFooter({
             key={a.file}
             onClick={() => onOpen(a.file, a.sources)}
             title={a.file}
-            className="group flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted"
+            className="group flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-muted"
           >
-            <FileText className="size-3.5 flex-none text-muted-foreground" />
-            <span className="truncate text-[12px] text-muted-foreground group-hover:text-foreground">
+            <FileText className="size-4 flex-none text-muted-foreground" />
+            <span className="truncate text-[13px] text-muted-foreground group-hover:text-foreground">
               {a.file.replace(/\.md$/, '')}
             </span>
           </button>

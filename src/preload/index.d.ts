@@ -131,6 +131,7 @@ export interface ChimeApi {
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
+  onFullscreen: (cb: (v: boolean) => void) => () => void
   getKb: () => Promise<KbInfo>
   kbBuild: (input: { path: string; name: string; intro: string }) => Promise<{ ok: boolean; error?: string }>
   kbRefresh: () => Promise<{ ok: boolean; error?: string }>

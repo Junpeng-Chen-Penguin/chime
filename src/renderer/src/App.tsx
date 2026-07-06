@@ -25,6 +25,7 @@ function App(): React.JSX.Element {
   // 草稿会话：新建但还没发消息，不入库不进列表
   const [draftId, setDraftId] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
   const [defaultModel, setDefaultModel] = useState('deepseek-v4-pro')
@@ -58,6 +59,8 @@ function App(): React.JSX.Element {
   useEffect(() => {
     setDoc(null)
   }, [activeId])
+
+  useEffect(() => window.api.onFullscreen(setFullscreen), [])
 
   const openSource = useCallback(
     async (file: string, sources: SourceRef[]) => {
@@ -165,6 +168,7 @@ function App(): React.JSX.Element {
         title={active?.title ?? '新对话'}
         convId={activeId}
         collapsed={collapsed}
+        fullscreen={fullscreen}
         onExpand={() => setCollapsed(false)}
         messages={messages}
         sending={sending}

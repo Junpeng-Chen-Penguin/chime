@@ -40,6 +40,11 @@ function createWindow(): BrowserWindow {
     mainWindow.show()
   })
 
+  // 全屏时红绿灯隐藏，通知界面调整左上角内边距（收起态不再为红绿灯留空）
+  const sendFs = (v: boolean): void => mainWindow.webContents.send('window:fullscreen', v)
+  mainWindow.on('enter-full-screen', () => sendFs(true))
+  mainWindow.on('leave-full-screen', () => sendFs(false))
+
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
