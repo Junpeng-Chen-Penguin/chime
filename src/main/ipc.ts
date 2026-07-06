@@ -25,6 +25,7 @@ export function registerIpc(): void {
     return {
       baseUrl: p.baseUrl,
       defaultModel: p.defaultModel,
+      defaultWindow: p.defaultWindow,
       keyMask: maskApiKey(p.apiKey),
       hasKey: !!p.apiKey
     }
@@ -32,7 +33,10 @@ export function registerIpc(): void {
 
   ipcMain.handle(
     'provider:save',
-    (_e, input: { baseUrl: string; defaultModel: string; apiKey: string | null }) => {
+    (
+      _e,
+      input: { baseUrl: string; defaultModel: string; apiKey: string | null; defaultWindow?: number }
+    ) => {
       saveProvider(input)
     }
   )
@@ -98,15 +102,16 @@ export function registerIpc(): void {
     return {
       rootPath: kb.rootPath,
       name: kb.name,
+      intro: kb.intro,
       indexedAt: kb.indexedAt,
       busy: kbBusy(),
       lastSummary: getLastSummary(),
       ...kbStats()
     }
   })
-  // 改名：纯元数据，不触发任何索引
-  ipcMain.handle('kb:rename', (_e, name: string) => {
-    setKbMeta({ name: name.trim() || '业务知识库' })
+  // 名称 + 简介：纯元数据，不触发任何索引
+  ipcMain.handle('kb:update', (_e, input: { name: string; intro: string }) => {
+    setKbMeta({ name: input.name.trim() || '业务知识库', intro: input.intro.trim() })
   })
   // 移除：清空索引数据并复位（不影响 git 仓库本身）
   ipcMain.handle('kb:remove', () => {
@@ -114,10 +119,11 @@ export function registerIpc(): void {
     resetKb()
     return { ok: true }
   })
-  // 点「构建」：校验 → 整库重建（换路径与首次构建同语义）
-  ipcMain.handle('kb:build', async (e, input: { path: string; name: string }) => {
+  // 点「构建」：校验 → 整库重建（换路径与首次构建同语义）；简介为必填元数据，随表单一并保存
+  ipcMain.handle('kb:build', async (e, input: { path: string; name: string; intro: string }) => {
     const invalid = await validateRepoPath(input.path)
     if (invalid) return { ok: false, error: invalid }
+    setKbMeta({ intro: input.intro.trim() })
     void runIndexJob(e.sender, input.path, true, input.name.trim() || '业务知识库')
     return { ok: true }
   })

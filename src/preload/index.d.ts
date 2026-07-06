@@ -3,6 +3,7 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 export interface ProviderInfo {
   baseUrl: string
   defaultModel: string
+  defaultWindow: number
   keyMask: string
   hasKey: boolean
 }
@@ -87,6 +88,7 @@ export interface KbSummary {
 export interface KbInfo {
   rootPath: string
   name: string
+  intro: string
   indexedAt: number | null
   busy: boolean
   files: number
@@ -110,6 +112,7 @@ export interface ChimeApi {
     baseUrl: string
     defaultModel: string
     apiKey: string | null
+    defaultWindow?: number
   }) => Promise<void>
   detect: (input: { baseUrl: string; apiKey: string | null }) => Promise<DetectResult>
   getModels: () => Promise<string[]>
@@ -128,9 +131,9 @@ export interface ChimeApi {
   stopChat: (streamId: string) => void
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
   getKb: () => Promise<KbInfo>
-  kbBuild: (input: { path: string; name: string }) => Promise<{ ok: boolean; error?: string }>
+  kbBuild: (input: { path: string; name: string; intro: string }) => Promise<{ ok: boolean; error?: string }>
   kbRefresh: () => Promise<{ ok: boolean; error?: string }>
-  kbRename: (name: string) => Promise<void>
+  kbUpdate: (input: { name: string; intro: string }) => Promise<void>
   kbRemove: () => Promise<{ ok: boolean; error?: string }>
   setConversationKb: (input: { id: string; enabled: boolean }) => Promise<void>
   openDoc: (filePath: string) => Promise<DocOpenResult>

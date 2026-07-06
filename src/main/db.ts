@@ -113,14 +113,14 @@ export function saveProvider(input: {
   apiKey: string | null
   baseUrl: string
   defaultModel: string
+  defaultWindow?: number
 }): void {
   // apiKey 为 null 表示沿用已存的密钥（界面未改动）
-  const apiKey = input.apiKey === null ? getProvider().apiKey : input.apiKey
-  db.prepare('UPDATE provider SET api_key = ?, base_url = ?, default_model = ? WHERE id = 1').run(
-    apiKey,
-    input.baseUrl,
-    input.defaultModel
-  )
+  const cur = getProvider()
+  const apiKey = input.apiKey === null ? cur.apiKey : input.apiKey
+  db.prepare(
+    'UPDATE provider SET api_key = ?, base_url = ?, default_model = ?, default_window = ? WHERE id = 1'
+  ).run(apiKey, input.baseUrl, input.defaultModel, input.defaultWindow ?? cur.defaultWindow)
 }
 
 // 仅用于界面展示，明文密钥不离开主进程

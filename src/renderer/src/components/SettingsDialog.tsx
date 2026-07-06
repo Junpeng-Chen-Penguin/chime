@@ -28,6 +28,7 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
   const [error, setError] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [defaultModel, setDefaultModel] = useState('')
+  const [defaultWindow, setDefaultWindow] = useState('65536')
   const [tab, setTab] = useState<Tab>('provider')
 
   const runDetect = useCallback(
@@ -63,6 +64,7 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
       if (cancelled) return
       setBaseUrl(p.baseUrl)
       setDefaultModel(p.defaultModel)
+      setDefaultWindow(String(p.defaultWindow))
       setKeyMask(p.keyMask)
       setHasKey(p.hasKey)
       if (p.hasKey) runDetect(null)
@@ -85,7 +87,12 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
   if (!open) return null
 
   const save = async (): Promise<void> => {
-    await window.api.saveProvider({ baseUrl, defaultModel, apiKey: keyInput.trim() || null })
+    await window.api.saveProvider({
+      baseUrl,
+      defaultModel,
+      apiKey: keyInput.trim() || null,
+      defaultWindow: Math.max(4096, parseInt(defaultWindow, 10) || 65536)
+    })
     onSaved(defaultModel)
     onClose()
   }
@@ -184,6 +191,15 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
             />
           </Section>
 
+          <Section title="默认上下文窗口" hint="模型可容纳的 token 数；未能识别的模型按此值估算，DeepSeek 等常见模型自动识别">
+            <input
+              type="number"
+              value={defaultWindow}
+              onChange={(e) => setDefaultWindow(e.target.value)}
+              className="h-10 w-[200px] rounded-lg border border-input bg-background px-3 text-[14px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
+            />
+          </Section>
+
           <Section title="模型" hint="检测成功后自动获取，选择一个作为默认模型">
             {models.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border px-4 py-3.5 text-[13px] text-muted-foreground">
@@ -255,6 +271,7 @@ function KbPanel(): React.JSX.Element {
   const [showForm, setShowForm] = useState(false)
   const [formMode, setFormMode] = useState<'add' | 'edit'>('add')
   const [formName, setFormName] = useState('业务知识库')
+  const [formIntro, setFormIntro] = useState('')
   const [formPath, setFormPath] = useState('')
   const [formDone, setFormDone] = useState<number | null>(null) // 完成后的文档数提示
   const [progress, setProgress] = useState<KbProgress | null>(null)
@@ -262,8 +279,6 @@ function KbPanel(): React.JSX.Element {
   const [warning, setWarning] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState(false)
-  const [editingName, setEditingName] = useState(false)
-  const [nameDraft, setNameDraft] = useState('')
   const showFormRef = useRef(false)
 
   useEffect(() => {
@@ -308,6 +323,7 @@ function KbPanel(): React.JSX.Element {
   const openForm = (mode: 'add' | 'edit'): void => {
     setFormMode(mode)
     setFormName(mode === 'edit' ? (info?.name ?? '') : '业务知识库')
+    setFormIntro(mode === 'edit' ? (info?.intro ?? '') : '')
     setFormPath(mode === 'edit' ? (info?.rootPath ?? '') : '')
     setError('')
     setWarning('')
@@ -317,25 +333,20 @@ function KbPanel(): React.JSX.Element {
 
   const submitForm = async (): Promise<void> => {
     setError('')
-    // 编辑且只改了名称：即存即回，不重新导入
+    // 编辑且没改路径：只存名称与简介，不重新导入
     if (formMode === 'edit' && formPath.trim() === info?.rootPath) {
-      if (formName.trim() && formName.trim() !== info?.name) await window.api.kbRename(formName.trim())
+      await window.api.kbUpdate({ name: formName.trim(), intro: formIntro.trim() })
       reload()
       setShowForm(false)
       return
     }
-    const r = await window.api.kbBuild({ path: formPath.trim(), name: formName.trim() })
+    const r = await window.api.kbBuild({
+      path: formPath.trim(),
+      name: formName.trim(),
+      intro: formIntro.trim()
+    })
     if (!r.ok) setError(r.error || '路径无效')
     // 成功则留在表单内展示进度，完成后自动返回
-  }
-
-  const commitName = async (): Promise<void> => {
-    setEditingName(false)
-    const name = nameDraft.trim()
-    if (name && name !== info?.name) {
-      await window.api.kbRename(name)
-      reload()
-    }
   }
 
   const summaryText = ((): string | null => {
@@ -353,14 +364,24 @@ function KbPanel(): React.JSX.Element {
     return (
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="mb-5 text-[14px] font-semibold">
-          {formMode === 'add' ? '添加知识库' : '编辑知识库'}
+          {formMode === 'add' ? '新建知识库' : '编辑知识库'}
         </div>
-        <Section title="名称">
+        <Section title="名称 *">
           <input
             value={formName}
             onChange={(e) => setFormName(e.target.value)}
             disabled={formBusy}
             className="h-10 w-full rounded-lg border border-input bg-background px-3 text-[14px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50"
+          />
+        </Section>
+        <Section title="简介 *" hint="描述这个库讲什么，模型据此判断问题该不该查这个库">
+          <textarea
+            value={formIntro}
+            onChange={(e) => setFormIntro(e.target.value)}
+            disabled={formBusy}
+            rows={3}
+            placeholder="例：本库收录计费、授权、开通等业务规则与流程，覆盖 A / B 项目"
+            className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2.5 text-[14px] leading-[1.6] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50"
           />
         </Section>
         <Section title="来源" hint="本版支持 git 仓库，后续扩展更多来源">
@@ -412,8 +433,12 @@ function KbPanel(): React.JSX.Element {
             <Button variant="outline" onClick={() => setShowForm(false)} className="h-9">
               取消
             </Button>
-            <Button onClick={submitForm} disabled={!formPath.trim()} className="h-9 px-5">
-              {formMode === 'add' ? '添加' : '提交'}
+            <Button
+              onClick={submitForm}
+              disabled={!formPath.trim() || !formName.trim() || !formIntro.trim()}
+              className="h-9 px-5"
+            >
+              {formMode === 'add' ? '创建' : '保存'}
             </Button>
           </div>
         )}
@@ -447,31 +472,12 @@ function KbPanel(): React.JSX.Element {
       ) : (
         <div className="rounded-xl border border-border p-4">
           <div className="flex items-center justify-between">
-            {editingName ? (
-              <input
-                autoFocus
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                onFocus={(e) => e.target.select()}
-                onBlur={commitName}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') commitName()
-                  if (e.key === 'Escape') setEditingName(false)
-                }}
-                className="h-7 rounded-md border border-ring bg-background px-2 text-[14px] font-semibold outline-none"
-              />
-            ) : (
-              <button
-                onClick={() => {
-                  setNameDraft(info!.name)
-                  setEditingName(true)
-                }}
-                title="点击重命名"
-                className="-mx-1.5 rounded-md px-1.5 py-0.5 text-[14px] font-semibold transition-colors hover:bg-muted"
-              >
-                {info!.name}
-              </button>
-            )}
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-[14px] font-semibold">{info!.name}</span>
+              <span className="flex-none rounded border border-border bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                git
+              </span>
+            </div>
             <div className="relative">
               <button
                 onClick={() => setMenuOpen((v) => !v)}
@@ -508,9 +514,11 @@ function KbPanel(): React.JSX.Element {
               )}
             </div>
           </div>
-          <div className="mt-0.5 truncate text-[12.5px] text-muted-foreground" title={info!.rootPath}>
-            git 仓库 · {info!.rootPath}
-          </div>
+          {info!.intro && (
+            <div className="mt-1.5 text-[12.5px] leading-[1.7] text-muted-foreground">
+              {info!.intro}
+            </div>
+          )}
 
           <div className="mt-3">
             {busy && progress ? (
@@ -569,7 +577,9 @@ function KbPanel(): React.JSX.Element {
             ) : (
               <Button
                 variant="outline"
-                onClick={() => window.api.kbBuild({ path: info!.rootPath, name: info!.name })}
+                onClick={() =>
+                  window.api.kbBuild({ path: info!.rootPath, name: info!.name, intro: info!.intro })
+                }
                 disabled={busy}
                 className="h-8 px-4 text-[13px]"
               >

@@ -35,9 +35,10 @@ const api = {
   stopChat: (streamId: string) => ipcRenderer.send('chat:stop', streamId),
 
   getKb: () => ipcRenderer.invoke('kb:get'),
-  kbBuild: (input: { path: string; name: string }) => ipcRenderer.invoke('kb:build', input),
+  kbBuild: (input: { path: string; name: string; intro: string }) =>
+    ipcRenderer.invoke('kb:build', input),
   kbRefresh: () => ipcRenderer.invoke('kb:refresh'),
-  kbRename: (name: string) => ipcRenderer.invoke('kb:rename', name),
+  kbUpdate: (input: { name: string; intro: string }) => ipcRenderer.invoke('kb:update', input),
   kbRemove: () => ipcRenderer.invoke('kb:remove'),
   setConversationKb: (input: { id: string; enabled: boolean }) =>
     ipcRenderer.invoke('conv:setKb', input),
