@@ -77,6 +77,26 @@ export default function ChatArea({
   const overLimit = input.length > SEND_CHAR_LIMIT
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
 
+  const composer = (
+    <Composer
+      model={model}
+      models={models}
+      onPickModel={onPickModel}
+      sending={sending}
+      value={input}
+      onChange={onInput}
+      onSubmit={() => {
+        if (!overLimit) onSubmit()
+      }}
+      onStop={onStop}
+      kbState={kbState}
+      kbName={kbName}
+      kbSelected={kbSelected}
+      kbLocked={kbLocked}
+      onToggleKb={onToggleKb}
+    />
+  )
+
   return (
     <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.07)]">
       <header
@@ -98,71 +118,66 @@ export default function ChatArea({
         <TitleBar title={title} onRename={onRename} />
       </header>
 
-      <div className="relative flex-1 overflow-hidden">
-        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
-          {empty ? (
-            <EmptyState />
-          ) : (
-            <div className="mx-auto w-full max-w-[760px] px-8 pt-3 pb-10">
-              <div className="flex flex-col gap-8">
-                {messages.map((m) =>
-                  m.role === 'user' ? (
-                    <UserMsg key={m.id}>{m.content}</UserMsg>
-                  ) : (
-                    <AssistantMsg
-                      key={m.id}
-                      m={m}
-                      isLast={m.id === lastAssistantId}
-                      onRetry={onRetry}
-                      onOpenSource={onOpenSource}
-                    />
-                  )
-                )}
+      {empty ? (
+        // 空态 onboarding：wordmark + tagline + 居中输入框（最简，无起手提示）
+        <div className="flex flex-1 flex-col items-center justify-center pb-16">
+          <div className="mb-7 text-center">
+            <div className="text-[40px] leading-none font-semibold tracking-tight text-foreground">
+              Chime
+            </div>
+            <div className="mt-3 text-[16px] text-muted-foreground">Chime with your work!</div>
+          </div>
+          <div className="w-full">{composer}</div>
+        </div>
+      ) : (
+        <>
+          <div className="relative flex-1 overflow-hidden">
+            <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
+              <div className="mx-auto w-full max-w-[760px] px-8 pt-3 pb-10">
+                <div className="flex flex-col gap-8">
+                  {messages.map((m) =>
+                    m.role === 'user' ? (
+                      <UserMsg key={m.id}>{m.content}</UserMsg>
+                    ) : (
+                      <AssistantMsg
+                        key={m.id}
+                        m={m}
+                        isLast={m.id === lastAssistantId}
+                        onRetry={onRetry}
+                        onOpenSource={onOpenSource}
+                      />
+                    )
+                  )}
+                </div>
               </div>
             </div>
-          )}
-        </div>
-        {showJump && (
-          <button
-            onClick={scrollToBottom}
-            title="回到底部"
-            className="absolute bottom-3 left-1/2 z-10 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:text-foreground"
-          >
-            <ArrowDown className="size-[18px]" />
-          </button>
-        )}
-      </div>
+            {showJump && (
+              <button
+                onClick={scrollToBottom}
+                title="回到底部"
+                className="absolute bottom-3 left-1/2 z-10 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:text-foreground"
+              >
+                <ArrowDown className="size-[18px]" />
+              </button>
+            )}
+          </div>
 
-      {/* 输入框上方轻提示：过长消息就地拦下；对话较长建议新开（均不阻断界面其他操作） */}
-      {(overLimit || contextRatio > 0.7) && (
-        <div className="mx-auto w-full max-w-[800px] px-8 pb-1">
-          {overLimit ? (
-            <div className="text-[12px] text-destructive">
-              消息过长，请精简或拆分（当前 {input.length.toLocaleString()} 字，上限{' '}
-              {SEND_CHAR_LIMIT.toLocaleString()} 字）
+          {/* 输入框上方轻提示：过长消息就地拦下；对话较长建议新开（均不阻断界面其他操作） */}
+          {(overLimit || contextRatio > 0.7) && (
+            <div className="mx-auto w-full max-w-[800px] px-8 pb-1">
+              {overLimit ? (
+                <div className="text-[12px] text-destructive">
+                  消息过长，请精简或拆分（当前 {input.length.toLocaleString()} 字，上限{' '}
+                  {SEND_CHAR_LIMIT.toLocaleString()} 字）
+                </div>
+              ) : (
+                <div className="text-[12px] text-muted-foreground">对话较长，建议新开会话</div>
+              )}
             </div>
-          ) : (
-            <div className="text-[12px] text-muted-foreground">对话较长，建议新开会话</div>
           )}
-        </div>
+          {composer}
+        </>
       )}
-      <Composer
-        model={model}
-        models={models}
-        onPickModel={onPickModel}
-        sending={sending}
-        value={input}
-        onChange={onInput}
-        onSubmit={() => {
-          if (!overLimit) onSubmit()
-        }}
-        onStop={onStop}
-        kbState={kbState}
-        kbName={kbName}
-        kbSelected={kbSelected}
-        kbLocked={kbLocked}
-        onToggleKb={onToggleKb}
-      />
     </div>
   )
 }
@@ -214,18 +229,6 @@ function TitleBar({
     >
       {title}
     </button>
-  )
-}
-
-function EmptyState(): React.JSX.Element {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
-      <div className="grid size-12 place-items-center rounded-2xl bg-primary-soft">
-        <span className="size-3 rounded-full bg-primary" />
-      </div>
-      <div className="text-[16px] font-semibold">开始一段新对话</div>
-      <div className="text-[13px] text-muted-foreground">在下方输入问题，Chime 会基于当前模型作答</div>
-    </div>
   )
 }
 

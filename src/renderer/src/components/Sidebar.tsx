@@ -5,6 +5,7 @@ import type { Conversation } from '@/types'
 interface Props {
   items: Conversation[]
   activeId: string
+  fullscreen: boolean
   onSelect: (id: string) => void
   onNewChat: () => void
   onCollapse: () => void
@@ -15,6 +16,7 @@ interface Props {
 export default function Sidebar({
   items,
   activeId,
+  fullscreen,
   onSelect,
   onNewChat,
   onCollapse,
@@ -23,7 +25,8 @@ export default function Sidebar({
 }: Props): React.JSX.Element {
   return (
     <aside className="flex h-full w-[256px] flex-none flex-col overflow-hidden rounded-[12px] border border-border bg-[#f8f8f7] shadow-[0_1px_2px_rgba(20,22,30,0.05),0_4px_14px_rgba(20,22,30,0.07)]">
-      <div className="app-drag flex h-[44px] flex-none items-center pl-[84px]">
+      {/* 收起按钮左侧为红绿灯留空；全屏时红绿灯隐藏，回到常规内边距 */}
+      <div className={cn('app-drag flex h-[44px] flex-none items-center', fullscreen ? 'pl-3' : 'pl-[84px]')}>
         <button
           onClick={onCollapse}
           title="收起侧栏  ⌘."

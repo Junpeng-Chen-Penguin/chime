@@ -83,7 +83,7 @@ export default function Composer({
                 onSubmit()
               }
             }}
-            placeholder="给 Chime 发送消息…"
+            placeholder="Chime in…"
             className="block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-base leading-[1.6] outline-none placeholder:text-muted-foreground"
           />
           <div className="flex items-center justify-between px-3 pb-3">

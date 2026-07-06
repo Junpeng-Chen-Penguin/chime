@@ -152,6 +152,7 @@ function App(): React.JSX.Element {
   const sidebarProps = {
     items: conversations,
     activeId,
+    fullscreen,
     onSelect: (id: string) => {
       setActiveId(id)
     },
