@@ -1,0 +1,12 @@
+{
+  "kb": true,
+  "messages": ["按天计费怎么算？另外订单超过 7 天还能退款吗？"],
+  "expect": [
+    {
+      "searched": true,
+      "sources": true,
+      "citedValid": true,
+      "judge": "回答是否同时讲清了按天计费规则和超过 7 天按剩余天数折算退款，两部分都有资料依据、无编造"
+    }
+  ]
+}

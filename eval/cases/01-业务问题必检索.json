@@ -1,0 +1,12 @@
+{
+  "kb": true,
+  "messages": ["按天计费是怎么算的？"],
+  "expect": [
+    {
+      "searched": true,
+      "sources": true,
+      "citedValid": true,
+      "judge": "回答是否基于资料讲清了按天计费规则（按自然日、费用=日单价×使用天数、暂停天数不计费），无编造内容"
+    }
+  ]
+}

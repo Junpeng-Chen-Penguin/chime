@@ -1,0 +1,8 @@
+{
+  "kb": true,
+  "messages": ["退款多久能到账？", "那暂停服务的天数收费吗？"],
+  "expect": [
+    { "searched": true, "sources": true, "citedValid": true },
+    { "searched": true, "sources": true, "citedValid": true }
+  ]
+}

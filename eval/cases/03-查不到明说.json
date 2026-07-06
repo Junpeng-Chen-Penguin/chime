@@ -1,0 +1,11 @@
+{
+  "kb": true,
+  "messages": ["公司的年假制度是怎么规定的？"],
+  "expect": [
+    {
+      "searched": true,
+      "sources": false,
+      "judge": "回答是否明确说了知识库中没有找到相关内容，且没有编造任何年假制度的具体规定"
+    }
+  ]
+}

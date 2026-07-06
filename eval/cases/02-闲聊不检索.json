@@ -1,0 +1,5 @@
+{
+  "kb": true,
+  "messages": ["帮我把这句话翻译成英文：今天天气很好。"],
+  "expect": [{ "searched": false }]
+}

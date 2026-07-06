@@ -7,6 +7,7 @@ import { tmpdir } from 'os'
 import {
   initDb,
   getKb,
+  getProvider,
   saveProvider,
   createConversation,
   getMessages,
@@ -85,7 +86,59 @@ protocol.registerSchemesAsPrivileged([
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
+// 无界面评估入口：--eval <case.json>，不建窗口，按用例驱动 engine，事件以 JSONL 写 stdout
+const evalCasePath = ((): string | null => {
+  const i = process.argv.indexOf('--eval')
+  return i >= 0 ? (process.argv[i + 1] ?? null) : null
+})()
+
 app.whenReady().then(() => {
+  if (evalCasePath) {
+    void (async () => {
+      try {
+        initDb()
+        if (process.env.CHIME_ENGINE_KEY) {
+          saveProvider({
+            apiKey: process.env.CHIME_ENGINE_KEY,
+            baseUrl: process.env.CHIME_ENGINE_BASE_URL || 'https://api.deepseek.com',
+            defaultModel: process.env.CHIME_ENGINE_MODEL || 'deepseek-chat'
+          })
+        }
+        const { readFileSync } = await import('fs')
+        const spec = JSON.parse(readFileSync(resolve(evalCasePath), 'utf8')) as {
+          kb?: { repo: string; name: string; intro: string }
+          model?: string
+          messages: string[]
+        }
+        const { runTurn } = await import('./engine/orchestrator')
+        // 带库用例：库未就绪或路径不同才构建（预置过则秒过）
+        if (spec.kb) {
+          const cur = getKb()
+          if (cur.rootPath !== resolve(spec.kb.repo) || !cur.indexedAt) {
+            const kb = await import('./kb')
+            await kb.runIndexJob(null, resolve(spec.kb.repo), true, spec.kb.name)
+          }
+          setKbMeta({ intro: spec.kb.intro })
+        }
+        const model = spec.model || process.env.CHIME_ENGINE_MODEL || getProvider().defaultModel
+        const convId = `eval-${process.pid}`
+        createConversation(convId, model, Date.now())
+        setConversationKb(convId, !!spec.kb)
+        const emit = (e: object): void => {
+          process.stdout.write(JSON.stringify(e) + '\n')
+        }
+        for (let i = 0; i < spec.messages.length; i++) {
+          await runTurn({ streamId: `t${i + 1}`, convId, text: spec.messages[i], model, emit })
+        }
+        app.exit(0)
+      } catch (e) {
+        process.stderr.write(`[eval] ERROR ${String(e)}\n`)
+        app.exit(1)
+      }
+    })()
+    return
+  }
+
   // v4 验证钩子：CHIME_ENGINE_TEST=1 时跑引擎主链自检（两轮无库对话，验流式事件、落库、历史组装）后退出
   if (process.env.CHIME_ENGINE_TEST) {
     void (async () => {
