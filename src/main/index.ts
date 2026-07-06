@@ -154,13 +154,17 @@ app.whenReady().then(() => {
         }
         await runTurn({ streamId: 't1', convId, text: '按天计费是怎么算的？', model, emit })
         await runTurn({ streamId: 't2', convId, text: '帮我把这句话改通顺：今天天气很好我们去公园玩。', model, emit })
+        // 追问旧话题：不能吃历史老本，须本轮重新检索、带来源（行为规则回归点）
+        await runTurn({ streamId: 't3', convId, text: '那暂停服务的天数收费吗？', model, emit })
 
         const rows = getMessages(convId).filter((r) => r.role === 'assistant')
         const items1 = JSON.parse(rows[0]?.items ?? '[]') as { t: string }[]
         const items2 = JSON.parse(rows[1]?.items ?? '[]') as { t: string }[]
+        const items3 = JSON.parse(rows[2]?.items ?? '[]') as { t: string }[]
         const bizSearched = items1.some((i) => i.t === 'tool')
         const bizSourced = items1.some((i) => i.t === 'sources')
         const chatClean = !items2.some((i) => i.t === 'tool')
+        const followupSearched = items3.some((i) => i.t === 'tool') && items3.some((i) => i.t === 'sources')
 
         // 闸门（工具级计数）：第 4 次检索请求应被拒绝、不执行
         const ctx = { pool: [], searches: 0 }
@@ -173,9 +177,9 @@ app.whenReady().then(() => {
         const gate = 'denied' in (await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] }))
 
         console.log(
-          `[tool-test] 业务问题走检索=${bizSearched} 出来源=${bizSourced} 闲聊不检索=${chatClean} 闸门拒绝=${gate}`
+          `[tool-test] 业务问题走检索=${bizSearched} 出来源=${bizSourced} 闲聊不检索=${chatClean} 追问重查带来源=${followupSearched} 闸门拒绝=${gate}`
         )
-        const ok = bizSearched && bizSourced && chatClean && gate
+        const ok = bizSearched && bizSourced && chatClean && followupSearched && gate
         console.log(ok ? '[tool-test] OK' : '[tool-test] FAIL')
         app.exit(ok ? 0 : 1)
       } catch (e) {
