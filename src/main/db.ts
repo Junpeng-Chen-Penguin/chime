@@ -88,6 +88,12 @@ export function initDb(): void {
   } catch {
     // 列已存在
   }
+  // 迁移：知识库简介（人工必填，注入环境信息供模型判断该不该查）
+  try {
+    db.exec("ALTER TABLE kb ADD COLUMN intro TEXT NOT NULL DEFAULT ''")
+  } catch {
+    // 列已存在
+  }
 }
 
 // engine/store 是消息的唯一写者，经此拿库连接
@@ -191,6 +197,7 @@ export function setConversationTitle(id: string, title: string, auto: boolean): 
 export interface KbRow {
   rootPath: string
   name: string
+  intro: string
   lastCommit: string | null
   embedModel: string
   indexedAt: number | null
@@ -208,18 +215,19 @@ export interface ChunkInput {
 export function getKb(): KbRow {
   return db
     .prepare(
-      'SELECT root_path AS rootPath, name, last_commit AS lastCommit, embed_model AS embedModel, indexed_at AS indexedAt FROM kb WHERE id = 1'
+      'SELECT root_path AS rootPath, name, intro, last_commit AS lastCommit, embed_model AS embedModel, indexed_at AS indexedAt FROM kb WHERE id = 1'
     )
     .get() as KbRow
 }
 
 export function setKbMeta(
-  meta: Partial<{ rootPath: string; name: string; lastCommit: string | null; embedModel: string; indexedAt: number }>
+  meta: Partial<{ rootPath: string; name: string; intro: string; lastCommit: string | null; embedModel: string; indexedAt: number }>
 ): void {
   const cur = getKb()
-  db.prepare('UPDATE kb SET root_path = ?, name = ?, last_commit = ?, embed_model = ?, indexed_at = ? WHERE id = 1').run(
+  db.prepare('UPDATE kb SET root_path = ?, name = ?, intro = ?, last_commit = ?, embed_model = ?, indexed_at = ? WHERE id = 1').run(
     meta.rootPath ?? cur.rootPath,
     meta.name ?? cur.name,
+    meta.intro ?? cur.intro,
     meta.lastCommit === undefined ? cur.lastCommit : meta.lastCommit,
     meta.embedModel ?? cur.embedModel,
     meta.indexedAt ?? cur.indexedAt

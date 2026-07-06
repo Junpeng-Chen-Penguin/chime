@@ -5,10 +5,12 @@
 import { streamText, isStepCount } from 'ai'
 import type { ModelMessage } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { getProvider } from '../db'
+import { getProvider, getConversationKb, getKb, kbStats } from '../db'
+import { EMBED_MODEL_ID } from '../model'
 import { humanize } from '../ai'
-import { buildSystemPrompt } from './prompts'
+import { buildSystemPrompt, type KbEnv } from './prompts'
 import { budgetFor, estimateTokens, recordUsage } from './budget'
+import { makeSearchTool, TOOL_REQUEST_HARD_LIMIT, type TurnToolContext } from './tools'
 import { saveUserMessage, saveAssistantTurn, loadHistoryMessages, type TurnItem, type TurnStatus } from './store'
 
 export type ChatEvent =
@@ -74,8 +76,10 @@ export async function runTurn(opts: {
     emit({ type: 'item-done', streamId, index: cur, item: items[cur] })
   }
   const finish = (status: TurnStatus, error?: string, usage?: { inputTokens: number; outputTokens: number }, contextRatio = 0): void => {
-    const content = [...items].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')?.text ?? ''
-    saveAssistantTurn(convId, { content, items, status })
+    // 模型可能发出空的 text/reasoning 段（如开了个头就转去调工具），不落库
+    const kept = items.filter((i) => (i.t !== 'text' && i.t !== 'reasoning') || i.text.trim())
+    const content = [...kept].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')?.text ?? ''
+    saveAssistantTurn(convId, { content, items: kept, status })
     emit({ type: 'turn-done', streamId, status, error, usage, contextRatio })
   }
 
@@ -85,8 +89,21 @@ export async function runTurn(opts: {
     return
   }
 
-  // 组装：系统提示词（本模块无知识库，挂库注入随后续 Case）+ 对话历史（含本条）
-  const system = buildSystemPrompt(null)
+  // 挂库判定在组装时：需重建（本地模型已更换）按无知识库组装并提示，「更新中」则正常挂、由工具返回 busy 语义
+  let kbEnv: KbEnv | null = null
+  if (getConversationKb(convId)) {
+    const kb = getKb()
+    if (!kb.rootPath) {
+      // 库已被移除：按无知识库组装
+    } else if (kb.embedModel && kb.embedModel !== EMBED_MODEL_ID) {
+      emit({ type: 'notice', streamId, text: '本地模型已更换，知识库需重建后才能检索；本轮按无知识库回答' })
+    } else {
+      kbEnv = { name: kb.name, intro: kb.intro, docCount: kbStats().files }
+    }
+  }
+
+  // 组装：系统提示词（固定主干 +（挂库）条件段 + 环境信息）+ 对话历史（含本条）
+  const system = buildSystemPrompt(kbEnv)
   const budget = budgetFor(model)
   let history: ModelMessage[] = loadHistoryMessages(convId)
   const estimate = (): number =>
@@ -106,13 +123,29 @@ export async function runTurn(opts: {
   const controller = new AbortController()
   turns.set(streamId, controller)
 
+  // 轮内状态：检索计数与来源池（连续编号）；limitHit = 触接口级禁止（触边界强制作答）
+  const toolCtx: TurnToolContext = { pool: [], searches: 0 }
+  let limitHit = false
+  const toolItemIndex = new Map<string, number>() // toolCallId → items 下标
+  const toolStartAt = new Map<string, number>()
+
   try {
     const result = streamText({
       model: provider(model),
       instructions: system,
       messages: history,
       abortSignal: controller.signal,
-      stopWhen: isStepCount(10) // 防御性兜底，正常先触发闸门（闸门随检索工具引入）
+      tools: kbEnv ? { search_knowledge_base: makeSearchTool(toolCtx) } : undefined,
+      // 接口级禁止（最硬）：请求总数（含被拒）触顶后不再下发工具清单，模型只能作答
+      prepareStep: ({ steps }) => {
+        const requested = steps.reduce((s, st) => s + st.toolCalls.length, 0)
+        if (requested >= TOOL_REQUEST_HARD_LIMIT) {
+          limitHit = true
+          return { activeTools: [] }
+        }
+        return undefined
+      },
+      stopWhen: isStepCount(10) // 防御性兜底，正常永远先触发 6 次闸门
     })
 
     for await (const part of result.fullStream) {
@@ -131,9 +164,43 @@ export async function runTurn(opts: {
         case 'text-end':
           endItem()
           break
+        case 'tool-call':
+          // 工具步骤无 delta：item-start 即「执行中」
+          startItem('tool', {
+            t: 'tool',
+            name: part.toolName,
+            args: (part.input ?? {}) as Record<string, unknown>
+          })
+          toolItemIndex.set(part.toolCallId, cur)
+          toolStartAt.set(part.toolCallId, Date.now())
+          break
+        case 'tool-result': {
+          const idx = toolItemIndex.get(part.toolCallId)
+          if (idx === undefined) break
+          const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
+          item.result = part.output
+          item.ms = Date.now() - (toolStartAt.get(part.toolCallId) ?? Date.now())
+          emit({ type: 'item-done', streamId, index: idx, item })
+          break
+        }
         case 'error':
           throw part.error
       }
+    }
+
+    // 来源结算（B 路线）：流式结束后扫描回答的 [n] 反查结果池；无 [n] 则无来源区
+    const answer = [...items].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')
+    if (answer && toolCtx.pool.length) {
+      const cited = [...new Set([...answer.text.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])))]
+      const list = toolCtx.pool.filter((s) => cited.includes(s.n))
+      if (list.length) {
+        startItem('sources', { t: 'sources', list })
+        endItem()
+      }
+    }
+    if (limitHit) {
+      startItem('boundary', { t: 'boundary', kind: 'limit' })
+      endItem()
     }
 
     const usage = await result.usage

@@ -79,9 +79,10 @@ function summarizeSearches(items: TurnItem[]): string {
   const lines: string[] = []
   for (const it of items) {
     if (it.t !== 'tool' || it.name !== 'search_knowledge_base') continue
+    const result = it.result as { results?: { file: string }[]; denied?: string } | undefined
+    if (!result || result.denied) continue // 被闸门拒绝的请求不是一次检索
     const query = String((it.args as { query?: unknown }).query ?? '')
-    const hits = (it.result as { hits?: { file: string }[] } | undefined)?.hits ?? []
-    const files = [...new Set(hits.map((h) => h.file))].map((f) => `《${f}》`).join('')
+    const files = [...new Set((result.results ?? []).map((r) => r.file))].map((f) => `《${f}》`).join('')
     lines.push(files ? `本轮检索：「${query}」命中${files}` : `本轮检索：「${query}」未命中`)
   }
   return lines.join('\n')

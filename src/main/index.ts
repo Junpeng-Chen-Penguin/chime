@@ -4,7 +4,15 @@ import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { tmpdir } from 'os'
-import { initDb, getKb, saveProvider, createConversation, getMessages } from './db'
+import {
+  initDb,
+  getKb,
+  saveProvider,
+  createConversation,
+  getMessages,
+  setKbMeta,
+  setConversationKb
+} from './db'
 import { registerIpc } from './ipc'
 
 function createWindow(): BrowserWindow {
@@ -49,6 +57,9 @@ function createWindow(): BrowserWindow {
 // 测试走独立数据目录：不碰真实数据，且单实例锁随数据目录区分——须先于加锁
 if (process.env.CHIME_ENGINE_TEST) {
   app.setPath('userData', join(tmpdir(), 'chime-engine-test'))
+}
+if (process.env.CHIME_TOOL_TEST) {
+  app.setPath('userData', join(tmpdir(), 'chime-tool-test'))
 }
 
 // 单实例：重复启动时退出新实例、聚焦已有窗口（避免 dock 里出现多个）
@@ -100,6 +111,65 @@ app.whenReady().then(() => {
         app.exit(ok ? 0 : 1)
       } catch (e) {
         console.error('[engine-test] ERROR', e)
+        app.exit(1)
+      }
+    })()
+    return
+  }
+
+  // v4 验证钩子：CHIME_TOOL_TEST=<测试库 repo 路径> 时跑检索工具化自检后退出
+  // （隔离目录须预置 models 缓存；验：业务问题走检索出来源、闲聊不检索、闸门第 4 次拒绝）
+  if (process.env.CHIME_TOOL_TEST) {
+    void (async () => {
+      try {
+        initDb()
+        const { runTurn } = await import('./engine/orchestrator')
+        const { makeSearchTool } = await import('./engine/tools')
+        const kb = await import('./kb')
+        const model = process.env.CHIME_ENGINE_MODEL || 'deepseek-chat'
+        saveProvider({
+          apiKey: process.env.CHIME_ENGINE_KEY ?? '',
+          baseUrl: process.env.CHIME_ENGINE_BASE_URL || 'https://api.deepseek.com',
+          defaultModel: model
+        })
+        console.log('[tool-test] build kb')
+        await kb.runIndexJob(null, process.env.CHIME_TOOL_TEST!, true, '计费系统')
+        setKbMeta({ intro: '本库收录计费、退款、发票等业务规则与流程说明' })
+
+        const convId = `tool-test-${Date.now()}`
+        createConversation(convId, model, Date.now())
+        setConversationKb(convId, true)
+        const emit = (e: { type: string }): void => {
+          console.log('[tool-test]', JSON.stringify(e).slice(0, 200))
+        }
+        await runTurn({ streamId: 't1', convId, text: '按天计费是怎么算的？', model, emit })
+        await runTurn({ streamId: 't2', convId, text: '帮我把这句话改通顺：今天天气很好我们去公园玩。', model, emit })
+
+        const rows = getMessages(convId).filter((r) => r.role === 'assistant')
+        const items1 = JSON.parse(rows[0]?.items ?? '[]') as { t: string }[]
+        const items2 = JSON.parse(rows[1]?.items ?? '[]') as { t: string }[]
+        const bizSearched = items1.some((i) => i.t === 'tool')
+        const bizSourced = items1.some((i) => i.t === 'sources')
+        const chatClean = !items2.some((i) => i.t === 'tool')
+
+        // 闸门（工具级计数）：第 4 次检索请求应被拒绝、不执行
+        const ctx = { pool: [], searches: 0 }
+        const st = makeSearchTool(ctx)
+        const call = st.execute as unknown as (
+          i: { query: string },
+          o: unknown
+        ) => Promise<Record<string, unknown>>
+        for (let i = 0; i < 3; i++) await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] })
+        const gate = 'denied' in (await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] }))
+
+        console.log(
+          `[tool-test] 业务问题走检索=${bizSearched} 出来源=${bizSourced} 闲聊不检索=${chatClean} 闸门拒绝=${gate}`
+        )
+        const ok = bizSearched && bizSourced && chatClean && gate
+        console.log(ok ? '[tool-test] OK' : '[tool-test] FAIL')
+        app.exit(ok ? 0 : 1)
+      } catch (e) {
+        console.error('[tool-test] ERROR', e)
         app.exit(1)
       }
     })()

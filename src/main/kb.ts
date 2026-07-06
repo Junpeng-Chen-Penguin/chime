@@ -114,12 +114,13 @@ async function detectChanges(root: string, lastCommit: string | null): Promise<C
 }
 
 // 构建 / 刷新 job。rebuild = 换路径或点「构建」:先清库再全量
-export async function runIndexJob(wc: WebContents, root: string, rebuild: boolean, name?: string): Promise<void> {
+// wc 传 null = 无界面运行（测试 / 评估通道），进度不推送
+export async function runIndexJob(wc: WebContents | null, root: string, rebuild: boolean, name?: string): Promise<void> {
   if (running) return
   running = true
   const send = (p: KbProgress): void => {
     if (process.env.CHIME_KB_TEST) console.log('[kb]', JSON.stringify(p))
-    if (!wc.isDestroyed()) wc.send('kb:progress', p)
+    if (wc && !wc.isDestroyed()) wc.send('kb:progress', p)
   }
   try {
     const invalid = await validateRepoPath(root)
