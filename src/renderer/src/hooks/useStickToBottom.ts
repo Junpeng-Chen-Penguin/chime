@@ -50,5 +50,20 @@ export function useStickToBottom(
     if (following.current) el.scrollTop = el.scrollHeight
   }, [messages, resetKey])
 
+  // 跟随时逐帧对齐底部：流式出字（rAF 节奏）与滚动同帧同步，内容长高不再先跳后补
+  useLayoutEffect(() => {
+    let raf = 0
+    const tick = (): void => {
+      const el = scrollRef.current
+      if (el && following.current) {
+        const target = el.scrollHeight - el.clientHeight
+        if (target - el.scrollTop > 1) el.scrollTop = target
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
   return { scrollRef, onScroll, showJump, scrollToBottom }
 }

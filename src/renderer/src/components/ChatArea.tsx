@@ -7,7 +7,8 @@ import {
   ArrowDown,
   Copy,
   Check,
-  Info
+  Info,
+  Sparkles
 } from 'lucide-react'
 import { cn, stripCitations } from '@/lib/utils'
 import type { Msg } from '@/hooks/useChat'
@@ -242,14 +243,21 @@ const PROGRESS_WORDS = ['梳理中', '翻查中', '琢磨中', '核对中', '斟
 
 function ProgressIndicator(): React.JSX.Element {
   const [idx, setIdx] = useState(() => Math.floor(Math.random() * PROGRESS_WORDS.length))
+  const [secs, setSecs] = useState(0)
   useEffect(() => {
-    const timer = setInterval(() => setIdx((i) => (i + 1) % PROGRESS_WORDS.length), 3000)
+    const timer = setInterval(() => {
+      setSecs((s) => {
+        if (s % 3 === 2) setIdx((i) => (i + 1) % PROGRESS_WORDS.length)
+        return s + 1
+      })
+    }, 1000)
     return () => clearInterval(timer)
   }, [])
   return (
-    <div className="mt-6 flex items-center gap-2.5 text-[14px] text-muted-foreground">
-      <span className="size-[9px] flex-none animate-pulse rounded-full border-[1.5px] border-primary" />
-      <span>{PROGRESS_WORDS[idx]}…</span>
+    <div className="mt-6 flex items-center gap-2.5 text-[14px]">
+      <span className="size-[15px] flex-none animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      <span className="font-medium text-foreground/80">{PROGRESS_WORDS[idx]}…</span>
+      {secs > 0 && <span className="text-[12.5px] text-muted-foreground">{secs}s</span>}
     </div>
   )
 }
@@ -372,12 +380,17 @@ function NoticeRow({ text }: { text: string }): React.JSX.Element {
   )
 }
 
-// 思考：步骤行常显，内容默认折叠、点击展开
+// 思考：星形图标起头（与过程圆点区分），步骤行常显，内容默认折叠、点击展开
 function ThinkRow({ text, running }: { text: string; running: boolean }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   return (
     <div className="flex gap-2.5">
-      <Dot tone={running ? 'running' : 'neutral'} />
+      <Sparkles
+        className={cn(
+          'mt-[5px] size-[14px] flex-none',
+          running ? 'animate-pulse text-primary' : 'text-muted-foreground/70'
+        )}
+      />
       <div className="min-w-0 flex-1">
         <button
           onClick={() => setOpen((o) => !o)}
@@ -452,16 +465,14 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
   )
 }
 
-// 最终回答：圆点起头 + Markdown 流式；正文隐去 [n] 角标（引用关系保留，供来源清单与侧板）
+// 最终回答：正文直接起排、不带行首标记（回答是交付主体，与带标记的过程行分层，
+// 也避免与正文里的无序列表圆点混淆）；隐去 [n] 角标（引用关系保留，供来源清单与侧板）
 function AnswerRow({ text, streaming }: { text: string; streaming: boolean }): React.JSX.Element {
   const displayRaw = useMemo(() => stripCitations(text, streaming), [text, streaming])
   const content = useSmoothText(displayRaw, streaming)
   return (
-    <div className="flex gap-2.5">
-      <Dot />
-      <div className="min-w-0 flex-1">
-        <Markdown text={content} streaming={streaming} />
-      </div>
+    <div className="pt-1">
+      <Markdown text={content} streaming={streaming} />
     </div>
   )
 }
@@ -487,7 +498,7 @@ function SourcesFooter({
     return [...byFile.values()]
   }, [list])
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-1 mt-1 ml-[17px] border-t border-border pt-2.5 duration-500">
+    <div className="animate-in fade-in slide-in-from-bottom-1 mt-1 border-t border-border pt-2.5 duration-500">
       <div className="mb-1 text-[12px] font-medium text-muted-foreground">来源</div>
       <div className="flex flex-col">
         {articles.map((a) => (
