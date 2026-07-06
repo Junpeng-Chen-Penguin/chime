@@ -406,8 +406,9 @@ function ThinkRow({ text, running }: { text: string; running: boolean }): React.
         <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
       </button>
       {open && (
-        <div className={cn('mt-1.5 ml-[6px] border-l-2 border-border pl-3 whitespace-pre-wrap', PROCESS_ROW)}>
-          {text}
+        // 方框归属块（参照来源框），缩进到标签之下体现父子层级
+        <div className="mt-1.5 ml-6 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+          <div className={cn('whitespace-pre-wrap', PROCESS_ROW)}>{text}</div>
         </div>
       )}
     </div>
@@ -467,9 +468,13 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
           )}
         </button>
         {open && (
-          <div className="mt-1 ml-[7px] flex flex-col gap-0.5 border-l-2 border-border pl-3">
+          // 「-」无序列表，缩进到结果行文字之下体现父子；不用竖线
+          <div className="mt-1 ml-5 flex flex-col gap-0.5">
             {detail.map((d, i) => (
-              <div key={i}>{d}</div>
+              <div key={i} className="flex gap-1.5">
+                <span className="flex-none text-muted-foreground/50">-</span>
+                <span className="min-w-0">{d}</span>
+              </div>
             ))}
           </div>
         )}
