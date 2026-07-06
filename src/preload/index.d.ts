@@ -33,9 +33,10 @@ export type DocOpenResult =
 export interface SearchToolResult {
   results?: { n: number; file: string; heading: string; content: string }[]
   truncated?: string
-  error?: string
-  denied?: string
-  notice?: string
+  error?: string // 真故障：显示为红色「检索出错」
+  denied?: string // 触检索上限
+  notice?: string // 知识库暂时不可用
+  invalid?: string // 模型发了空检索词、被拦下自愈：非错误，中性显示
 }
 
 // 一轮的有序过程记录的元素（与主进程 engine/store 的 TurnItem 一致）

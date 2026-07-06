@@ -15,7 +15,6 @@ import { cn, stripCitations } from '@/lib/utils'
 import type { Msg } from '@/hooks/useChat'
 import type { SourceRef, TurnItem, SearchToolResult } from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
-import { useSmoothText } from '@/hooks/useSmoothText'
 import { Markdown } from './Markdown'
 import Composer, { type KbState } from './Composer'
 
@@ -117,8 +116,6 @@ export default function ChatArea({
                   )
                 )}
               </div>
-              {/* 整轮进度指示：从提交到整轮结束常驻，完成即消失 */}
-              {sending && <ProgressIndicator />}
             </div>
           )}
         </div>
@@ -255,7 +252,7 @@ function ProgressIndicator(): React.JSX.Element {
     return () => clearInterval(timer)
   }, [])
   return (
-    <div className="mt-6 flex items-center gap-2.5 text-[14px]">
+    <div className="mt-1 flex items-center gap-2.5 text-[14px]">
       <span className="size-[15px] flex-none animate-spin rounded-full border-2 border-primary border-t-transparent" />
       <span className="text-shimmer font-medium">{PROGRESS_WORDS[idx]}…</span>
       {secs > 0 && <span className="text-[12.5px] text-muted-foreground">{secs}s</span>}
@@ -321,6 +318,8 @@ function AssistantMsg({
             return null // sources 在回答之后统一渲染
         }
       })}
+      {/* 整轮进度指示：挂在当前助手消息末尾，紧随已有内容——无内容时就贴着用户消息，不留空隙 */}
+      {streaming && <ProgressIndicator />}
       {m.status === 'stopped' && <PlainRow text="已停止" />}
       {!streaming && sources && sources.list.length > 0 && (
         <SourcesFooter list={sources.list} onOpen={onOpenSource} />
@@ -419,7 +418,7 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
   const [open, setOpen] = useState(false)
   const r: SearchToolResult | undefined = item.result as SearchToolResult | undefined
   const running = r === undefined
-  const failed = !!r?.error
+  const failed = !!r?.error // 仅真故障算失败态（标红）；invalid 自愈不算
   const summary = running
     ? '检索中…'
     : r.results
@@ -428,7 +427,9 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
         ? '已达检索上限'
         : r.notice
           ? '知识库更新中'
-          : '检索出错'
+          : r.invalid
+            ? '未提供检索词'
+            : '检索出错'
   const detail = r?.results?.length
     ? [...new Set(r.results.map((x) => `${x.file.replace(/\.md$/, '')}${x.heading ? ' › ' + x.heading : ''}`))]
     : r?.error
@@ -457,8 +458,9 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
             detail.length && 'transition-colors hover:bg-muted'
           )}
         >
-          <span className="text-muted-foreground/50">⎿</span>
-          <span>{summary}</span>
+          <span className={cn('text-muted-foreground/50', failed && 'text-destructive/60')}>⎿</span>
+          {/* 真故障标红，对齐 Claude Code 工具失败的视觉 */}
+          <span className={cn(failed && 'font-medium text-destructive')}>{summary}</span>
           {detail.length > 0 && (
             <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
           )}
@@ -476,13 +478,13 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
 }
 
 // 最终回答：正文直接起排、不带行首标记（回答是交付主体，与带标记的过程行分层，
-// 也避免与正文里的无序列表圆点混淆）；隐去 [n] 角标（引用关系保留，供来源清单与侧板）
+// 也避免与正文里的无序列表圆点混淆）；隐去 [n] 角标（引用关系保留，供来源清单与侧板）。
+// token 到达即渲染，不做逐字平滑——平滑的帧节奏与贴底节奏不同步，是滚动抖动的根源。
 function AnswerRow({ text, streaming }: { text: string; streaming: boolean }): React.JSX.Element {
-  const displayRaw = useMemo(() => stripCitations(text, streaming), [text, streaming])
-  const content = useSmoothText(displayRaw, streaming)
+  const content = useMemo(() => stripCitations(text, streaming), [text, streaming])
   return (
     <div className="pt-1">
-      <Markdown text={content} streaming={streaming} />
+      <Markdown text={content} />
     </div>
   )
 }
@@ -510,18 +512,18 @@ function SourcesFooter({
   return (
     <div className="animate-in fade-in slide-in-from-bottom-1 mt-2 duration-500">
       <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">来源</div>
-      {/* 卡片式来源块：文档图标 + 文章名，圆角描边、悬停微亮，与设置页卡片同套视觉语言 */}
-      <div className="flex flex-wrap gap-2">
+      {/* 带框的一列来源：每条显示完整相对路径，整行可点、悬停高亮；超宽尾部省略、悬停看全路径 */}
+      <div className="overflow-hidden rounded-lg border border-border bg-muted/30">
         {articles.map((a) => (
           <button
             key={a.file}
             onClick={() => onOpen(a.file, a.sources)}
-            title="点击查看原文"
-            className="group flex max-w-[280px] items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-left transition-colors hover:border-border hover:bg-muted"
+            title={a.file}
+            className="group flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted"
           >
             <FileText className="size-3.5 flex-none text-muted-foreground" />
-            <span className="truncate text-[12.5px] text-foreground/80 group-hover:text-foreground">
-              {a.file.replace(/\.md$/, '').split('/').pop()}
+            <span className="truncate text-[12.5px] text-foreground/75 group-hover:text-foreground">
+              {a.file.replace(/\.md$/, '')}
             </span>
           </button>
         ))}
