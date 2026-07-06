@@ -132,7 +132,7 @@ export default function SidePanel({ doc, onClose }: Props): React.JSX.Element {
   const name = doc.file.split('/').pop()!.replace(/\.md$/, '')
 
   return (
-    <div className="animate-in slide-in-from-right-4 flex h-full flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.05] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.07)] duration-300 min-w-[380px]">
+    <div className="animate-in slide-in-from-right-4 flex h-full flex-1 flex-col overflow-hidden rounded-[12px] border border-border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.07)] duration-300 min-w-[380px]">
       <header className="flex h-[44px] flex-none items-center gap-2.5 border-b border-border px-4">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] leading-tight font-semibold">{name}</div>

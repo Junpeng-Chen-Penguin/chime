@@ -76,7 +76,7 @@ export default function ChatArea({
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
 
   return (
-    <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.05] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.07)]">
+    <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.07)]">
       <header
         className={cn(
           'app-drag flex h-[44px] flex-none items-center gap-1',
@@ -456,7 +456,7 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
         <button
           onClick={() => detail.length && setOpen((o) => !o)}
           className={cn(
-            '-ml-1 flex items-center gap-1 rounded-md px-1 py-0.5',
+            '-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5',
             detail.length && 'transition-colors hover:bg-muted'
           )}
         >
