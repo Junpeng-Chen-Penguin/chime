@@ -6,6 +6,7 @@ export interface ProviderRow {
   apiKey: string
   baseUrl: string
   defaultModel: string
+  defaultWindow: number
 }
 
 let db: Database.Database
@@ -13,6 +14,11 @@ let db: Database.Database
 export function initDb(): void {
   db = new Database(join(app.getPath('userData'), 'chime.db'))
   db.pragma('journal_mode = WAL')
+  // 换库：检测到旧结构（message 无 items 列）即清掉会话数据重建——老会话不迁移（PRD Case 1）
+  const msgCols = db.prepare('PRAGMA table_info(message)').all() as { name: string }[]
+  if (msgCols.length && !msgCols.some((c) => c.name === 'items')) {
+    db.exec('DROP TABLE IF EXISTS message; DROP TABLE IF EXISTS conversation;')
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS provider (
       id            INTEGER PRIMARY KEY CHECK (id = 1),
@@ -26,6 +32,8 @@ export function initDb(): void {
       id         TEXT PRIMARY KEY,
       title      TEXT NOT NULL DEFAULT '新对话',
       model      TEXT NOT NULL DEFAULT '',
+      kb_enabled INTEGER NOT NULL DEFAULT 0,
+      title_auto INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -35,7 +43,7 @@ export function initDb(): void {
       conversation_id TEXT NOT NULL,
       role            TEXT NOT NULL,
       content         TEXT NOT NULL DEFAULT '',
-      reasoning       TEXT,
+      items           TEXT,
       status          TEXT NOT NULL DEFAULT 'done',
       created_at      INTEGER NOT NULL
     );
@@ -68,36 +76,29 @@ export function initDb(): void {
 
     CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(seg_text);
   `)
-  // 迁移：标题是否仍为“自动生成”（被手动改名后置 0，不再自动覆盖）
-  try {
-    db.exec('ALTER TABLE conversation ADD COLUMN title_auto INTEGER NOT NULL DEFAULT 1')
-  } catch {
-    // 列已存在
-  }
-  // 迁移：会话是否挂知识库（首条消息时定，不可改）
-  try {
-    db.exec('ALTER TABLE conversation ADD COLUMN kb_enabled INTEGER NOT NULL DEFAULT 0')
-  } catch {
-    // 列已存在
-  }
-  // 迁移：知识库回答的来源清单（JSON，重启后来源区不丢）
-  try {
-    db.exec('ALTER TABLE message ADD COLUMN sources TEXT')
-  } catch {
-    // 列已存在
-  }
   // 迁移：知识库名称（录入时可自定义）
   try {
     db.exec("ALTER TABLE kb ADD COLUMN name TEXT NOT NULL DEFAULT '业务知识库'")
   } catch {
     // 列已存在
   }
+  // 迁移：默认上下文窗口（OpenAI 兼容接口无法自动检测窗口大小，设置页可改）
+  try {
+    db.exec('ALTER TABLE provider ADD COLUMN default_window INTEGER NOT NULL DEFAULT 65536')
+  } catch {
+    // 列已存在
+  }
+}
+
+// engine/store 是消息的唯一写者，经此拿库连接
+export function getDb(): Database.Database {
+  return db
 }
 
 export function getProvider(): ProviderRow {
   return db
     .prepare(
-      'SELECT api_key AS apiKey, base_url AS baseUrl, default_model AS defaultModel FROM provider WHERE id = 1'
+      'SELECT api_key AS apiKey, base_url AS baseUrl, default_model AS defaultModel, default_window AS defaultWindow FROM provider WHERE id = 1'
     )
     .get() as ProviderRow
 }
@@ -137,10 +138,9 @@ export interface MessageRow {
   conversationId: string
   role: string
   content: string
-  reasoning: string | null
+  items: string | null // 一轮的有序过程记录（JSON），仅 assistant 行有
   status: string
   createdAt: number
-  sources?: string | null // JSON 序列化的来源清单
 }
 
 export function listConversations(): ConversationRow[] {
@@ -166,7 +166,7 @@ export function deleteConversation(id: string): void {
 export function getMessages(conversationId: string): MessageRow[] {
   return db
     .prepare(
-      'SELECT id, conversation_id AS conversationId, role, content, reasoning, status, created_at AS createdAt, sources FROM message WHERE conversation_id = ? ORDER BY created_at'
+      'SELECT id, conversation_id AS conversationId, role, content, items, status, created_at AS createdAt FROM message WHERE conversation_id = ? ORDER BY created_at'
     )
     .all(conversationId) as MessageRow[]
 }
@@ -184,22 +184,6 @@ export function setConversationTitle(id: string, title: string, auto: boolean): 
     auto ? 1 : 0,
     id
   )
-}
-
-export function saveMessage(m: MessageRow, now: number): void {
-  db.prepare(
-    `INSERT INTO message (id, conversation_id, role, content, reasoning, status, created_at, sources)
-     VALUES (@id, @conversationId, @role, @content, @reasoning, @status, @createdAt, @sources)
-     ON CONFLICT(id) DO UPDATE SET content = @content, reasoning = @reasoning, status = @status, sources = @sources`
-  ).run({ ...m, reasoning: m.reasoning ?? null, sources: m.sources ?? null })
-  db.prepare('UPDATE conversation SET updated_at = ? WHERE id = ?').run(now, m.conversationId)
-  // 首条用户消息自动作为标题
-  if (m.role === 'user') {
-    db.prepare("UPDATE conversation SET title = ? WHERE id = ? AND title = '新对话'").run(
-      m.content.slice(0, 18) || '新对话',
-      m.conversationId
-    )
-  }
 }
 
 // ── 知识库 ──────────────────────────────────────────

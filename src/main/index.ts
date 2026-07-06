@@ -3,7 +3,8 @@ import { join, dirname, resolve } from 'path'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { initDb, getKb } from './db'
+import { tmpdir } from 'os'
+import { initDb, getKb, saveProvider, createConversation, getMessages } from './db'
 import { registerIpc } from './ipc'
 
 function createWindow(): BrowserWindow {
@@ -45,6 +46,11 @@ function createWindow(): BrowserWindow {
   return mainWindow
 }
 
+// 测试走独立数据目录：不碰真实数据，且单实例锁随数据目录区分——须先于加锁
+if (process.env.CHIME_ENGINE_TEST) {
+  app.setPath('userData', join(tmpdir(), 'chime-engine-test'))
+}
+
 // 单实例：重复启动时退出新实例、聚焦已有窗口（避免 dock 里出现多个）
 if (!app.requestSingleInstanceLock()) {
   app.exit(0)
@@ -59,6 +65,47 @@ protocol.registerSchemesAsPrivileged([
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  // v4 验证钩子：CHIME_ENGINE_TEST=1 时跑引擎主链自检（两轮无库对话，验流式事件、落库、历史组装）后退出
+  if (process.env.CHIME_ENGINE_TEST) {
+    void (async () => {
+      try {
+        initDb()
+        const { runTurn } = await import('./engine/orchestrator')
+        const model = process.env.CHIME_ENGINE_MODEL || 'deepseek-chat'
+        // 隔离目录的库是空的，模型服务配置经环境变量注入
+        saveProvider({
+          apiKey: process.env.CHIME_ENGINE_KEY ?? '',
+          baseUrl: process.env.CHIME_ENGINE_BASE_URL || 'https://api.deepseek.com',
+          defaultModel: model
+        })
+        const convId = `engine-test-${Date.now()}`
+        createConversation(convId, model, Date.now())
+        const events: string[] = []
+        const emit = (e: { type: string }): void => {
+          events.push(e.type)
+          console.log('[engine-test]', JSON.stringify(e).slice(0, 160))
+        }
+        await runTurn({ streamId: 't1', convId, text: '用一句话介绍你自己', model, emit })
+        await runTurn({ streamId: 't2', convId, text: '把刚才的介绍精简到十个字以内', model, emit })
+        const rows = getMessages(convId)
+        const assistants = rows.filter((r) => r.role === 'assistant')
+        const ok =
+          rows.length === 4 &&
+          assistants.length === 2 &&
+          assistants.every(
+            (r) => r.status === 'done' && r.content.trim() && Array.isArray(JSON.parse(r.items ?? ''))
+          ) &&
+          events.filter((t) => t === 'turn-done').length === 2
+        console.log(ok ? '[engine-test] OK' : `[engine-test] FAIL rows=${rows.length}`)
+        app.exit(ok ? 0 : 1)
+      } catch (e) {
+        console.error('[engine-test] ERROR', e)
+        app.exit(1)
+      }
+    })()
+    return
+  }
+
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 

@@ -5,7 +5,8 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()]
+    // ai 与其 provider 为 ESM-only，CJS 主进程 require 不了，排除外部化让构建器打进产物
+    plugins: [externalizeDepsPlugin({ exclude: ['ai', '@ai-sdk/openai-compatible'] })]
   },
   preload: {
     plugins: [externalizeDepsPlugin()]

@@ -9,10 +9,8 @@ import {
   createConversation,
   deleteConversation,
   getMessages,
-  saveMessage,
   getConversationMeta,
-  setConversationTitle,
-  type MessageRow
+  setConversationTitle
 } from './db'
 import { detect, listModels, generateTitle } from './ai'
 import { startChat, stopChat, type SendPayload } from './chat'
@@ -74,7 +72,6 @@ export function registerIpc(): void {
     setConversationTitle(input.id, input.title, false)
   )
   ipcMain.handle('conv:messages', (_e, id: string) => getMessages(id))
-  ipcMain.handle('msg:save', (_e, m: MessageRow) => saveMessage(m, Date.now()))
 
   // 知识库
   ipcMain.handle('kb:get', () => {
