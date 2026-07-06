@@ -136,7 +136,7 @@ export default function SidePanel({ doc, onClose }: Props): React.JSX.Element {
       <header className="flex h-[44px] flex-none items-center gap-2.5 border-b border-border px-4">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[14px] leading-tight font-semibold">{name}</div>
-          <div className="truncate text-[11.5px] text-muted-foreground">{doc.file}</div>
+          <div className="truncate text-[11px] text-muted-foreground">{doc.file}</div>
         </div>
         <button
           onClick={onClose}
@@ -240,7 +240,7 @@ function PanelEmpty({ error }: { error: NonNullable<DocPanelData['error']> }): R
         <Icon className={error === 'busy' ? 'size-5 animate-spin text-muted-foreground' : 'size-5 text-muted-foreground'} />
       </div>
       <div className="text-[14px] font-semibold">{title}</div>
-      <div className="max-w-[300px] text-[12.5px] leading-[1.7] text-muted-foreground">{desc}</div>
+      <div className="max-w-[300px] text-[12px] leading-[1.7] text-muted-foreground">{desc}</div>
     </div>
   )
 }

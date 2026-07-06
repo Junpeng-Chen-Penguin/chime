@@ -89,7 +89,7 @@ export default function Composer({
             {/* 左下：知识库控件（未选=图标，点击弹选择器 / 已选=浅蓝胶囊 / 定性后胶囊无 × / 不可用置灰） */}
             {kbSelected ? (
               <span
-                className="group flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-foreground/75 transition-colors hover:bg-muted"
+                className="group flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
                 title={kbLocked ? '本会话基于该知识库回答' : '已选用知识库'}
               >
                 <BookOpen className="size-3.5 text-muted-foreground" />
@@ -114,10 +114,10 @@ export default function Composer({
                     'grid size-8 place-items-center rounded-lg transition-colors',
                     kbState === 'ready' && !kbLocked
                       ? 'cursor-pointer text-muted-foreground hover:bg-muted'
-                      : 'cursor-not-allowed text-muted-foreground/35'
+                      : 'cursor-not-allowed text-muted-foreground/50'
                   )}
                 >
-                  <BookOpen className="size-[17px]" />
+                  <BookOpen className="size-4" />
                 </button>
                 {kbMenuOpen && (
                   <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
@@ -146,7 +146,7 @@ export default function Composer({
                 <button
                   onClick={() => setMenuOpen((v) => !v)}
                   onBlur={() => setTimeout(() => setMenuOpen(false), 120)}
-                  className="flex items-center gap-1 rounded-md px-2 py-1 text-[13px] text-foreground/75 transition-colors hover:bg-muted"
+                  className="flex items-center gap-1 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
                 >
                   {model}
                   <ChevronDown className="size-3 text-muted-foreground" />

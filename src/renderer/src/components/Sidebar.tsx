@@ -38,7 +38,7 @@ export default function Sidebar({
           onClick={onNewChat}
           className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[15px] text-foreground transition-colors hover:bg-black/[0.05]"
         >
-          <CirclePlus className="size-[18px] text-foreground/70" />
+          <CirclePlus className="size-[18px] text-muted-foreground" />
           新建对话
         </button>
 
@@ -68,7 +68,7 @@ export default function Sidebar({
                 title="删除会话"
                 className="grid size-6 flex-none place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/[0.08] hover:text-foreground"
               >
-                <Trash2 className="size-[15px]" />
+                <Trash2 className="size-4" />
               </button>
             </div>
           )
@@ -78,7 +78,7 @@ export default function Sidebar({
       <div className="flex-none border-t border-black/[0.06] p-2.5">
         <button
           onClick={onOpenSettings}
-          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[15px] text-foreground/80 transition-colors hover:bg-black/[0.05]"
+          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[15px] text-muted-foreground transition-colors hover:bg-black/[0.05]"
         >
           <Settings className="size-[18px] text-muted-foreground" />
           设置

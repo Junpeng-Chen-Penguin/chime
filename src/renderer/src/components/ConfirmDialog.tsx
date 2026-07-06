@@ -39,8 +39,8 @@ export default function ConfirmDialog({
         onClick={(e) => e.stopPropagation()}
         className="w-[380px] rounded-2xl bg-background p-5 shadow-2xl"
       >
-        <div className="mb-2 text-[15.5px] font-semibold">{title}</div>
-        <div className="mb-5 text-[13.5px] leading-[1.6] text-muted-foreground">{body}</div>
+        <div className="mb-2 text-[15px] font-semibold">{title}</div>
+        <div className="mb-5 text-[13px] leading-[1.6] text-muted-foreground">{body}</div>
         <div className="flex justify-end gap-2.5">
           <Button variant="outline" onClick={onCancel} className="h-9">
             取消

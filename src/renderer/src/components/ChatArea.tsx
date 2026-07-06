@@ -134,12 +134,12 @@ export default function ChatArea({
       {(overLimit || contextRatio > 0.7) && (
         <div className="mx-auto w-full max-w-[800px] px-8 pb-1">
           {overLimit ? (
-            <div className="text-[12.5px] text-destructive">
+            <div className="text-[12px] text-destructive">
               消息过长，请精简或拆分（当前 {input.length.toLocaleString()} 字，上限{' '}
               {SEND_CHAR_LIMIT.toLocaleString()} 字）
             </div>
           ) : (
-            <div className="text-[12.5px] text-muted-foreground">对话较长，建议新开会话</div>
+            <div className="text-[12px] text-muted-foreground">对话较长，建议新开会话</div>
           )}
         </div>
       )}
@@ -253,9 +253,9 @@ function ProgressIndicator(): React.JSX.Element {
   }, [])
   return (
     <div className="mt-1 flex items-center gap-2.5 text-[14px]">
-      <span className="size-[15px] flex-none animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      <span className="size-4 flex-none animate-spin rounded-full border-2 border-primary border-t-transparent" />
       <span className="text-shimmer font-medium">{PROGRESS_WORDS[idx]}…</span>
-      {secs > 0 && <span className="text-[12.5px] text-muted-foreground">{secs}s</span>}
+      {secs > 0 && <span className="text-[12px] text-muted-foreground">{secs}s</span>}
     </div>
   )
 }
@@ -398,8 +398,8 @@ function ThinkRow({ text, running }: { text: string; running: boolean }): React.
       >
         <Sparkles
           className={cn(
-            'size-[13px] flex-none',
-            running ? 'animate-pulse text-primary' : 'text-muted-foreground/70'
+            'size-3.5 flex-none',
+            running ? 'animate-pulse text-primary' : 'text-muted-foreground/50'
           )}
         />
         <span>{running ? '思考中' : '思考'}</span>
@@ -448,7 +448,7 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
         {/* 调用行：检索词用等宽字体，读作「一次机器动作」——与文字叙述区分，但字号一致 */}
         <div>
           检索(
-          <span className="font-mono text-[13px] text-foreground/75">
+          <span className="font-mono text-[13px] text-muted-foreground">
             &quot;{item.args.query ?? ''}&quot;
           </span>
           )
@@ -528,7 +528,7 @@ function SourcesFooter({
             className="group flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted"
           >
             <FileText className="size-3.5 flex-none text-muted-foreground" />
-            <span className="truncate text-[12.5px] text-foreground/75 group-hover:text-foreground">
+            <span className="truncate text-[12px] text-muted-foreground group-hover:text-foreground">
               {a.file.replace(/\.md$/, '')}
             </span>
           </button>
@@ -604,7 +604,7 @@ function ErrorCard({
       )}
     >
       <AlertCircle className="size-[18px] flex-none text-destructive" />
-      <span className="flex-1 text-[13.5px] text-foreground">{text}</span>
+      <span className="flex-1 text-[13px] text-foreground">{text}</span>
       {onRetry && (
         <button
           onClick={onRetry}
