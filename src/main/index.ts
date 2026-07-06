@@ -265,13 +265,16 @@ app.whenReady().then(() => {
           i: { query: string },
           o: unknown
         ) => Promise<Record<string, unknown>>
+        // 空检索词自愈：不执行、不耗次数、回自纠说明
+        const blank = await call({ query: '  ' }, { toolCallId: 'g', messages: [] })
+        const blankHealed = 'invalid' in blank && ctx.searches === 0
         for (let i = 0; i < 3; i++) await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] })
         const gate = 'denied' in (await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] }))
 
         console.log(
-          `[tool-test] 业务问题走检索=${bizSearched} 出来源=${bizSourced} 闲聊不检索=${chatClean} 追问重查带来源=${followupSearched} 工具中停止留痕=${stopKept} 闸门拒绝=${gate}`
+          `[tool-test] 业务问题走检索=${bizSearched} 出来源=${bizSourced} 闲聊不检索=${chatClean} 追问重查带来源=${followupSearched} 工具中停止留痕=${stopKept} 空检索词自愈=${blankHealed} 闸门拒绝=${gate}`
         )
-        const ok = bizSearched && bizSourced && chatClean && followupSearched && stopKept && gate
+        const ok = bizSearched && bizSourced && chatClean && followupSearched && stopKept && blankHealed && gate
         console.log(ok ? '[tool-test] OK' : '[tool-test] FAIL')
         app.exit(ok ? 0 : 1)
       } catch (e) {

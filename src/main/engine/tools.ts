@@ -28,6 +28,10 @@ export function makeSearchTool(ctx: TurnToolContext) {
       required: ['query']
     }),
     execute: async ({ query }) => {
+      // 入参校验：模型偶发空参数调用，空检索词不进链路、不耗次数，回一条它能自我纠正的说明
+      if (typeof query !== 'string' || !query.trim()) {
+        return { invalid: '缺少检索词：请把要查的内容写成自包含的检索短语，通过 query 参数重新调用' }
+      }
       if (ctx.searches >= SEARCH_LIMIT_PER_TURN) {
         return { denied: '已达检索上限，请基于已有结果作答' }
       }
