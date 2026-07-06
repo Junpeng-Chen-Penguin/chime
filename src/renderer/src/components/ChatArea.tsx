@@ -8,7 +8,8 @@ import {
   Copy,
   Check,
   Info,
-  Sparkles
+  Sparkles,
+  FileText
 } from 'lucide-react'
 import { cn, stripCitations } from '@/lib/utils'
 import type { Msg } from '@/hooks/useChat'
@@ -71,7 +72,7 @@ export default function ChatArea({
   onOpenSource
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
-  const { scrollRef, onScroll, onWheel, showJump, scrollToBottom } = useStickToBottom(messages, convId)
+  const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
   const overLimit = input.length > SEND_CHAR_LIMIT
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
 
@@ -96,7 +97,7 @@ export default function ChatArea({
       </header>
 
       <div className="relative flex-1 overflow-hidden">
-        <div ref={scrollRef} onScroll={onScroll} onWheel={onWheel} className="h-full overflow-y-auto">
+        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
           {empty ? (
             <EmptyState />
           ) : (
@@ -507,18 +508,21 @@ function SourcesFooter({
     return [...byFile.values()]
   }, [list])
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-1 mt-1 border-t border-border pt-2.5 duration-500">
-      <div className="mb-1 text-[12px] font-medium text-muted-foreground">来源</div>
-      <div className="flex flex-col">
+    <div className="animate-in fade-in slide-in-from-bottom-1 mt-2 duration-500">
+      <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">来源</div>
+      {/* 卡片式来源块：文档图标 + 文章名，圆角描边、悬停微亮，与设置页卡片同套视觉语言 */}
+      <div className="flex flex-wrap gap-2">
         {articles.map((a) => (
           <button
             key={a.file}
             onClick={() => onOpen(a.file, a.sources)}
             title="点击查看原文"
-            className="flex items-center gap-2 py-0.5 text-left text-[12.5px] leading-[1.8] text-primary hover:underline"
+            className="group flex max-w-[280px] items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-left transition-colors hover:border-border hover:bg-muted"
           >
-            <span className="size-[5px] flex-none rounded-full bg-primary/50" />
-            <span className="truncate">{a.file.replace(/\.md$/, '')}</span>
+            <FileText className="size-3.5 flex-none text-muted-foreground" />
+            <span className="truncate text-[12.5px] text-foreground/80 group-hover:text-foreground">
+              {a.file.replace(/\.md$/, '').split('/').pop()}
+            </span>
           </button>
         ))}
       </div>
