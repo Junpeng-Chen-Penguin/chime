@@ -71,7 +71,7 @@ export default function ChatArea({
   onOpenSource
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
-  const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
+  const { scrollRef, onScroll, onWheel, showJump, scrollToBottom } = useStickToBottom(messages, convId)
   const overLimit = input.length > SEND_CHAR_LIMIT
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
 
@@ -96,7 +96,7 @@ export default function ChatArea({
       </header>
 
       <div className="relative flex-1 overflow-hidden">
-        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
+        <div ref={scrollRef} onScroll={onScroll} onWheel={onWheel} className="h-full overflow-y-auto">
           {empty ? (
             <EmptyState />
           ) : (
@@ -297,7 +297,7 @@ function AssistantMsg({
   }
 
   return (
-    <div className="flex flex-col gap-2.5 text-[16px] text-foreground select-text">
+    <div className="flex flex-col gap-2 text-foreground select-text">
       {m.notice && <NoticeRow text={m.notice} />}
       {items.map((it, i) => {
         if ((it.t === 'text' || it.t === 'reasoning') && !it.text.trim()) return null
@@ -337,12 +337,15 @@ function AssistantMsg({
   )
 }
 
-// 元素行首的圆点。tone：单步状态点三态 + 中性缺省
+// 过程层统一尺度：14px、弱化色；类型区分只靠行首标记，不靠字号变化
+const PROCESS_ROW = 'text-[14px] leading-[1.7] text-muted-foreground'
+
+// 元素行首的圆点。tone：单步状态点三态 + 中性缺省（对齐 14px 首行光学中心）
 function Dot({ tone = 'neutral' }: { tone?: 'neutral' | 'running' | 'error' }): React.JSX.Element {
   return (
     <span
       className={cn(
-        'mt-[9px] size-[7px] flex-none rounded-full',
+        'mt-[8px] size-[6px] flex-none rounded-full',
         tone === 'running' && 'animate-pulse bg-primary',
         tone === 'neutral' && 'bg-foreground/25',
         tone === 'error' && 'bg-destructive'
@@ -356,7 +359,7 @@ function IntentRow({ text }: { text: string }): React.JSX.Element {
   return (
     <div className="flex gap-2.5">
       <Dot />
-      <div className="min-w-0 flex-1 leading-[1.7] text-muted-foreground">{text}</div>
+      <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>{text}</div>
     </div>
   )
 }
@@ -366,7 +369,7 @@ function PlainRow({ text }: { text: string }): React.JSX.Element {
   return (
     <div className="flex gap-2.5">
       <Dot />
-      <div className="min-w-0 flex-1 leading-[1.7] text-muted-foreground">{text}</div>
+      <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>{text}</div>
     </div>
   )
 }
@@ -387,22 +390,23 @@ function ThinkRow({ text, running }: { text: string; running: boolean }): React.
     <div className="flex gap-2.5">
       <Sparkles
         className={cn(
-          'mt-[5px] size-[14px] flex-none',
+          'mt-[4px] size-[13px] flex-none',
           running ? 'animate-pulse text-primary' : 'text-muted-foreground/70'
         )}
       />
       <div className="min-w-0 flex-1">
         <button
           onClick={() => setOpen((o) => !o)}
-          className="-ml-1 flex items-center gap-1 rounded-md px-1 py-0.5 text-[14px] text-muted-foreground transition-colors hover:bg-muted"
+          className={cn(
+            '-ml-1 flex items-center gap-1 rounded-md px-1 py-0.5 transition-colors hover:bg-muted',
+            PROCESS_ROW
+          )}
         >
           <span>{running ? '思考中' : '思考'}</span>
           <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
         </button>
         {open && (
-          <div className="mt-1 text-[13.5px] leading-[1.7] whitespace-pre-wrap text-muted-foreground">
-            {text}
-          </div>
+          <div className={cn('mt-1 whitespace-pre-wrap', PROCESS_ROW)}>{text}</div>
         )}
       </div>
     </div>
@@ -436,25 +440,30 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
   return (
     <div className="flex gap-2.5">
       <Dot tone={running ? 'running' : failed ? 'error' : 'neutral'} />
-      <div className="min-w-0 flex-1 text-[14px]">
-        <div className="leading-[1.7] text-foreground/80">
-          检索(<span className="text-foreground">&quot;{item.args.query ?? ''}&quot;</span>)
+      <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
+        {/* 调用行：检索词用等宽字体，读作「一次机器动作」——与文字叙述区分，但字号一致 */}
+        <div>
+          检索(
+          <span className="font-mono text-[13px] text-foreground/75">
+            &quot;{item.args.query ?? ''}&quot;
+          </span>
+          )
         </div>
         <button
           onClick={() => detail.length && setOpen((o) => !o)}
           className={cn(
-            '-ml-1 flex items-center gap-1 rounded-md px-1 py-0.5 text-[13.5px] text-muted-foreground',
+            '-ml-1 flex items-center gap-1 rounded-md px-1 py-0.5',
             detail.length && 'transition-colors hover:bg-muted'
           )}
         >
-          <span className="text-muted-foreground/60">⎿</span>
+          <span className="text-muted-foreground/50">⎿</span>
           <span>{summary}</span>
           {detail.length > 0 && (
             <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
           )}
         </button>
         {open && (
-          <div className="mt-0.5 ml-4 flex flex-col gap-0.5 text-[13px] leading-[1.7] text-muted-foreground">
+          <div className="mt-0.5 ml-4 flex flex-col gap-0.5">
             {detail.map((d, i) => (
               <div key={i}>{d}</div>
             ))}
