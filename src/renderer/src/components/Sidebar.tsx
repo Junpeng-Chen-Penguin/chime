@@ -1,4 +1,4 @@
-import { PanelLeft, CirclePlus, Settings, Trash2, Clock } from 'lucide-react'
+import { PanelLeft, CirclePlus, Settings, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Conversation } from '@/types'
 
@@ -42,10 +42,8 @@ export default function Sidebar({
           新建对话
         </button>
 
-        <div className="mt-3 flex items-center gap-1.5 px-2.5 py-1.5 text-[13px] leading-none font-medium text-muted-foreground">
-          <Clock className="size-3.5 shrink-0" />
-          <span className="leading-none">最近</span>
-        </div>
+        {/* 纯文字小标题（参照 Claude Recents / WorkBuddy 任务），不带 icon，与下方无 icon 列表对齐 */}
+        <div className="mt-4 mb-0.5 px-2.5 text-[12px] font-medium text-muted-foreground">最近</div>
         {items.map((it) => {
           const active = it.id === activeId
           return (
