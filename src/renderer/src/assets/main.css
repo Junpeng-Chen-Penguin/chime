@@ -131,3 +131,22 @@
   border-radius: 4px;
 }
 .doc-md .doc-hl .doc-hl { background: transparent; box-shadow: none; }
+
+/* 整轮进度指示文案：扫光（一道亮色缓缓扫过，参照 Claude 桌面端思考态） */
+.text-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 35%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 65%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: chime-shimmer 2.2s linear infinite;
+}
+@keyframes chime-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}

@@ -256,7 +256,7 @@ function ProgressIndicator(): React.JSX.Element {
   return (
     <div className="mt-6 flex items-center gap-2.5 text-[14px]">
       <span className="size-[15px] flex-none animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      <span className="font-medium text-foreground/80">{PROGRESS_WORDS[idx]}…</span>
+      <span className="text-shimmer font-medium">{PROGRESS_WORDS[idx]}…</span>
       {secs > 0 && <span className="text-[12.5px] text-muted-foreground">{secs}s</span>}
     </div>
   )
