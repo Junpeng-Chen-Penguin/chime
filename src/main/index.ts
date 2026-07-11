@@ -12,9 +12,12 @@ import {
   createConversation,
   getMessages,
   setKbMeta,
-  setConversationKb
+  setConversationKb,
+  listMcpServices,
+  saveMcpService
 } from './db'
 import { registerIpc } from './ipc'
+import { syncMcpServices, onMcpStatusChange, closeAllMcp } from './mcp/client'
 
 function createWindow(): BrowserWindow {
   // Create the browser window.
@@ -112,10 +115,21 @@ app.whenReady().then(() => {
         const { readFileSync } = await import('fs')
         const spec = JSON.parse(readFileSync(resolve(evalCasePath), 'utf8')) as {
           kb?: { repo: string; name: string; intro: string }
+          mcp?: { name: string; url: string; headers?: Record<string, string> }[]
           model?: string
           messages: string[]
         }
         const { runTurn } = await import('./engine/orchestrator')
+        // MCP 用例：预置服务并连接（同名服务已存在则不重复建）
+        if (spec.mcp) {
+          const existing = listMcpServices()
+          for (const s of spec.mcp) {
+            if (!existing.some((e) => e.name === s.name)) {
+              saveMcpService({ name: s.name, url: s.url, headers: s.headers ?? {}, enabled: true })
+            }
+          }
+        }
+        await syncMcpServices()
         // 带库用例：库未就绪或路径不同才构建（预置过则秒过）
         if (spec.kb) {
           const cur = getKb()
@@ -135,6 +149,7 @@ app.whenReady().then(() => {
         for (let i = 0; i < spec.messages.length; i++) {
           await runTurn({ streamId: `t${i + 1}`, convId, text: spec.messages[i], model, emit })
         }
+        await closeAllMcp() // 关闭 SSE 长连接，评估进程干净退出
         app.exit(0)
       } catch (e) {
         process.stderr.write(`[eval] ERROR ${String(e)}\n`)
@@ -321,6 +336,12 @@ app.whenReady().then(() => {
 
   const win = createWindow()
 
+  // MCP：状态变更推设置页（认证失效等标识）；启动即连已启用服务、拉清单缓存（异步，不阻塞窗口）
+  onMcpStatusChange(() => {
+    if (!win.isDestroyed()) win.webContents.send('mcp:status')
+  })
+  void syncMcpServices()
+
   app.on('second-instance', () => {
     if (win.isMinimized()) win.restore()
     win.focus()
@@ -383,6 +404,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// 关闭全部 MCP 连接，否则 SSE 长连接可能拖住进程
+app.on('before-quit', () => {
+  void closeAllMcp()
 })
 
 // In this file you can include the rest of your app's specific main process

@@ -16,6 +16,8 @@ import { detect, listModels, generateTitle } from './ai'
 import { runTurn, stopTurn, type ChatEvent } from './engine/orchestrator'
 import { lastUserText, deleteLastAssistant } from './engine/store'
 import { getKb, kbStats, setConversationKb, setKbMeta, resetKb } from './db'
+import { listMcpServices, getMcpService, saveMcpService, deleteMcpService } from './db'
+import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
 import { kbBusy, runIndexJob, validateRepoPath, getLastSummary } from './kb'
 
 export function registerIpc(): void {
@@ -136,6 +138,44 @@ export function registerIpc(): void {
   })
   ipcMain.handle('conv:setKb', (_e, input: { id: string; enabled: boolean }) =>
     setConversationKb(input.id, input.enabled)
+  )
+
+  // ── MCP 服务 ──────────────────────────────────────
+  // 列表：配置 + 运行时状态；认证请求头只回打码值（明文不出主进程，与 provider 密钥同一约定）
+  ipcMain.handle('mcp:list', () =>
+    listMcpServices().map((s) => {
+      const rt = getMcpServiceRuntime(s.id)
+      return {
+        id: s.id,
+        name: s.name,
+        url: s.url,
+        headersMasked: Object.fromEntries(Object.entries(s.headers).map(([k, v]) => [k, maskApiKey(v)])),
+        enabled: s.enabled,
+        status: s.enabled ? (rt?.status ?? 'error') : null,
+        error: rt?.error,
+        toolCount: rt?.toolCount ?? 0
+      }
+    })
+  )
+  // 保存（新建/编辑共用）：headers 为 null 表示沿用已存认证；保存即生效（连接/断开随 sync）
+  ipcMain.handle(
+    'mcp:save',
+    async (_e, input: { id?: number; name: string; url: string; headers: Record<string, string> | null; enabled: boolean }) => {
+      saveMcpService(input)
+      await syncMcpServices()
+    }
+  )
+  ipcMain.handle('mcp:delete', async (_e, id: number) => {
+    deleteMcpService(id)
+    await syncMcpServices()
+  })
+  // 测试连接：表单内点测；headers 为 null 时（编辑未改认证）用已存的
+  ipcMain.handle(
+    'mcp:test',
+    (_e, input: { id?: number; url: string; headers: Record<string, string> | null }) => {
+      const headers = input.headers ?? (input.id ? (getMcpService(input.id)?.headers ?? {}) : {})
+      return testMcpConnection(input.url, headers)
+    }
   )
 
   // 打开来源文档（侧板阅读视图）：读磁盘现状；校验片段用消息自带的原文快照，此处不查库

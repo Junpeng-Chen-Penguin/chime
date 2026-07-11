@@ -3,14 +3,15 @@
 // 本文件不依赖 BrowserWindow，界面与能力分离。
 
 import { streamText, isStepCount } from 'ai'
-import type { ModelMessage } from 'ai'
+import type { ModelMessage, Tool } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { getProvider, getConversationKb, getKb, kbStats } from '../db'
 import { EMBED_MODEL_ID } from '../model'
 import { humanize } from '../ai'
 import { buildSystemPrompt, type KbEnv } from './prompts'
 import { budgetFor, estimateTokens, recordUsage } from './budget'
-import { makeSearchTool, TOOL_REQUEST_HARD_LIMIT, type TurnToolContext } from './tools'
+import { makeSearchTool, makeMcpTools, TOOL_REQUEST_HARD_LIMIT, STEP_COUNT_LIMIT, type TurnToolContext } from './tools'
+import { unavailableMcpServiceNames } from '../mcp/client'
 import { saveUserMessage, saveAssistantTurn, loadHistoryMessages, type TurnItem, type TurnStatus } from './store'
 
 export type ChatEvent =
@@ -103,8 +104,27 @@ export async function runTurn(opts: {
     }
   }
 
-  // 组装：系统提示词（固定主干 +（挂库）条件段 + 环境信息）+ 对话历史（含本条）
-  const system = buildSystemPrompt(kbEnv)
+  const controller = new AbortController()
+  turns.set(streamId, controller)
+
+  // 轮内状态：检索计数与来源池（连续编号）；limitHit = 触接口级禁止（触边界强制作答）
+  const toolCtx: TurnToolContext = { pool: [], searches: 0 }
+  let limitHit = false
+  const toolItemIndex = new Map<string, number>() // toolCallId → items 下标
+  const toolStartAt = new Map<string, number>()
+
+  // 工具组装：内置（挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
+  const mcp = makeMcpTools(controller.signal)
+  const turnTools: Record<string, Tool> = { ...mcp.tools }
+  if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
+  // 已启用但连不上的服务：提示一句，本轮按无该服务工具继续，不阻断对话
+  const down = unavailableMcpServiceNames()
+  if (down.length) {
+    emit({ type: 'notice', streamId, text: `服务暂时不可用：${down.join('、')}；本轮按无该服务工具继续` })
+  }
+
+  // 组装：系统提示词（固定主干 +（带工具）输出约定 +（挂库）条件段 + 环境信息）+ 对话历史（含本条）
+  const system = buildSystemPrompt(kbEnv, Object.keys(turnTools).length > 0)
   const budget = budgetFor(model)
   let history: ModelMessage[] = loadHistoryMessages(convId)
   const estimate = (): number =>
@@ -121,22 +141,13 @@ export async function runTurn(opts: {
     includeUsage: true
   })
 
-  const controller = new AbortController()
-  turns.set(streamId, controller)
-
-  // 轮内状态：检索计数与来源池（连续编号）；limitHit = 触接口级禁止（触边界强制作答）
-  const toolCtx: TurnToolContext = { pool: [], searches: 0 }
-  let limitHit = false
-  const toolItemIndex = new Map<string, number>() // toolCallId → items 下标
-  const toolStartAt = new Map<string, number>()
-
   try {
     const result = streamText({
       model: provider(model),
       instructions: system,
       messages: history,
       abortSignal: controller.signal,
-      tools: kbEnv ? { search_knowledge_base: makeSearchTool(toolCtx) } : undefined,
+      tools: Object.keys(turnTools).length ? turnTools : undefined,
       // 接口级禁止（最硬）：请求总数（含被拒）触顶后不再下发工具清单，模型只能作答
       prepareStep: ({ steps }) => {
         const requested = steps.reduce((s, st) => s + st.toolCalls.length, 0)
@@ -146,7 +157,7 @@ export async function runTurn(opts: {
         }
         return undefined
       },
-      stopWhen: isStepCount(10) // 防御性兜底，正常永远先触发 6 次闸门
+      stopWhen: isStepCount(STEP_COUNT_LIMIT) // 防御性兜底，正常永远先触发硬闸
     })
 
     for await (const part of result.fullStream) {
@@ -170,6 +181,7 @@ export async function runTurn(opts: {
           startItem('tool', {
             t: 'tool',
             name: part.toolName,
+            display: mcp.displays.get(part.toolName),
             args: (part.input ?? {}) as Record<string, unknown>
           })
           toolItemIndex.set(part.toolCallId, cur)

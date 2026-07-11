@@ -1,15 +1,16 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
-import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, ChevronDown } from 'lucide-react'
+import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plug, Plus, MoreHorizontal, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ConfirmDialog from './ConfirmDialog'
 import { cn } from '@/lib/utils'
 
 type Status = 'idle' | 'detecting' | 'success' | 'error'
-type Tab = 'provider' | 'kb'
+type Tab = 'provider' | 'kb' | 'mcp'
 
 const TABS: { key: Tab; label: string; icon: typeof Boxes }[] = [
   { key: 'provider', label: '模型服务', icon: Boxes },
-  { key: 'kb', label: '知识库', icon: BookOpen }
+  { key: 'kb', label: '知识库', icon: BookOpen },
+  { key: 'mcp', label: 'MCP 服务', icon: Plug }
 ]
 
 interface Props {
@@ -136,6 +137,8 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
           <div className="flex min-w-0 flex-1 flex-col">
             {tab === 'kb' ? (
               <KbPanel />
+            ) : tab === 'mcp' ? (
+              <McpPanel />
             ) : (
               <>
                 <div className="flex-1 overflow-y-auto px-6 py-6">
@@ -603,6 +606,311 @@ function KbPanel(): React.JSX.Element {
         onCancel={() => setConfirmRemove(false)}
       />
     </div>
+  )
+}
+
+// ── MCP 服务分区：卡片只读展示，新建与编辑走同一套表单（延续知识库设置的交互）──────
+
+const INPUT_CLS =
+  'h-10 w-full rounded-lg border border-input bg-background px-3 text-[14px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50'
+
+function McpPanel(): React.JSX.Element {
+  type McpServiceInfo = import('../../../preload/index.d').McpServiceInfo
+  type McpTestResult = import('../../../preload/index.d').McpTestResult
+  const [list, setList] = useState<McpServiceInfo[]>([])
+  const [showForm, setShowForm] = useState(false)
+  const [editing, setEditing] = useState<McpServiceInfo | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<McpServiceInfo | null>(null)
+  const [menuFor, setMenuFor] = useState<number | null>(null)
+  // 表单态
+  const [formName, setFormName] = useState('')
+  const [formUrl, setFormUrl] = useState('')
+  const [formEnabled, setFormEnabled] = useState(true)
+  const [headersText, setHeadersText] = useState('')
+  const [headersOriginal, setHeadersOriginal] = useState('') // 编辑时的打码原文：文本没动 = 沿用已存认证
+  const [formError, setFormError] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<McpTestResult | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  const reload = useCallback(() => {
+    window.api.mcpList().then(setList)
+  }, [])
+  useEffect(() => {
+    reload()
+    return window.api.onMcpStatus(reload)
+  }, [reload])
+
+  const openForm = (svc: McpServiceInfo | null): void => {
+    setEditing(svc)
+    setFormName(svc?.name ?? '')
+    setFormUrl(svc?.url ?? '')
+    setFormEnabled(svc?.enabled ?? true)
+    const text = svc
+      ? Object.entries(svc.headersMasked)
+          .map(([k, v]) => `${k}=${v}`)
+          .join('\n')
+      : ''
+    setHeadersText(text)
+    setHeadersOriginal(text)
+    setFormError('')
+    setTestResult(null)
+    setShowForm(true)
+  }
+
+  // 认证请求头解析：一行一条「名=值」。编辑时文本没动 = 沿用已存（null，与模型服务密钥同一约定）；
+  // 动了则须全部重填（打码字符出现在值里即视为没填完整）
+  const parseHeaders = ():
+    | { ok: true; value: Record<string, string> | null }
+    | { ok: false; error: string } => {
+    if (editing && headersText === headersOriginal) return { ok: true, value: null }
+    const out: Record<string, string> = {}
+    for (const line of headersText.split('\n')) {
+      const t = line.trim()
+      if (!t) continue
+      const i = t.indexOf('=')
+      if (i <= 0) return { ok: false, error: `这一行看不懂：「${t.slice(0, 30)}」。每行一条，写成 请求头名=值` }
+      const v = t.slice(i + 1).trim()
+      if (v.includes('•')) return { ok: false, error: '认证值不完整：修改请求头时，值需要全部重新填写' }
+      out[t.slice(0, i).trim()] = v
+    }
+    return { ok: true, value: out }
+  }
+
+  const runTest = async (): Promise<void> => {
+    const parsed = parseHeaders()
+    if (!parsed.ok) {
+      setFormError(parsed.error)
+      return
+    }
+    setFormError('')
+    setTesting(true)
+    setTestResult(null)
+    const r = await window.api.mcpTest({ id: editing?.id, url: formUrl.trim(), headers: parsed.value })
+    setTestResult(r)
+    setTesting(false)
+  }
+
+  const submit = async (): Promise<void> => {
+    const parsed = parseHeaders()
+    if (!parsed.ok) {
+      setFormError(parsed.error)
+      return
+    }
+    setFormError('')
+    setSaving(true)
+    await window.api.mcpSave({
+      id: editing?.id,
+      name: formName.trim(),
+      url: formUrl.trim(),
+      headers: parsed.value,
+      enabled: formEnabled
+    })
+    setSaving(false)
+    setShowForm(false)
+    reload()
+  }
+
+  if (showForm) {
+    return (
+      <div className="flex-1 overflow-y-auto px-6 py-6">
+        <div className="mb-5 text-[14px] font-semibold">{editing ? '编辑服务' : '新建服务'}</div>
+        <Section title="名称 *">
+          <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="例：计费系统" className={INPUT_CLS} />
+        </Section>
+        <Section title="服务地址 *">
+          <input
+            value={formUrl}
+            onChange={(e) => setFormUrl(e.target.value)}
+            placeholder="https://…/mcp"
+            className={cn(INPUT_CLS, 'font-mono text-[13px]')}
+          />
+        </Section>
+        <Section
+          title="认证请求头"
+          hint={editing ? '值已打码；没改动就沿用已保存的，改动则值需全部重填' : '服务方要求的请求头，一行一条'}
+        >
+          <textarea
+            value={headersText}
+            onChange={(e) => setHeadersText(e.target.value)}
+            rows={3}
+            placeholder={'Authorization=Bearer <token>'}
+            className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-[13px] leading-[1.6] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
+          />
+        </Section>
+        <Section title="启用" hint="保存即生效；想先配置后启用，关掉再保存">
+          <SwitchBtn on={formEnabled} onToggle={() => setFormEnabled((v) => !v)} />
+        </Section>
+
+        {formError && <StatusLine className="text-destructive">{formError}</StatusLine>}
+        {testing && (
+          <StatusLine>
+            <Loader2 className="size-3.5 animate-spin" />
+            正在连接服务…
+          </StatusLine>
+        )}
+        {testResult?.ok && (
+          <StatusLine className="text-emerald-600">
+            <Check className="size-3.5" />
+            连接成功，发现 {testResult.toolNames!.length} 个工具：{testResult.toolNames!.join('、')}
+          </StatusLine>
+        )}
+        {testResult && !testResult.ok && (
+          <StatusLine className="text-destructive">
+            {testResult.auth
+              ? '认证失败，请检查认证请求头'
+              : '连接失败，请检查服务地址，以及公司网络 / VPN 是否可用'}
+          </StatusLine>
+        )}
+
+        <div className="mt-6 flex items-center justify-between">
+          <Button variant="outline" onClick={runTest} disabled={testing || !formUrl.trim()} className="h-9">
+            测试连接
+          </Button>
+          <div className="flex gap-2.5">
+            <Button variant="outline" onClick={() => setShowForm(false)} className="h-9">
+              取消
+            </Button>
+            <Button onClick={submit} disabled={saving || !formName.trim() || !formUrl.trim()} className="h-9 px-5">
+              保存
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 overflow-y-auto px-6 py-6">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="text-[13px] font-semibold">MCP 服务</div>
+        <Button variant="outline" onClick={() => openForm(null)} className="h-8 gap-1 px-3 text-[13px]">
+          <Plus className="size-3.5" />
+          添加服务
+        </Button>
+      </div>
+
+      {list.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center">
+          <div className="text-[14px] font-medium">还没有 MCP 服务</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">添加后模型可在对话中调用它的工具</div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {list.map((svc) => (
+            <div key={svc.id} className="rounded-xl border border-border p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-[14px] font-semibold">{svc.name}</span>
+                  <span className="flex-none rounded border border-border bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    MCP
+                  </span>
+                </div>
+                <div className="flex flex-none items-center gap-1.5">
+                  <SwitchBtn
+                    on={svc.enabled}
+                    onToggle={async () => {
+                      await window.api.mcpSave({
+                        id: svc.id,
+                        name: svc.name,
+                        url: svc.url,
+                        headers: null,
+                        enabled: !svc.enabled
+                      })
+                      reload()
+                    }}
+                  />
+                  <div className="relative">
+                    <button
+                      onClick={() => setMenuFor((v) => (v === svc.id ? null : svc.id))}
+                      onBlur={() => setTimeout(() => setMenuFor(null), 120)}
+                      className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted"
+                    >
+                      <MoreHorizontal className="size-4" />
+                    </button>
+                    {menuFor === svc.id && (
+                      <div className="absolute top-[calc(100%+4px)] right-0 z-20 min-w-[140px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                        <button
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            setMenuFor(null)
+                            openForm(svc)
+                          }}
+                          className="w-full rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            setMenuFor(null)
+                            setConfirmDelete(svc)
+                          }}
+                          className="w-full rounded-lg px-2.5 py-2 text-left text-[13px] text-destructive transition-colors hover:bg-destructive/10"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-2">
+                {!svc.enabled ? (
+                  <StatusLine className="mt-0">已停用</StatusLine>
+                ) : svc.status === 'connected' ? (
+                  <StatusLine className="mt-0 text-emerald-600">
+                    <Check className="size-3.5" />
+                    已连接 · {svc.toolCount} 个工具
+                  </StatusLine>
+                ) : svc.status === 'auth' ? (
+                  <StatusLine className="mt-0 text-destructive">认证失效，请更新认证请求头</StatusLine>
+                ) : (
+                  <StatusLine className="mt-0 text-destructive">
+                    连接失败，请检查服务地址，以及公司网络 / VPN 是否可用
+                  </StatusLine>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="删除服务"
+        body={`将删除「${confirmDelete?.name ?? ''}」。历史会话的调用记录会保留；新对话不再带它的工具。确定删除？`}
+        confirmText="删除"
+        onConfirm={async () => {
+          const id = confirmDelete!.id
+          setConfirmDelete(null)
+          await window.api.mcpDelete(id)
+          reload()
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
+    </div>
+  )
+}
+
+// 启停开关（胶囊型），与卡片状态行搭配使用
+function SwitchBtn({ on, onToggle }: { on: boolean; onToggle: () => void }): React.JSX.Element {
+  return (
+    <button
+      onClick={onToggle}
+      title={on ? '停用' : '启用'}
+      className={cn(
+        'relative h-5 w-9 flex-none rounded-full transition-colors',
+        on ? 'bg-primary' : 'bg-muted-foreground/25'
+      )}
+    >
+      <span
+        className={cn(
+          'absolute top-0.5 size-4 rounded-full bg-white shadow transition-[left]',
+          on ? 'left-[18px]' : 'left-0.5'
+        )}
+      />
+    </button>
   )
 }
 

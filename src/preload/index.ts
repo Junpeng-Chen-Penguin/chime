@@ -34,6 +34,24 @@ const api = {
     ipcRenderer.send('chat:retry', payload),
   stopChat: (streamId: string) => ipcRenderer.send('chat:stop', streamId),
 
+  // MCP 服务：mcp:status 为无载荷提醒，收到后重新拉列表即可
+  mcpList: () => ipcRenderer.invoke('mcp:list'),
+  mcpSave: (input: {
+    id?: number
+    name: string
+    url: string
+    headers: Record<string, string> | null
+    enabled: boolean
+  }) => ipcRenderer.invoke('mcp:save', input),
+  mcpDelete: (id: number) => ipcRenderer.invoke('mcp:delete', id),
+  mcpTest: (input: { id?: number; url: string; headers: Record<string, string> | null }) =>
+    ipcRenderer.invoke('mcp:test', input),
+  onMcpStatus: (cb: () => void): (() => void) => {
+    const h = (): void => cb()
+    ipcRenderer.on('mcp:status', h)
+    return () => ipcRenderer.removeListener('mcp:status', h)
+  },
+
   getKb: () => ipcRenderer.invoke('kb:get'),
   kbBuild: (input: { path: string; name: string; intro: string }) =>
     ipcRenderer.invoke('kb:build', input),

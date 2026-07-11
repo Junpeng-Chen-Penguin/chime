@@ -3,17 +3,55 @@
 // denied 是工具级闸门——第 4 次检索请求不执行，以工具结果身份告知模型收场。
 
 import { tool, jsonSchema } from 'ai'
+import type { Tool } from 'ai'
 import { retrieve } from '../retrieve'
+import { callMcpTool, getMcpToolList } from '../mcp/client'
 import { SEARCH_TOOL_DESCRIPTION } from './prompts'
 import type { SourceSnapshot } from './store'
 
 export const SEARCH_LIMIT_PER_TURN = 3 // 工具级闸门（软约束 3 次的硬性面）
-export const TOOL_REQUEST_HARD_LIMIT = 6 // 接口级禁止：请求总数（含被拒）触顶即摘工具清单
+// 接口级禁止：请求总数（含被拒）触顶即摘工具清单。
+// v0.5.0 放宽（6 → 16）：一次多系统查数（提问 + 多调用 + 取数 + 制品）约 6–10 次调用，旧值必触闸
+export const TOOL_REQUEST_HARD_LIMIT = 16
+export const STEP_COUNT_LIMIT = 24 // 防御性兜底步数（v0.4.0 为 10），正常永远先触发硬闸
 const RESULT_CHAR_LIMIT = 6000 // 规则 2：单次工具返回入场上限（字符，联调校准）
 
 export interface TurnToolContext {
   pool: SourceSnapshot[] // 本轮检索结果池：多次检索连续编号，回答结束按 [n] 反查
   searches: number
+}
+
+// MCP 工具动态注册：模型可见名 mcp__服务id__工具名（重名天然隔离），展示名「服务名:工具名」。
+// 结果原样交回：成功为纯文本（存储不归一），失败为 { error }（模型据此重试、换路或说明）。
+// 授权闸属 Case 3，联调期放行：execute 直接调用。
+export function makeMcpTools(signal: AbortSignal): {
+  tools: Record<string, Tool>
+  displays: Map<string, string> // 模型可见名 → 展示名（随 tool item 落库，渲染层不反查）
+} {
+  const tools: Record<string, Tool> = {}
+  const displays = new Map<string, string>()
+  for (const t of getMcpToolList()) {
+    const name = `mcp__${t.serviceId}__${t.name}`
+    displays.set(name, `${t.serviceName}:${t.name}`)
+    tools[name] = tool({
+      description: t.description,
+      inputSchema: jsonSchema(t.inputSchema as Parameters<typeof jsonSchema>[0]),
+      execute: async (args) => {
+        try {
+          const r = await callMcpTool(t.serviceId, t.name, (args ?? {}) as Record<string, unknown>, signal)
+          const text = ((r.content ?? []) as { type: string; text?: string }[])
+            .filter((c) => c.type === 'text')
+            .map((c) => c.text ?? '')
+            .join('\n')
+          if (r.isError) return { error: text || '调用失败' }
+          return text
+        } catch (e) {
+          return { error: `调用失败：${String((e as Error)?.message ?? e).slice(0, 200)}` }
+        }
+      }
+    })
+  }
+  return { tools, displays }
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导

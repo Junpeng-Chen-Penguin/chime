@@ -18,7 +18,7 @@ export interface SourceSnapshot {
 export type TurnItem =
   | { t: 'reasoning'; text: string }
   | { t: 'text'; text: string } // 位置即语义：工具步骤前为意图叙述，末位为最终回答
-  | { t: 'tool'; name: string; args: Record<string, unknown>; result?: unknown; ms?: number }
+  | { t: 'tool'; name: string; display?: string; args: Record<string, unknown>; result?: unknown; ms?: number }
   | { t: 'sources'; list: SourceSnapshot[] }
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
@@ -88,23 +88,35 @@ export function loadHistoryMessages(convId: string): ModelMessage[] {
       continue
     }
     if (r.status === 'error') continue
-    const summary = r.items ? summarizeSearches(JSON.parse(r.items) as TurnItem[]) : ''
+    const summary = r.items ? summarizeToolCalls(JSON.parse(r.items) as TurnItem[]) : ''
     const content = summary ? `${r.content}\n\n${summary}` : r.content
     if (content.trim()) out.push({ role: 'assistant', content })
   }
   return out
 }
 
-// 概要一行一条：本轮检索：「query」命中《文章》《文章》——让模型记得查过什么，可追问时重查
-function summarizeSearches(items: TurnItem[]): string {
+// 概要一行一条，让模型记得本轮做过什么：
+// 检索：「query」命中《文章》《文章》；其他工具（MCP 等）：展示名(参数) → 结果规模或失败原因。
+// 结果编号、三级中断文案的完整历史映射随卡片机制一起做（技术方案 6.3）。
+function summarizeToolCalls(items: TurnItem[]): string {
   const lines: string[] = []
   for (const it of items) {
-    if (it.t !== 'tool' || it.name !== 'search_knowledge_base') continue
-    const result = it.result as { results?: { file: string }[]; denied?: string } | undefined
-    if (!result || result.denied) continue // 被闸门拒绝的请求不是一次检索
-    const query = String((it.args as { query?: unknown }).query ?? '')
-    const files = [...new Set((result.results ?? []).map((r) => r.file))].map((f) => `《${f}》`).join('')
-    lines.push(files ? `本轮检索：「${query}」命中${files}` : `本轮检索：「${query}」未命中`)
+    if (it.t !== 'tool') continue
+    if (it.name === 'search_knowledge_base') {
+      const result = it.result as { results?: { file: string }[]; denied?: string } | undefined
+      if (!result || result.denied) continue // 被闸门拒绝的请求不是一次检索
+      const query = String((it.args as { query?: unknown }).query ?? '')
+      const files = [...new Set((result.results ?? []).map((r) => r.file))].map((f) => `《${f}》`).join('')
+      lines.push(files ? `本轮检索：「${query}」命中${files}` : `本轮检索：「${query}」未命中`)
+      continue
+    }
+    const label = it.display ?? it.name
+    const argsShort = JSON.stringify(it.args ?? {}).slice(0, 100)
+    if (typeof it.result === 'string') {
+      lines.push(`本轮调用：${label}(${argsShort}) → 返回约 ${it.result.length} 字`)
+    } else if (it.result && typeof it.result === 'object' && 'error' in it.result) {
+      lines.push(`本轮调用：${label}(${argsShort}) → 失败：${String((it.result as { error: unknown }).error).slice(0, 100)}`)
+    }
   }
   return lines.join('\n')
 }

@@ -420,8 +420,84 @@ function ThinkRow({ text, running }: { text: string; running: boolean }): React.
   )
 }
 
-// 工具步骤成对两行：调用行（状态点三态）+ 缩进结果行（点击展开命中列表 / 错误说明）
+// 工具步骤成对两行（统一框架）：调用行（状态点三态）+ 缩进结果行（点开详情）。
+// 差异只在摘要文案与详情内容：检索为命中列表，通用工具（MCP 等）为参数 + 结果。
 function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JSX.Element {
+  return item.name === 'search_knowledge_base' ? <SearchToolRow item={item} /> : <GenericToolRow item={item} />
+}
+
+// 结果规模口径（与主进程摘要一致的读法）：千字 / 万字取整
+function formatChars(n: number): string {
+  if (n < 1000) return `${n} 字`
+  if (n < 10000) return `约 ${Math.round(n / 1000)} 千字`
+  return `约 ${Math.round(n / 10000)} 万字`
+}
+
+function GenericToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const r = item.result as string | { error: string } | undefined
+  const running = r === undefined
+  const failed = typeof r === 'object' && !!r?.error
+  const args = Object.entries(item.args ?? {})
+  // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")
+  const firstArg = args.length ? args[0][1] : undefined
+  const argPreview = firstArg === undefined ? '' : JSON.stringify(firstArg)
+  const summary = running ? '调用中…' : failed ? '调用失败' : `返回${formatChars((r as string).length)}`
+  // 结果详情：规整 JSON 自动格式化便于阅读
+  const resultText = useMemo(() => {
+    if (running) return ''
+    if (failed) return (r as { error: string }).error
+    try {
+      return JSON.stringify(JSON.parse(r as string), null, 2)
+    } catch {
+      return r as string
+    }
+  }, [r, running, failed])
+  return (
+    <div className="flex gap-2.5">
+      <Dot tone={running ? 'running' : failed ? 'error' : 'neutral'} />
+      <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
+        <div className="truncate">
+          {item.display ?? item.name}({argPreview})
+        </div>
+        <button
+          onClick={() => !running && setOpen((o) => !o)}
+          className={cn(
+            '-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5',
+            !running && 'transition-colors hover:bg-muted'
+          )}
+        >
+          <span className={cn('text-muted-foreground/50', failed && 'text-destructive/60')}>⎿</span>
+          <span className={cn(failed && 'font-medium text-destructive')}>{summary}</span>
+          {!running && <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />}
+        </button>
+        {open && !running && (
+          <div className="mt-1.5 ml-5 rounded-lg border border-border bg-muted/30 px-3.5 py-2.5">
+            {args.length > 0 && (
+              <>
+                <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">参数</div>
+                <div className="mb-2 flex flex-col gap-0.5">
+                  {args.map(([k, v]) => (
+                    <div key={k} className="flex gap-3 text-[13px]">
+                      <span className="w-[120px] flex-none truncate text-muted-foreground">{k}</span>
+                      <span className="min-w-0 break-all">{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mb-2 border-t border-border" />
+              </>
+            )}
+            <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">结果</div>
+            <div className="max-h-[240px] overflow-y-auto text-[13px] whitespace-pre-wrap">{resultText}</div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// 检索步骤（v0.4.0 既有样式）：结果行点击展开命中列表 / 错误说明
+function SearchToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const r: SearchToolResult | undefined = item.result as SearchToolResult | undefined
   const running = r === undefined
@@ -451,7 +527,7 @@ function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JS
       <Dot tone={running ? 'running' : failed ? 'error' : 'neutral'} />
       <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
         {/* 调用行：整行同字体、同字号、同色，不再换等宽或改色 */}
-        <div>检索(&quot;{item.args.query ?? ''}&quot;)</div>
+        <div>检索(&quot;{String(item.args.query ?? '')}&quot;)</div>
         <button
           onClick={() => detail.length && setOpen((o) => !o)}
           className={cn(

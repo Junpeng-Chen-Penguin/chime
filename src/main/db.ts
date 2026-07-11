@@ -75,6 +75,15 @@ export function initDb(): void {
     CREATE INDEX IF NOT EXISTS idx_chunk_file ON chunk (file_path);
 
     CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(seg_text);
+
+    CREATE TABLE IF NOT EXISTS mcp_service (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL,
+      url        TEXT NOT NULL,
+      headers    TEXT NOT NULL DEFAULT '{}',
+      enabled    INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
   `)
   // 迁移：知识库名称（录入时可自定义）
   try {
@@ -329,6 +338,58 @@ export function ftsSearch(matchQuery: string, limit: number): number[] {
     .prepare('SELECT rowid FROM chunk_fts WHERE chunk_fts MATCH ? ORDER BY bm25(chunk_fts) LIMIT ?')
     .all(matchQuery, limit) as { rowid: number }[]
   return rows.map((r) => r.rowid)
+}
+
+// ── MCP 服务 ──────────────────────────────────────
+
+export interface McpServiceRow {
+  id: number
+  name: string
+  url: string
+  headers: Record<string, string> // 认证请求头键值对，明文只在主进程
+  enabled: boolean
+}
+
+export function listMcpServices(): McpServiceRow[] {
+  const rows = db
+    .prepare('SELECT id, name, url, headers, enabled FROM mcp_service ORDER BY created_at')
+    .all() as { id: number; name: string; url: string; headers: string; enabled: number }[]
+  return rows.map((r) => ({ ...r, headers: JSON.parse(r.headers), enabled: !!r.enabled }))
+}
+
+export function getMcpService(id: number): McpServiceRow | null {
+  return listMcpServices().find((s) => s.id === id) ?? null
+}
+
+// headers 为 null 表示沿用已存的认证信息（界面未改动，与 provider 密钥同一约定）
+export function saveMcpService(input: {
+  id?: number
+  name: string
+  url: string
+  headers: Record<string, string> | null
+  enabled: boolean
+}): number {
+  if (input.id) {
+    const cur = getMcpService(input.id)
+    const headers = input.headers ?? cur?.headers ?? {}
+    db.prepare('UPDATE mcp_service SET name = ?, url = ?, headers = ?, enabled = ? WHERE id = ?').run(
+      input.name,
+      input.url,
+      JSON.stringify(headers),
+      input.enabled ? 1 : 0,
+      input.id
+    )
+    return input.id
+  }
+  const r = db
+    .prepare('INSERT INTO mcp_service (name, url, headers, enabled, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(input.name, input.url, JSON.stringify(input.headers ?? {}), input.enabled ? 1 : 0, Date.now())
+  return Number(r.lastInsertRowid)
+}
+
+// 删除服务：历史会话的调用行、授权记录等全部保留（存在 message.items 里，与服务表无外键）
+export function deleteMcpService(id: number): void {
+  db.prepare('DELETE FROM mcp_service WHERE id = ?').run(id)
 }
 
 export function setConversationKb(id: string, enabled: boolean): void {

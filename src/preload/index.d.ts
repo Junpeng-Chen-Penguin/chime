@@ -39,11 +39,21 @@ export interface SearchToolResult {
   invalid?: string // 模型发了空检索词、被拦下自愈：非错误，中性显示
 }
 
+// 通用工具（MCP 等）的返回：成功为纯文本，失败为 { error }
+export type GenericToolResult = string | { error: string }
+
 // 一轮的有序过程记录的元素（与主进程 engine/store 的 TurnItem 一致）
 export type TurnItem =
   | { t: 'reasoning'; text: string }
   | { t: 'text'; text: string } // 位置即语义：工具步骤前为意图叙述，末位为最终回答
-  | { t: 'tool'; name: string; args: { query?: string }; result?: SearchToolResult; ms?: number }
+  | {
+      t: 'tool'
+      name: string
+      display?: string // 展示名（MCP 为「服务名:工具名」），随落库
+      args: Record<string, unknown>
+      result?: SearchToolResult | GenericToolResult
+      ms?: number
+    }
   | { t: 'sources'; list: SourceRef[] }
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
@@ -107,6 +117,25 @@ export interface KbProgress {
   stats?: { files: number; chunks: number; summary: KbSummary }
 }
 
+// MCP 服务列表项（配置 + 运行时状态；认证头值已打码）
+export interface McpServiceInfo {
+  id: number
+  name: string
+  url: string
+  headersMasked: Record<string, string>
+  enabled: boolean
+  status: 'connected' | 'error' | 'auth' | null // null = 已停用
+  error?: string
+  toolCount: number
+}
+
+export interface McpTestResult {
+  ok: boolean
+  toolNames?: string[]
+  error?: string
+  auth?: boolean
+}
+
 export interface ChimeApi {
   getProvider: () => Promise<ProviderInfo>
   saveProvider: (input: {
@@ -132,6 +161,21 @@ export interface ChimeApi {
   stopChat: (streamId: string) => void
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
   onFullscreen: (cb: (v: boolean) => void) => () => void
+  mcpList: () => Promise<McpServiceInfo[]>
+  mcpSave: (input: {
+    id?: number
+    name: string
+    url: string
+    headers: Record<string, string> | null
+    enabled: boolean
+  }) => Promise<void>
+  mcpDelete: (id: number) => Promise<void>
+  mcpTest: (input: {
+    id?: number
+    url: string
+    headers: Record<string, string> | null
+  }) => Promise<McpTestResult>
+  onMcpStatus: (cb: () => void) => () => void
   getKb: () => Promise<KbInfo>
   kbBuild: (input: { path: string; name: string; intro: string }) => Promise<{ ok: boolean; error?: string }>
   kbRefresh: () => Promise<{ ok: boolean; error?: string }>
