@@ -206,9 +206,21 @@ app.whenReady().then(() => {
         assert(typeof hit === 'string' && hit.includes('命中'), '查结果集：按关键词搜')
         assert(typeof ov.fetchFromResult(conv, { resultId: 9999 }) === 'object', '查结果集：无效编号报错')
         assert(typeof ov.fetchFromResult('other-conv', { resultId: bigId }) === 'object', '查结果集：跨会话不可用')
-        // 删会话清结果
+        // 制品解析三层
+        const art = await import('./engine/artifact')
+        const a1 = art.createArtifact(conv, { title: 'T1', data: [{ 租户: 'A', 金额: 1 }, { 租户: 'B', 金额: 2 }] })
+        assert('id' in a1 && a1.rowCount === 2, '制品：结构化数组直接成表')
+        const a2 = art.createArtifact(conv, { title: 'T2', data: '租户,金额\nA,1\nB,2\nC,3' })
+        assert('id' in a2 && a2.rowCount === 3, '制品：首行表头分隔文本尽力解析')
+        const a3 = art.createArtifact(conv, { title: 'T3', data: '账单 001 | 租户 A公司 | 金额 100 元\n账单 002 | 租户 B公司 | 金额 200 元' })
+        assert('id' in a3 && a3.rowCount === 2 && 'id' in a3, '制品：逐格标注分隔文本尽力解析')
+        assert('error' in art.createArtifact(conv, { title: 'T4', data: '这是一段散文，没有行列结构可言。' }), '制品：解析不动不生成')
+        const refArt = art.createArtifact(conv, { title: 'T5', ref: { resultId: ctx2.refs.get('b')! } })
+        assert('error' in refArt || 'id' in refArt, '制品：引用取数不抛异常')
+        // 删会话清结果与制品
         db.deleteConversation(conv)
         assert(db.getToolResult(bigId, conv) === null, '删除会话：结果一并清除')
+        assert('id' in a1 && db.getArtifact(a1.id) === null, '删除会话：制品一并清除')
         app.exit(Number(process.exitCode ?? 0))
       } catch (e) {
         process.stderr.write(`[overflow-test] ERROR ${String(e)}\n`)

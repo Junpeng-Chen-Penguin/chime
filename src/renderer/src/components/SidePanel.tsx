@@ -6,8 +6,42 @@ import { cn } from '@/lib/utils'
 import { chunkMarkdown } from '../../../shared/chunker'
 import type { SourceRef } from '../../../preload/index.d'
 
-// 侧板：通用容器 + 本版唯一内容「来源文档阅读」。
-// 容器管标题栏 / 关闭 / 动效；内容自行渲染（能力与入口分离，见 PRD 架构预留）
+// 侧板 = 通用容器 + 内容（v0.3.0 架构预留：容器管标题栏 / 关闭 / 动效，内容自行渲染）。
+// 本版两种内容：来源文档阅读（DocContent）/ 制品表格（ArtifactContent，独立文件）。
+export default function SidePanel({
+  icon,
+  title,
+  subtitle,
+  onClose,
+  children
+}: {
+  icon?: React.ReactNode
+  title: string
+  subtitle?: string
+  onClose: () => void
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <div className="animate-in slide-in-from-right-4 flex h-full flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.09] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)] duration-300 min-w-[380px]">
+      <header className="flex h-[44px] flex-none items-center gap-2.5 border-b border-border px-4">
+        {icon}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[14px] leading-tight font-semibold">{title}</div>
+          {subtitle && <div className="truncate text-[11px] text-muted-foreground">{subtitle}</div>}
+        </div>
+        <button
+          onClick={onClose}
+          title="关闭"
+          className="grid size-8 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <X className="size-[18px]" />
+        </button>
+      </header>
+      {children}
+    </div>
+  )
+}
+
 export interface DocPanelData {
   file: string // 仓库内相对路径
   content: string | null // 磁盘当前内容；异常时为 null
@@ -68,12 +102,8 @@ function MermaidBlock({ code, onSettled }: { code: string; onSettled: () => void
   return <div className="my-3 flex justify-center overflow-x-auto" dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
-interface Props {
-  doc: DocPanelData
-  onClose: () => void
-}
-
-export default function SidePanel({ doc, onClose }: Props): React.JSX.Element {
+// 来源文档阅读内容（v0.3.0 既有逻辑原样迁入）
+export function DocContent({ doc }: { doc: DocPanelData }): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const anchorRef = useRef<HTMLElement | null>(null)
   const anchorTakenRef = useRef(false)
@@ -129,95 +159,74 @@ export default function SidePanel({ doc, onClose }: Props): React.JSX.Element {
       return <T ref={ref} className={cn(hit && 'doc-hl')} {...(rest as object)} />
     }
 
-  const name = doc.file.split('/').pop()!.replace(/\.md$/, '')
-
+  if (doc.error) return <PanelEmpty error={doc.error} />
   return (
-    <div className="animate-in slide-in-from-right-4 flex h-full flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.09] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)] duration-300 min-w-[380px]">
-      <header className="flex h-[44px] flex-none items-center gap-2.5 border-b border-border px-4">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-[14px] leading-tight font-semibold">{name}</div>
-          <div className="truncate text-[11px] text-muted-foreground">{doc.file}</div>
-        </div>
-        <button
-          onClick={onClose}
-          title="关闭"
-          className="grid size-8 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <X className="size-[18px]" />
-        </button>
-      </header>
-
-      {doc.error ? (
-        <PanelEmpty error={doc.error} />
-      ) : (
-      <div ref={scrollRef} className="doc-md flex-1 overflow-y-auto px-6 py-5">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            p: block('p'),
-            h1: block('h1'),
-            h2: block('h2'),
-            h3: block('h3'),
-            h4: block('h4'),
-            h5: block('h5'),
-            h6: block('h6'),
-            ul: block('ul'),
-            ol: block('ol'),
-            table: block('table'),
-            blockquote: block('blockquote'),
-            hr: block('hr'),
-            pre: (props) => {
-              // 拦截 mermaid 围栏块 → 渲染为图；其余照常
-              const node = props.node as unknown as {
-                position?: { start: { line: number }; end: { line: number } }
-                children?: { tagName?: string; properties?: { className?: string[] }; children?: { value?: string }[] }[]
+    <div ref={scrollRef} className="doc-md flex-1 overflow-y-auto px-6 py-5">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: block('p'),
+          h1: block('h1'),
+          h2: block('h2'),
+          h3: block('h3'),
+          h4: block('h4'),
+          h5: block('h5'),
+          h6: block('h6'),
+          ul: block('ul'),
+          ol: block('ol'),
+          table: block('table'),
+          blockquote: block('blockquote'),
+          hr: block('hr'),
+          pre: (props) => {
+            // 拦截 mermaid 围栏块 → 渲染为图；其余照常
+            const node = props.node as unknown as {
+              position?: { start: { line: number }; end: { line: number } }
+              children?: { tagName?: string; properties?: { className?: string[] }; children?: { value?: string }[] }[]
+            }
+            const codeNode = node?.children?.[0]
+            const lang = codeNode?.properties?.className?.find((c) => c.startsWith('language-'))
+            const codeText = codeNode?.children?.[0]?.value ?? ''
+            const pos = node?.position
+            const hit = !!pos && ranges.some((r) => pos.start.line <= r.end && pos.end.line >= r.start)
+            const ref = (el: HTMLElement | null): void => {
+              if (el && hit && !anchorTakenRef.current) {
+                anchorTakenRef.current = true
+                anchorRef.current = el
               }
-              const codeNode = node?.children?.[0]
-              const lang = codeNode?.properties?.className?.find((c) => c.startsWith('language-'))
-              const codeText = codeNode?.children?.[0]?.value ?? ''
-              const pos = node?.position
-              const hit = !!pos && ranges.some((r) => pos.start.line <= r.end && pos.end.line >= r.start)
-              const ref = (el: HTMLElement | null): void => {
-                if (el && hit && !anchorTakenRef.current) {
-                  anchorTakenRef.current = true
-                  anchorRef.current = el
-                }
-              }
-              if (lang === 'language-mermaid') {
-                return (
-                  <div ref={ref} className={cn(hit && 'doc-hl')}>
-                    <MermaidBlock code={codeText} onSettled={settle} />
-                  </div>
-                )
-              }
-              const { node: _n, ...rest } = props
-              return <pre ref={ref as never} className={cn(hit && 'doc-hl')} {...(rest as object)} />
-            },
-            img: (props) => {
-              const src = String(props.src ?? '')
-              const isAbs = /^(https?:|data:|file:|chime-doc:)/.test(src)
-              const url = isAbs
-                ? src
-                : `chime-doc://img/?doc=${encodeURIComponent(doc.file)}&src=${encodeURIComponent(src)}`
-              return <img src={url} alt={String(props.alt ?? '')} loading="lazy" onLoad={settle} />
-            },
-            a: (props) => (
-              // 只读视图：外链交系统浏览器，内链不跳转
-              <a
-                {...props}
-                onClick={(e) => {
-                  e.preventDefault()
-                  const href = String(props.href ?? '')
-                  if (/^https?:/.test(href)) window.open(href)
-                }}
-              />
-            )
-          } as Components}
-        >
-          {doc.content ?? ''}
-        </ReactMarkdown>
-      </div>
-      )}
+            }
+            if (lang === 'language-mermaid') {
+              return (
+                <div ref={ref} className={cn(hit && 'doc-hl')}>
+                  <MermaidBlock code={codeText} onSettled={settle} />
+                </div>
+              )
+            }
+            const { node: _n, ...rest } = props
+            return <pre ref={ref as never} className={cn(hit && 'doc-hl')} {...(rest as object)} />
+          },
+          img: (props) => {
+            const src = String(props.src ?? '')
+            const isAbs = /^(https?:|data:|file:|chime-doc:)/.test(src)
+            const url = isAbs
+              ? src
+              : `chime-doc://img/?doc=${encodeURIComponent(doc.file)}&src=${encodeURIComponent(src)}`
+            return <img src={url} alt={String(props.alt ?? '')} loading="lazy" onLoad={settle} />
+          },
+          a: (props) => (
+            // 只读视图：外链交系统浏览器，内链不跳转
+            <a
+              {...props}
+              onClick={(e) => {
+                e.preventDefault()
+                const href = String(props.href ?? '')
+                if (/^https?:/.test(href)) window.open(href)
+              }}
+            />
+          )
+        } as Components}
+      >
+        {doc.content ?? ''}
+      </ReactMarkdown>
     </div>
   )
 }

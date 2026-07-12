@@ -94,6 +94,14 @@ export function initDb(): void {
       chars              INTEGER NOT NULL,
       created_at         INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS artifact (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id TEXT NOT NULL,
+      title           TEXT NOT NULL,
+      columns         TEXT NOT NULL,
+      rows            TEXT NOT NULL,
+      created_at      INTEGER NOT NULL
+    );
   `)
   // 迁移：知识库名称（录入时可自定义）
   try {
@@ -186,7 +194,37 @@ export function createConversation(id: string, model: string, now: number): Conv
 export function deleteConversation(id: string): void {
   db.prepare('DELETE FROM message WHERE conversation_id = ?').run(id)
   db.prepare('DELETE FROM tool_result WHERE conversation_id = ?').run(id) // 结果随会话删除（未启用外键，手工清）
+  db.prepare('DELETE FROM artifact WHERE conversation_id = ?').run(id) // 制品随会话删除
   db.prepare('DELETE FROM conversation WHERE id = ?').run(id)
+}
+
+// ── 制品库（自包含快照：生成那一刻数据完整物化，不依赖结果库）──────────
+
+export interface ArtifactRow {
+  id: number
+  title: string
+  columns: { key: string; label: string }[]
+  rows: Record<string, unknown>[]
+}
+
+export function insertArtifact(row: {
+  conversationId: string
+  title: string
+  columns: { key: string; label: string }[]
+  rows: Record<string, unknown>[]
+}): number {
+  const r = db
+    .prepare('INSERT INTO artifact (conversation_id, title, columns, rows, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(row.conversationId, row.title, JSON.stringify(row.columns), JSON.stringify(row.rows), Date.now())
+  return Number(r.lastInsertRowid)
+}
+
+export function getArtifact(id: number): ArtifactRow | null {
+  const row = db.prepare('SELECT id, title, columns, rows FROM artifact WHERE id = ?').get(id) as
+    | { id: number; title: string; columns: string; rows: string }
+    | undefined
+  if (!row) return null
+  return { ...row, columns: JSON.parse(row.columns), rows: JSON.parse(row.rows) }
 }
 
 // ── 超限结果库（工具结果超限处理机制）────────────────────
@@ -216,10 +254,13 @@ export function insertToolResult(row: {
   return Number(r.lastInsertRowid)
 }
 
-export function getToolResult(id: number, conversationId: string): { content: string; chars: number } | null {
+export function getToolResult(
+  id: number,
+  conversationId: string
+): { content: string; chars: number; structuredContent: string | null } | null {
   const row = db
-    .prepare('SELECT content, chars FROM tool_result WHERE id = ? AND conversation_id = ?')
-    .get(id, conversationId) as { content: string; chars: number } | undefined
+    .prepare('SELECT content, chars, structured_content AS structuredContent FROM tool_result WHERE id = ? AND conversation_id = ?')
+    .get(id, conversationId) as { content: string; chars: number; structuredContent: string | null } | undefined
   return row ?? null
 }
 

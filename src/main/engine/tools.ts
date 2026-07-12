@@ -9,6 +9,7 @@ import { callMcpTool, getMcpToolList } from '../mcp/client'
 import { SEARCH_TOOL_DESCRIPTION } from './prompts'
 import { AUTH_DENIED, INTERRUPT_NOT_STARTED, ASK_INTERRUPTED, type CardQueue, type AskQuestion } from './cards'
 import { guardSingle, fetchFromResult, FETCH_LIMIT, type OverflowCtx } from './overflow'
+import { createArtifact, type ArtifactRef } from './artifact'
 import type { SourceSnapshot } from './store'
 
 export const SEARCH_LIMIT_PER_TURN = 3 // 工具级闸门（软约束 3 次的硬性面）
@@ -51,7 +52,8 @@ export function makeMcpTools(signal: AbortSignal, cards: CardQueue, overflow: Ov
         if (decision === 'denied') return { denied: AUTH_DENIED }
         if (decision === 'aborted') return { interrupted: INTERRUPT_NOT_STARTED }
         const r = await execMcpTool(name, (args ?? {}) as Record<string, unknown>, signal)
-        return typeof r === 'string' ? guardSingle(overflow, toolCallId, name, r) : r
+        if ('error' in r) return r
+        return guardSingle(overflow, toolCallId, name, r.text, r.structured)
       }
     })
   }
@@ -165,12 +167,12 @@ export function makeAskTool(signal: AbortSignal, cards: CardQueue) {
   })
 }
 
-// 按模型可见名执行 MCP 调用：成功纯文本，失败 { error }
+// 按模型可见名执行 MCP 调用：成功为文本 + 可选结构化数据（服务带 structuredContent 时），失败 { error }
 async function execMcpTool(
   name: string,
   args: Record<string, unknown>,
   signal: AbortSignal
-): Promise<string | { error: string }> {
+): Promise<{ text: string; structured?: unknown } | { error: string }> {
   const m = /^mcp__(\d+)__(.+)$/.exec(name)
   if (!m) return { error: `未知工具：${name}` }
   try {
@@ -180,10 +182,68 @@ async function execMcpTool(
       .map((c) => c.text ?? '')
       .join('\n')
     if (r.isError) return { error: text || '调用失败' }
-    return text
+    return { text, structured: r.structuredContent }
   } catch (e) {
     return { error: `调用失败：${String((e as Error)?.message ?? e).slice(0, 200)}` }
   }
+}
+
+// 「生成制品」内置工具：模型判断用户需要亲眼查看/核对数据时，生成表格制品（对话流出卡、侧板查看）。
+// 免授权（只产出展示内容，不动外部系统）。成功时引擎以制品卡呈现（不出工具步骤行）。
+export const ARTIFACT_TOOL_NAME = 'create_artifact'
+export const ARTIFACT_TOOL_DISPLAY = '生成制品'
+
+const ARTIFACT_TOOL_DESCRIPTION = `把一批行列结构的数据生成表格制品，用户点开在侧板查看全貌。
+
+什么时候用：
+- 用户需要亲眼查看或核对这批数据时（如查出的明细清单、筛选结果）
+- 数据只是你得出结论的材料、结论已经说清时，不要生成
+- 仅适合行列结构的数据（清单、明细、统计行）；散文式内容不适合
+
+数据怎么给（二选一）：
+- data：数据量小时直接给——对象数组（键为列名），或规整的分隔文本
+- ref：数据已存库（有内部取数编号）时只给引用——{ resultId, keyword? 或 start/length? }，系统按引用取数填进制品，你不要誊写数据
+
+使用要求：
+- title 用用户视角起名（如「A公司 2026年6月 账单明细」）；数据是什么、怎么筛的在对话正文里说，制品只装数据本体
+- 生成制品作为回答的收尾动作：卡片出现后简短收束即可，不要再复述表格内容
+- 制品、取数编号都是内部机制，任何给用户看的文字不要提及；直接说「已整理成表格」即可
+- 数据解析不成行列时会返回错误、不生成制品——此时在回答里直接说明或换个方式给出内容`
+
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导
+export function makeArtifactTool(
+  convId: string,
+  onArtifact: (toolCallId: string, info: { id: number; title: string; rowCount: number }) => void
+) {
+  return tool({
+    description: ARTIFACT_TOOL_DESCRIPTION,
+    inputSchema: jsonSchema<{ type: 'table'; title: string; data?: unknown; ref?: ArtifactRef }>({
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['table'], description: '制品类型，本版仅 table（数据表格）' },
+        title: { type: 'string', description: '制品标题，用户视角命名' },
+        data: { description: '直接内容：对象数组（键为列名）或规整分隔文本。与 ref 二选一' },
+        ref: {
+          type: 'object',
+          description: '数据引用：从已存结果取数，数据不经你誊写。与 data 二选一',
+          properties: {
+            resultId: { type: 'number', description: '内部取数编号（#N 传 N）' },
+            keyword: { type: 'string', description: '只取包含关键词的行（可选）' },
+            start: { type: 'number', description: '起始字符位置（可选）' },
+            length: { type: 'number', description: '长度（可选）' }
+          },
+          required: ['resultId']
+        }
+      },
+      required: ['type', 'title']
+    }),
+    execute: async (args, { toolCallId }) => {
+      const r = createArtifact(convId, args ?? {})
+      if ('error' in r) return r
+      onArtifact(toolCallId, r)
+      return `制品已生成（${r.rowCount} 行），卡片已展示给用户。简短收束即可，不要复述表格内容。`
+    }
+  })
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导

@@ -17,10 +17,13 @@ import {
   makeMcpTools,
   makeAskTool,
   makeFetchResultTool,
+  makeArtifactTool,
   ASK_TOOL_NAME,
   ASK_TOOL_DISPLAY,
   FETCH_TOOL_NAME,
   FETCH_TOOL_DISPLAY,
+  ARTIFACT_TOOL_NAME,
+  ARTIFACT_TOOL_DISPLAY,
   TOOL_REQUEST_HARD_LIMIT,
   STEP_COUNT_LIMIT,
   type TurnToolContext
@@ -224,11 +227,15 @@ async function streamCore(core: {
   const sessionBase = sessionFullResultChars(convId)
   const gatedSteps = new Set<number>() // 总量闸按步只跑一次
 
-  // 工具组装：内置（询问用户、查结果集常备，挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
+  // 制品：成功的生成调用不出工具步骤行，tool-result 时把该 item 换成制品卡（成果即过程）
+  const artifacts = new Map<string, { id: number; title: string; rowCount: number }>()
+
+  // 工具组装：内置（询问用户、查结果集、生成制品常备，挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
   const mcp = makeMcpTools(controller.signal, cards, overflow)
   const turnTools: Record<string, Tool> = { ...mcp.tools }
   turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
   turnTools[FETCH_TOOL_NAME] = makeFetchResultTool(convId)
+  turnTools[ARTIFACT_TOOL_NAME] = makeArtifactTool(convId, (toolCallId, info) => artifacts.set(toolCallId, info))
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
   // 已启用但连不上的服务：提示一句，本轮按无该服务工具继续，不阻断对话
   const down = unavailableMcpServiceNames()
@@ -351,7 +358,13 @@ async function streamCore(core: {
             t: 'tool',
             name: part.toolName,
             id: part.toolCallId,
-            display: isAsk ? ASK_TOOL_DISPLAY : part.toolName === FETCH_TOOL_NAME ? FETCH_TOOL_DISPLAY : meta?.display,
+            display: isAsk
+              ? ASK_TOOL_DISPLAY
+              : part.toolName === FETCH_TOOL_NAME
+                ? FETCH_TOOL_DISPLAY
+                : part.toolName === ARTIFACT_TOOL_NAME
+                  ? ARTIFACT_TOOL_DISPLAY
+                  : meta?.display,
             desc: meta?.needsAuth ? meta.desc : undefined,
             auth: meta?.needsAuth ? (earlyAuth.get(part.toolCallId) ?? 'pending') : undefined,
             ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
@@ -366,6 +379,13 @@ async function streamCore(core: {
         case 'tool-result': {
           const idx = toolItemIndex.get(part.toolCallId)
           if (idx === undefined) break
+          // 制品生成成功：工具步骤行原地换成制品卡（成果即过程；失败保持普通工具行带错误）
+          const art = artifacts.get(part.toolCallId)
+          if (art) {
+            items[idx] = { t: 'artifact', ...art }
+            emit({ type: 'item-done', streamId, index: idx, item: items[idx] })
+            break
+          }
           const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
           // 超限结果：item 存摘要（全量在结果库），resultRef 指向结果编号
           item.result = lateSummaries.get(part.toolCallId) ?? part.output

@@ -25,10 +25,22 @@ export interface OverflowCtx {
   turnFullChars: number // 本轮已全文交给模型的结果字数（总量闸增量）
 }
 
-// 单结果闸：超限即全量落库，返回摘要替代原文
-export function guardSingle(ctx: OverflowCtx, toolCallId: string, toolName: string, text: string): string {
+// 单结果闸：超限即全量落库（结构化数据一并存，制品第一层解析用），返回摘要替代原文
+export function guardSingle(
+  ctx: OverflowCtx,
+  toolCallId: string,
+  toolName: string,
+  text: string,
+  structured?: unknown
+): string {
   if (text.length <= RESULT_LIMIT) return text
-  const id = insertToolResult({ conversationId: ctx.convId, toolCallId, toolName, content: text })
+  const id = insertToolResult({
+    conversationId: ctx.convId,
+    toolCallId,
+    toolName,
+    content: text,
+    structuredContent: structured === undefined ? null : JSON.stringify(structured)
+  })
   ctx.refs.set(toolCallId, id)
   return overflowSummary(id, text)
 }

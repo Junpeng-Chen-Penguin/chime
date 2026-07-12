@@ -67,6 +67,7 @@ const api = {
   setConversationKb: (input: { id: string; enabled: boolean }) =>
     ipcRenderer.invoke('conv:setKb', input),
   openDoc: (filePath: string) => ipcRenderer.invoke('doc:open', filePath),
+  getArtifact: (id: number) => ipcRenderer.invoke('artifact:get', id),
   onKbProgress: (cb: (p: unknown) => void): (() => void) => {
     const h = (_e: IpcRendererEvent, p: unknown): void => cb(p)
     ipcRenderer.on('kb:progress', h)

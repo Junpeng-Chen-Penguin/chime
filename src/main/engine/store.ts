@@ -36,6 +36,7 @@ export type TurnItem =
       ms?: number
     }
   | { t: 'sources'; list: SourceSnapshot[] }
+  | { t: 'artifact'; id: number; title: string; rowCount: number } // 制品卡（成功的生成调用不出工具步骤行，成果即过程）
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
 // waiting = 等卡中（弹卡即落库的中间态）；interrupted = 应用退出打断、启动修复后收场
@@ -170,6 +171,10 @@ export function repairConversation(
 function summarizeToolCalls(items: TurnItem[]): string {
   const lines: string[] = []
   for (const it of items) {
+    if (it.t === 'artifact') {
+      lines.push(`本轮已为用户生成表格制品《${it.title}》（${it.rowCount} 行），用户可随时点开查看`)
+      continue
+    }
     if (it.t !== 'tool') continue
     if (it.name === 'search_knowledge_base') {
       const result = it.result as { results?: { file: string }[]; denied?: string; interrupted?: string } | undefined

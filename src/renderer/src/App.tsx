@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
 import SettingsDialog from './components/SettingsDialog'
-import SidePanel, { type DocPanelData } from './components/SidePanel'
+import SidePanel, { DocContent, type DocPanelData } from './components/SidePanel'
+import { ArtifactContent } from './components/ArtifactPanel'
 import ConfirmDialog from './components/ConfirmDialog'
+import { Table2 } from 'lucide-react'
 import { useChat, type Msg, type MsgStatus } from './hooks/useChat'
 import type { Conversation, PersistedMessage } from './types'
-import type { SourceRef, TurnItem } from '../../preload/index.d'
+import type { SourceRef, TurnItem, ArtifactView } from '../../preload/index.d'
 
 const toMsg = (p: PersistedMessage): Msg => ({
   id: p.id,
@@ -35,8 +37,10 @@ function App(): React.JSX.Element {
   const [inputs, setInputs] = useState<Record<string, string>>({})
   // 知识库：全局状态 + 草稿会话的选用意向（发首条消息时定性）
   const [kbState, setKbState] = useState<'none' | 'busy' | 'ready'>('none')
-  // 侧板（本版唯一内容：来源文档阅读）
-  const [doc, setDoc] = useState<DocPanelData | null>(null)
+  // 侧板：一个容器、单一内容位（来源文档阅读 / 制品表格查看，结构上互斥）
+  const [panel, setPanel] = useState<
+    { kind: 'doc'; doc: DocPanelData } | { kind: 'artifact'; artifact: ArtifactView } | null
+  >(null)
   const [kbName, setKbName] = useState('业务知识库')
   const [kbDraftSel, setKbDraftSel] = useState<Record<string, boolean>>({})
 
@@ -57,7 +61,7 @@ function App(): React.JSX.Element {
 
   // 会话变更（切换 / 新建 / 删除当前）统一关闭侧板——内容与原会话强相关
   useEffect(() => {
-    setDoc(null)
+    setPanel(null)
   }, [activeId])
 
   useEffect(() => window.api.onFullscreen(setFullscreen), [])
@@ -65,19 +69,31 @@ function App(): React.JSX.Element {
   const openSource = useCallback(
     async (file: string, sources: SourceRef[]) => {
       // 重复点击同一来源（同文件同片段）不重开不重滚
+      const cur = panel?.kind === 'doc' ? panel.doc : null
       if (
-        doc &&
-        doc.file === file &&
-        doc.sources.map((s) => s.chunkId).join() === sources.map((s) => s.chunkId).join()
+        cur &&
+        cur.file === file &&
+        cur.sources.map((s) => s.chunkId).join() === sources.map((s) => s.chunkId).join()
       )
         return
       const r = await window.api.openDoc(file)
       // 点来源永远打开侧板；异常时由侧板内容区呈现空态（不再用 toast 原地拦截）
-      setDoc(r.ok ? { file, content: r.content, sources } : { file, content: null, sources, error: r.reason })
+      setPanel({
+        kind: 'doc',
+        doc: r.ok ? { file, content: r.content, sources } : { file, content: null, sources, error: r.reason }
+      })
       setCollapsed(true) // 侧板打开 → 侧边栏自动收起
     },
-    [doc]
+    [panel]
   )
+
+  // 点制品卡 → 侧板换制品内容（同一容器）
+  const openArtifact = useCallback(async (id: number) => {
+    const a = await window.api.getArtifact(id)
+    if (!a) return
+    setPanel({ kind: 'artifact', artifact: a })
+    setCollapsed(true)
+  }, [])
 
   const refresh = useCallback(() => {
     window.api.listConversations().then(setConversations)
@@ -214,9 +230,21 @@ function App(): React.JSX.Element {
         onOpenSource={openSource}
         onRespondCard={chat.respondCard}
         onRespondAsk={chat.respondAsk}
+        onOpenArtifact={openArtifact}
       />
 
-      {doc && <SidePanel doc={doc} onClose={() => setDoc(null)} />}
+      {panel && (
+        <SidePanel
+          icon={panel.kind === 'artifact' ? <Table2 className="size-4 flex-none text-muted-foreground" /> : undefined}
+          title={
+            panel.kind === 'doc' ? (panel.doc.file.split('/').pop() ?? '').replace(/\.md$/, '') : panel.artifact.title
+          }
+          subtitle={panel.kind === 'doc' ? panel.doc.file : `${panel.artifact.totalRows} 行`}
+          onClose={() => setPanel(null)}
+        >
+          {panel.kind === 'doc' ? <DocContent doc={panel.doc} /> : <ArtifactContent artifact={panel.artifact} />}
+        </SidePanel>
+      )}
 
       <SettingsDialog
         open={settingsOpen}

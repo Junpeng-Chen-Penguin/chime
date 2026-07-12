@@ -17,7 +17,8 @@ import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orches
 import { respondCard, respondAskCard, type AskOutcome } from './engine/cards'
 import { lastUserText, deleteLastAssistant, repairConversation } from './engine/store'
 import { getKb, kbStats, setConversationKb, setKbMeta, resetKb } from './db'
-import { listMcpServices, getMcpService, saveMcpService, deleteMcpService } from './db'
+import { listMcpServices, getMcpService, saveMcpService, deleteMcpService, getArtifact } from './db'
+import { TABLE_RENDER_CAP } from './engine/artifact'
 import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
 import { kbBusy, runIndexJob, validateRepoPath, getLastSummary } from './kb'
 
@@ -196,6 +197,19 @@ export function registerIpc(): void {
       return testMcpConnection(input.url, headers)
     }
   )
+
+  // 制品查看（侧板表格视图）：渲染行数设上限防卡，数据完整在库
+  ipcMain.handle('artifact:get', (_e, id: number) => {
+    const a = getArtifact(id)
+    if (!a) return null
+    return {
+      id: a.id,
+      title: a.title,
+      columns: a.columns,
+      rows: a.rows.slice(0, TABLE_RENDER_CAP),
+      totalRows: a.rows.length
+    }
+  })
 
   // 打开来源文档（侧板阅读视图）：读磁盘现状；校验片段用消息自带的原文快照，此处不查库
   ipcMain.handle('doc:open', (_e, filePath: string) => {

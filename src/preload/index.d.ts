@@ -78,6 +78,7 @@ export type TurnItem =
       ms?: number
     }
   | { t: 'sources'; list: SourceRef[] }
+  | { t: 'artifact'; id: number; title: string; rowCount: number } // 制品卡
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
 export type ChatEvent =
@@ -209,7 +210,17 @@ export interface ChimeApi {
   kbRemove: () => Promise<{ ok: boolean; error?: string }>
   setConversationKb: (input: { id: string; enabled: boolean }) => Promise<void>
   openDoc: (filePath: string) => Promise<DocOpenResult>
+  getArtifact: (id: number) => Promise<ArtifactView | null>
   onKbProgress: (cb: (p: KbProgress) => void) => () => void
+}
+
+// 制品查看数据（侧板表格视图；rows 已按渲染上限截断，totalRows 为完整行数）
+export interface ArtifactView {
+  id: number
+  title: string
+  columns: { key: string; label: string }[]
+  rows: Record<string, unknown>[]
+  totalRows: number
 }
 
 declare global {

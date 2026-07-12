@@ -12,6 +12,7 @@ import {
   Info,
   Sparkles,
   FileText,
+  Table,
   X
 } from 'lucide-react'
 import { cn, stripCitations } from '@/lib/utils'
@@ -50,6 +51,7 @@ interface Props {
   onOpenSource: (file: string, sources: SourceRef[]) => void
   onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
   onRespondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
+  onOpenArtifact: (id: number) => void
 }
 
 export default function ChatArea({
@@ -77,7 +79,8 @@ export default function ChatArea({
   onToggleKb,
   onOpenSource,
   onRespondCard,
-  onRespondAsk
+  onRespondAsk,
+  onOpenArtifact
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
   const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
@@ -163,6 +166,7 @@ export default function ChatArea({
                         onRetry={onRetry}
                         onOpenSource={onOpenSource}
                         onRespondCard={onRespondCard}
+                        onOpenArtifact={onOpenArtifact}
                       />
                     )
                   )}
@@ -294,13 +298,15 @@ function AssistantMsg({
   isLast,
   onRetry,
   onOpenSource,
-  onRespondCard
+  onRespondCard,
+  onOpenArtifact
 }: {
   m: Msg
   isLast: boolean
   onRetry: () => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
   onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
+  onOpenArtifact: (id: number) => void
 }): React.JSX.Element {
   const streaming = m.status === 'streaming'
   const finished = m.status === 'done' || m.status === 'stopped' || m.status === 'interrupted'
@@ -349,6 +355,26 @@ function AssistantMsg({
                   <AuthCard item={it} onRespond={onRespondCard} />
                 )}
               </div>
+            )
+          case 'artifact':
+            // 制品卡：Chime 渲染，卡本身就是这次调用的展示（成果即过程）。
+            // 可点性靠样式表达（悬停浮起 + 右侧箭头），不写操作说明文案
+            return (
+              <button
+                key={i}
+                onClick={() => onOpenArtifact(it.id)}
+                className="group flex w-full max-w-[440px] items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-ring/50 hover:shadow-[0_2px_8px_rgba(0,0,0,0.08)]"
+              >
+                <span className="grid size-9 flex-none place-items-center rounded-lg bg-primary/10">
+                  <Table className="size-[18px] text-primary" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-medium text-foreground">{it.title}</span>
+                  {/* 类型由图标表达，文字只补图标说不了的信息（规模） */}
+                  <span className="block text-[12px] text-muted-foreground">{it.rowCount} 行</span>
+                </span>
+                <ChevronRight className="size-4 flex-none text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+              </button>
             )
           case 'boundary':
             return it.kind === 'limit' ? (
