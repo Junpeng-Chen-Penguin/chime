@@ -13,8 +13,9 @@ import {
   setConversationTitle
 } from './db'
 import { detect, listModels, generateTitle } from './ai'
-import { runTurn, stopTurn, type ChatEvent } from './engine/orchestrator'
-import { lastUserText, deleteLastAssistant } from './engine/store'
+import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
+import { respondCard } from './engine/cards'
+import { lastUserText, deleteLastAssistant, repairConversation } from './engine/store'
 import { getKb, kbStats, setConversationKb, setKbMeta, resetKb } from './db'
 import { listMcpServices, getMcpService, saveMcpService, deleteMcpService } from './db'
 import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
@@ -85,6 +86,13 @@ export function registerIpc(): void {
   ipcMain.on('chat:stop', (_e, streamId: string) => {
     stopTurn(streamId)
   })
+  // 授权卡回应：路由到该轮的卡片队列（只认队首，过期回应静默忽略）
+  ipcMain.on(
+    'chat:card-response',
+    (_e, payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' }) => {
+      respondCard(payload.streamId, payload.toolCallId, payload.decision)
+    }
+  )
 
   // 会话管理
   ipcMain.handle('conv:list', () => listConversations())
@@ -96,7 +104,11 @@ export function registerIpc(): void {
   ipcMain.handle('conv:rename', (_e, input: { id: string; title: string }) =>
     setConversationTitle(input.id, input.title, false)
   )
-  ipcMain.handle('conv:messages', (_e, id: string) => getMessages(id))
+  // 打开会话先做启动修复（配对检查，幂等）：等待回应的卡随消息原样返回，执行中被强退的调用补三级文案
+  ipcMain.handle('conv:messages', (_e, id: string) => {
+    repairConversation(id, REPAIR_TEXTS)
+    return getMessages(id)
+  })
 
   // 知识库
   ipcMain.handle('kb:get', () => {

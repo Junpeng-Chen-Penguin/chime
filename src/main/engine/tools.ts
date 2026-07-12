@@ -7,6 +7,7 @@ import type { Tool } from 'ai'
 import { retrieve } from '../retrieve'
 import { callMcpTool, getMcpToolList } from '../mcp/client'
 import { SEARCH_TOOL_DESCRIPTION } from './prompts'
+import { AUTH_DENIED, INTERRUPT_NOT_STARTED, type CardQueue } from './cards'
 import type { SourceSnapshot } from './store'
 
 export const SEARCH_LIMIT_PER_TURN = 3 // 工具级闸门（软约束 3 次的硬性面）
@@ -21,37 +22,59 @@ export interface TurnToolContext {
   searches: number
 }
 
+// 注册表元信息（统一工具格式的落点）：展示名、用途（服务自带描述）、需要授权
+export interface ToolMeta {
+  display: string
+  desc: string
+  needsAuth: boolean
+}
+
 // MCP 工具动态注册：模型可见名 mcp__服务id__工具名（重名天然隔离），展示名「服务名:工具名」。
-// 结果原样交回：成功为纯文本（存储不归一），失败为 { error }（模型据此重试、换路或说明）。
-// 授权闸属 Case 3，联调期放行：execute 直接调用。
-export function makeMcpTools(signal: AbortSignal): {
+// 结果原样交回：成功为纯文本（存储不归一），失败为 { error }（模型据此重试、换路或说明），
+// 拒绝授权为 { denied }、停止未执行为 { interrupted }（历史映射原样保留文案）。
+// MCP 工具统一需授权：execute 先过卡片队列，同意才发起调用。
+export function makeMcpTools(signal: AbortSignal, cards: CardQueue): {
   tools: Record<string, Tool>
-  displays: Map<string, string> // 模型可见名 → 展示名（随 tool item 落库，渲染层不反查）
+  meta: Map<string, ToolMeta> // 模型可见名 → 元信息（display/desc 随 tool item 落库，渲染层不反查）
 } {
   const tools: Record<string, Tool> = {}
-  const displays = new Map<string, string>()
+  const meta = new Map<string, ToolMeta>()
   for (const t of getMcpToolList()) {
     const name = `mcp__${t.serviceId}__${t.name}`
-    displays.set(name, `${t.serviceName}:${t.name}`)
+    meta.set(name, { display: `${t.serviceName}:${t.name}`, desc: t.description, needsAuth: true })
     tools[name] = tool({
       description: t.description,
       inputSchema: jsonSchema(t.inputSchema as Parameters<typeof jsonSchema>[0]),
-      execute: async (args) => {
-        try {
-          const r = await callMcpTool(t.serviceId, t.name, (args ?? {}) as Record<string, unknown>, signal)
-          const text = ((r.content ?? []) as { type: string; text?: string }[])
-            .filter((c) => c.type === 'text')
-            .map((c) => c.text ?? '')
-            .join('\n')
-          if (r.isError) return { error: text || '调用失败' }
-          return text
-        } catch (e) {
-          return { error: `调用失败：${String((e as Error)?.message ?? e).slice(0, 200)}` }
-        }
+      execute: async (args, { toolCallId }) => {
+        const decision = await cards.request(toolCallId, signal)
+        if (decision === 'denied') return { denied: AUTH_DENIED }
+        if (decision === 'aborted') return { interrupted: INTERRUPT_NOT_STARTED }
+        return execMcpTool(name, (args ?? {}) as Record<string, unknown>, signal)
       }
     })
   }
-  return { tools, displays }
+  return { tools, meta }
+}
+
+// 按模型可见名执行 MCP 调用：成功纯文本，失败 { error }
+async function execMcpTool(
+  name: string,
+  args: Record<string, unknown>,
+  signal: AbortSignal
+): Promise<string | { error: string }> {
+  const m = /^mcp__(\d+)__(.+)$/.exec(name)
+  if (!m) return { error: `未知工具：${name}` }
+  try {
+    const r = await callMcpTool(Number(m[1]), m[2], args, signal)
+    const text = ((r.content ?? []) as { type: string; text?: string }[])
+      .filter((c) => c.type === 'text')
+      .map((c) => c.text ?? '')
+      .join('\n')
+    if (r.isError) return { error: text || '调用失败' }
+    return text
+  } catch (e) {
+    return { error: `调用失败：${String((e as Error)?.message ?? e).slice(0, 200)}` }
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TurnItem } from '../../../preload/index.d'
 
-export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error'
+// interrupted = 应用退出打断、启动修复后收场（仅出现在水合的历史消息里）
+export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error' | 'interrupted'
 
 export interface Msg {
   id: string
@@ -25,6 +26,7 @@ export interface ChatHandle {
   send: (convId: string, model: string, text: string) => void
   stop: () => void
   retry: (convId: string, model: string) => void
+  respondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
 }
 
 // chat:event 的 items 归约器：对话历史所有权在主进程，这里只维护展示态
@@ -77,6 +79,7 @@ export function useChat(onChange?: () => void): ChatHandle {
           })
           return
         case 'item-done':
+        case 'item-update':
           patch(r.convId, r.msgId, (m) => {
             const items = [...(m.items ?? [])]
             items[evt.index] = evt.item
@@ -179,5 +182,11 @@ export function useChat(onChange?: () => void): ChatHandle {
     if (r) window.api.stopChat(r.streamId)
   }, [])
 
-  return { threads, streamingConv, contextRatio, hydrate, send, stop, retry }
+  // 授权卡回应：路由到当前流（等待期间没有活跃请求，但轮未结束、streamId 仍有效）
+  const respondCard = useCallback((toolCallId: string, decision: 'approved' | 'denied') => {
+    const r = routeRef.current
+    if (r) window.api.cardRespond({ streamId: r.streamId, toolCallId, decision })
+  }, [])
+
+  return { threads, streamingConv, contextRatio, hydrate, send, stop, retry, respondCard }
 }

@@ -151,7 +151,6 @@ function buildServer() {
 
 // ── HTTP 入口（无状态模式：每请求一对 server/transport）──
 const httpServer = http.createServer(async (req, res) => {
-  if (DELAY) await new Promise((r) => setTimeout(r, DELAY))
   if (req.headers['authorization'] !== TOKEN) {
     res.writeHead(401, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ error: 'unauthorized' }))
@@ -160,6 +159,8 @@ const httpServer = http.createServer(async (req, res) => {
   const chunks = []
   for await (const c of req) chunks.push(c)
   const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined
+  // 延迟只作用于工具调用（模拟慢执行），握手与清单不拖——否则连接层直接超时
+  if (DELAY && body?.method === 'tools/call') await new Promise((r) => setTimeout(r, DELAY))
   const server = buildServer()
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined })
   res.on('close', () => {

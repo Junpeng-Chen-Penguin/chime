@@ -20,6 +20,7 @@ interface Props {
   models: string[]
   onPickModel: (m: string) => void
   sending: boolean
+  inputDisabled?: boolean // 等待授权中：输入框禁用，只能操作卡片或点停止
   value: string
   onChange: (v: string) => void
   onSubmit: () => void
@@ -36,6 +37,7 @@ export default function Composer({
   models,
   onPickModel,
   sending,
+  inputDisabled,
   value,
   onChange,
   onSubmit,
@@ -74,6 +76,7 @@ export default function Composer({
             ref={taRef}
             rows={1}
             value={value}
+            disabled={inputDisabled}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={(e) => {
               // 输入法合成中（选拼音/英文候选词）的 Enter 是确认候选，不该触发发送
@@ -83,8 +86,8 @@ export default function Composer({
                 onSubmit()
               }
             }}
-            placeholder="Chime in…"
-            className="block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-base leading-[1.6] outline-none placeholder:text-muted-foreground"
+            placeholder={inputDisabled ? '等待授权中，请先处理上方卡片' : 'Chime in…'}
+            className="block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-base leading-[1.6] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           />
           <div className="flex items-center justify-between px-3 pb-3">
             {/* 左下：知识库控件（未选=图标，点击弹选择器 / 已选=浅蓝胶囊 / 定性后胶囊无 × / 不可用置灰） */}

@@ -3,7 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 // 统一事件通道 chat:event：一轮 = turn-start → item-* 序列 → turn-done（结构见主进程 engine）
 interface ChatEvent {
-  type: 'turn-start' | 'item-start' | 'item-delta' | 'item-done' | 'turn-done' | 'notice'
+  type: 'turn-start' | 'item-start' | 'item-delta' | 'item-done' | 'item-update' | 'turn-done' | 'notice'
   streamId: string
   [k: string]: unknown
 }
@@ -33,6 +33,9 @@ const api = {
   retryChat: (payload: { streamId: string; convId: string; model: string }) =>
     ipcRenderer.send('chat:retry', payload),
   stopChat: (streamId: string) => ipcRenderer.send('chat:stop', streamId),
+  // 授权卡回应（同意 / 拒绝）
+  cardRespond: (payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' }) =>
+    ipcRenderer.send('chat:card-response', payload),
 
   // MCP 服务：mcp:status 为无载荷提醒，收到后重新拉列表即可
   mcpList: () => ipcRenderer.invoke('mcp:list'),

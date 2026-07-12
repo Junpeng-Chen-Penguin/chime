@@ -45,6 +45,7 @@ interface Props {
   kbLocked: boolean
   onToggleKb: () => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
+  onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
 }
 
 export default function ChatArea({
@@ -70,12 +71,17 @@ export default function ChatArea({
   kbSelected,
   kbLocked,
   onToggleKb,
-  onOpenSource
+  onOpenSource,
+  onRespondCard
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
   const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
   const overLimit = input.length > SEND_CHAR_LIMIT
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
+  // 等待授权中：输入框禁用（用户只能操作卡片或点停止）；提问卡（后续模块）保持开放
+  const lastMsg = messages[messages.length - 1]
+  const authWaiting =
+    sending && (lastMsg?.items ?? []).some((it) => it.t === 'tool' && it.auth === 'pending')
 
   const composer = (
     <Composer
@@ -83,6 +89,7 @@ export default function ChatArea({
       models={models}
       onPickModel={onPickModel}
       sending={sending}
+      inputDisabled={authWaiting}
       value={input}
       onChange={onInput}
       onSubmit={() => {
@@ -143,6 +150,7 @@ export default function ChatArea({
                         isLast={m.id === lastAssistantId}
                         onRetry={onRetry}
                         onOpenSource={onOpenSource}
+                        onRespondCard={onRespondCard}
                       />
                     )
                   )}
@@ -270,16 +278,20 @@ function AssistantMsg({
   m,
   isLast,
   onRetry,
-  onOpenSource
+  onOpenSource,
+  onRespondCard
 }: {
   m: Msg
   isLast: boolean
   onRetry: () => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
+  onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
 }): React.JSX.Element {
   const streaming = m.status === 'streaming'
-  const finished = m.status === 'done' || m.status === 'stopped'
+  const finished = m.status === 'done' || m.status === 'stopped' || m.status === 'interrupted'
   const items = m.items ?? []
+  // 授权排队：第一个待授权的调用行下挂卡，其余 pending 行是排队；一次只面对一个决定
+  const pendingIdx = streaming ? items.findIndex((it) => it.t === 'tool' && it.auth === 'pending') : -1
 
   // 位置即语义：末位非空 text 为最终回答，之前的 text 为意图叙述
   const lastTextIdx = useMemo(() => {
@@ -314,7 +326,14 @@ function AssistantMsg({
               <IntentRow key={i} text={it.text} />
             )
           case 'tool':
-            return <ToolRow key={i} item={it} />
+            return (
+              <div key={i} className="flex flex-col gap-2">
+                <ToolRow item={it} active={i === pendingIdx} />
+                {i === pendingIdx && (
+                  <AuthCard item={it} onRespond={onRespondCard} />
+                )}
+              </div>
+            )
           case 'boundary':
             return it.kind === 'limit' ? (
               <PlainRow key={i} text="已达工具调用上限，基于已有结果作答" />
@@ -323,9 +342,13 @@ function AssistantMsg({
             return null // sources 在回答之后统一渲染
         }
       })}
-      {/* 整轮进度指示：挂在当前助手消息末尾，紧随已有内容——无内容时就贴着用户消息，不留空隙 */}
-      {streaming && <ProgressIndicator />}
-      {m.status === 'stopped' && <PlainRow text="已停止" />}
+      {/* 整轮进度指示：挂在当前助手消息末尾，紧随已有内容——无内容时就贴着用户消息，不留空隙。
+          等待授权期间没有请求在跑，不显示进度指示 */}
+      {streaming && pendingIdx < 0 && <ProgressIndicator />}
+      {/* 停止是用户主动收场：说清是谁停的（区别于故障），并顺带指路（参照 Claude Code 的 Interrupted 标记） */}
+      {m.status === 'stopped' && <PlainRow text="你停止了这次回答，需要继续可以直接说" />}
+      {/* 应用退出打断（启动修复后收场）：与用户主动停止分开交代 */}
+      {m.status === 'interrupted' && <PlainRow text="本轮在应用退出时被中断" />}
       {!streaming && sources && sources.list.length > 0 && (
         <SourcesFooter list={sources.list} onOpen={onOpenSource} />
       )}
@@ -345,15 +368,16 @@ function AssistantMsg({
 // 过程层统一尺度：14px、弱化色；类型区分只靠行首标记，不靠字号变化
 const PROCESS_ROW = 'text-[14px] leading-[1.7] text-muted-foreground'
 
-// 元素行首的圆点。tone：单步状态点三态 + 中性缺省（对齐 14px 首行光学中心）
-function Dot({ tone = 'neutral' }: { tone?: 'neutral' | 'running' | 'error' }): React.JSX.Element {
+// 元素行首的圆点。tone：单步状态点 + 中性缺省（对齐 14px 首行光学中心）；queued = 空心（排队中）
+function Dot({ tone = 'neutral' }: { tone?: 'neutral' | 'running' | 'error' | 'queued' }): React.JSX.Element {
   return (
     <span
       className={cn(
         'mt-[8px] size-[6px] flex-none rounded-full',
         tone === 'running' && 'animate-pulse bg-primary',
         tone === 'neutral' && 'bg-foreground/25',
-        tone === 'error' && 'bg-destructive'
+        tone === 'error' && 'bg-destructive',
+        tone === 'queued' && 'border border-foreground/35 bg-transparent'
       )}
     />
   )
@@ -420,10 +444,20 @@ function ThinkRow({ text, running }: { text: string; running: boolean }): React.
   )
 }
 
-// 工具步骤成对两行（统一框架）：调用行（状态点三态）+ 缩进结果行（点开详情）。
+// 工具步骤成对两行（统一框架）：调用行（状态点）+ 缩进结果行（点开详情）。
 // 差异只在摘要文案与详情内容：检索为命中列表，通用工具（MCP 等）为参数 + 结果。
-function ToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JSX.Element {
-  return item.name === 'search_knowledge_base' ? <SearchToolRow item={item} /> : <GenericToolRow item={item} />
+function ToolRow({
+  item,
+  active
+}: {
+  item: Extract<TurnItem, { t: 'tool' }>
+  active: boolean // 当前弹卡行（授权排队中一次只有一行活跃）
+}): React.JSX.Element {
+  return item.name === 'search_knowledge_base' ? (
+    <SearchToolRow item={item} />
+  ) : (
+    <GenericToolRow item={item} active={active} />
+  )
 }
 
 // 结果规模口径（与主进程摘要一致的读法）：千字 / 万字取整
@@ -433,45 +467,78 @@ function formatChars(n: number): string {
   return `约 ${Math.round(n / 10000)} 万字`
 }
 
-function GenericToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JSX.Element {
+function GenericToolRow({
+  item,
+  active
+}: {
+  item: Extract<TurnItem, { t: 'tool' }>
+  active: boolean
+}): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const r = item.result as string | { error: string } | undefined
-  const running = r === undefined
+  const r = item.result as string | { error?: string; denied?: string; interrupted?: string } | undefined
+  const waiting = item.auth === 'pending' // 等待授权（active）或排队中
+  const running = r === undefined && !waiting
   const failed = typeof r === 'object' && !!r?.error
+  const interrupted = typeof r === 'object' && !!r?.interrupted
   const args = Object.entries(item.args ?? {})
   // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")
   const firstArg = args.length ? args[0][1] : undefined
   const argPreview = firstArg === undefined ? '' : JSON.stringify(firstArg)
-  const summary = running ? '调用中…' : failed ? '调用失败' : `返回${formatChars((r as string).length)}`
+  // 卡片收场折叠为记录：行首加授权去向（已授权 / 已拒绝 / 未回应）
+  const prefix =
+    item.auth === 'denied'
+      ? '已拒绝：'
+      : item.auth === 'unanswered'
+        ? '未回应：'
+        : item.auth === 'approved'
+          ? '已授权：'
+          : ''
+  // 拒绝 / 未回应没有执行过程，单行记录即收场，不出结果行
+  const noResultLine = item.auth === 'denied' || item.auth === 'unanswered'
+  const summary = waiting
+    ? active
+      ? '等待授权'
+      : '排队中'
+    : running
+      ? '调用中…'
+      : failed
+        ? '调用失败'
+        : interrupted
+          ? '已中断'
+          : `返回${formatChars((r as string).length)}`
+  const expandable = !waiting && !running
   // 结果详情：规整 JSON 自动格式化便于阅读
   const resultText = useMemo(() => {
-    if (running) return ''
-    if (failed) return (r as { error: string }).error
+    if (!r) return ''
+    if (typeof r === 'object') return r.error ?? r.interrupted ?? ''
     try {
-      return JSON.stringify(JSON.parse(r as string), null, 2)
+      return JSON.stringify(JSON.parse(r), null, 2)
     } catch {
-      return r as string
+      return r
     }
-  }, [r, running, failed])
+  }, [r])
   return (
     <div className="flex gap-2.5">
-      <Dot tone={running ? 'running' : failed ? 'error' : 'neutral'} />
+      <Dot tone={waiting && active ? 'running' : waiting ? 'queued' : running ? 'running' : failed ? 'error' : 'neutral'} />
       <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
         <div className="truncate">
+          {prefix}
           {item.display ?? item.name}({argPreview})
         </div>
-        <button
-          onClick={() => !running && setOpen((o) => !o)}
-          className={cn(
-            '-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5',
-            !running && 'transition-colors hover:bg-muted'
-          )}
-        >
-          <span className={cn('text-muted-foreground/50', failed && 'text-destructive/60')}>⎿</span>
-          <span className={cn(failed && 'font-medium text-destructive')}>{summary}</span>
-          {!running && <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />}
-        </button>
-        {open && !running && (
+        {!noResultLine && (
+          <button
+            onClick={() => expandable && setOpen((o) => !o)}
+            className={cn(
+              '-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5',
+              expandable && 'transition-colors hover:bg-muted'
+            )}
+          >
+            <span className={cn('text-muted-foreground/50', failed && 'text-destructive/60')}>⎿</span>
+            <span className={cn(failed && 'font-medium text-destructive')}>{summary}</span>
+            {expandable && <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />}
+          </button>
+        )}
+        {open && expandable && (
           <div className="mt-1.5 ml-5 rounded-lg border border-border bg-muted/30 px-3.5 py-2.5">
             {args.length > 0 && (
               <>
@@ -496,6 +563,64 @@ function GenericToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): R
   )
 }
 
+// 授权卡（四段式，挂在当前调用行下方）：状态徽标 / 展示名 + 用途（服务描述原样，不经模型转述）/
+// 参数键值全展开（授权卡的目的就是看清即将发生什么，单值过长卡内滚动）/ 拒绝 + 同意（同意为主按钮居右）
+function AuthCard({
+  item,
+  onRespond
+}: {
+  item: Extract<TurnItem, { t: 'tool' }>
+  onRespond: (toolCallId: string, decision: 'approved' | 'denied') => void
+}): React.JSX.Element {
+  const args = Object.entries(item.args ?? {})
+  const respond = (d: 'approved' | 'denied'): void => {
+    if (item.id) onRespond(item.id, d)
+  }
+  return (
+    <div className="ml-4 max-w-[440px] rounded-xl border border-border bg-background px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
+      <div className="flex items-center gap-2 text-[12px] font-medium text-primary">
+        <span className="size-[6px] animate-pulse rounded-full bg-primary" />
+        等待授权
+      </div>
+      <div className="mt-2 text-[14px] font-medium text-foreground">{item.display ?? item.name}</div>
+      {item.desc && (
+        <div className="mt-0.5 line-clamp-3 text-[13px] leading-[1.6] text-muted-foreground">{item.desc}</div>
+      )}
+      {args.length > 0 && (
+        <>
+          <div className="mt-2.5 border-t border-border pt-2.5 text-[12px] font-medium text-muted-foreground">
+            参数
+          </div>
+          <div className="mt-1.5 flex max-h-[200px] flex-col gap-1 overflow-y-auto">
+            {args.map(([k, v]) => (
+              <div key={k} className="flex gap-3 text-[13px]">
+                <span className="w-[104px] flex-none truncate text-muted-foreground">{k}</span>
+                <span className="min-w-0 break-all text-foreground">
+                  {typeof v === 'string' ? v : JSON.stringify(v)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <div className="mt-3 flex justify-end gap-2 border-t border-border pt-3">
+        <button
+          onClick={() => respond('denied')}
+          className="rounded-lg border border-border px-3.5 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          拒绝
+        </button>
+        <button
+          onClick={() => respond('approved')}
+          className="rounded-lg bg-primary px-3.5 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+        >
+          同意
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // 检索步骤（v0.4.0 既有样式）：结果行点击展开命中列表 / 错误说明
 function SearchToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -512,7 +637,9 @@ function SearchToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): Re
           ? '知识库更新中'
           : r.invalid
             ? '未提供检索词'
-            : '检索出错'
+            : r.interrupted
+              ? '已中断'
+              : '检索出错'
   const detail = r?.results?.length
     ? [...new Set(r.results.map((x) => `${x.file.replace(/\.md$/, '')}${x.heading ? ' › ' + x.heading : ''}`))]
     : r?.error
@@ -521,7 +648,9 @@ function SearchToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): Re
         ? [r.denied]
         : r?.notice
           ? [r.notice]
-          : []
+          : r?.interrupted
+            ? [r.interrupted]
+            : []
   return (
     <div className="flex gap-2.5">
       <Dot tone={running ? 'running' : failed ? 'error' : 'neutral'} />

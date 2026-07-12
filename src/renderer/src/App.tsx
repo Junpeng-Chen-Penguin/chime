@@ -196,6 +196,7 @@ function App(): React.JSX.Element {
         models={models}
         onPickModel={(m) => setConvModel((cm) => ({ ...cm, [activeId]: m }))}
         onOpenSource={openSource}
+        onRespondCard={chat.respondCard}
       />
 
       {doc && <SidePanel doc={doc} onClose={() => setDoc(null)} />}

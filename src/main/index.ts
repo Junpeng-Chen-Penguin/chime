@@ -81,8 +81,9 @@ if (process.env.CHIME_TOOL_TEST) {
   app.setPath('userData', join(tmpdir(), 'chime-tool-test'))
 }
 
-// 单实例：重复启动时退出新实例、聚焦已有窗口（避免 dock 里出现多个）
-if (!app.requestSingleInstanceLock()) {
+// 单实例：重复启动时退出新实例、聚焦已有窗口（避免 dock 里出现多个）。
+// 无界面评估入口不占锁：隔离数据目录、随起随退；且强杀测试会留下残锁，占锁会被静默挡掉
+if (!process.argv.includes('--eval') && !app.requestSingleInstanceLock()) {
   app.exit(0)
 }
 
@@ -118,8 +119,10 @@ app.whenReady().then(() => {
           mcp?: { name: string; url: string; headers?: Record<string, string> }[]
           model?: string
           messages: string[]
+          conv?: string // 往既有会话续发（跨重启多轮自测）；缺省新建会话
+          stopAfterMs?: number // 停止路径自测：每轮开跑后定时触发停止（同用户点停止）
         }
-        const { runTurn } = await import('./engine/orchestrator')
+        const { runTurn, stopTurn, REPAIR_TEXTS } = await import('./engine/orchestrator')
         // MCP 用例：预置服务并连接（同名服务已存在则不重复建）
         if (spec.mcp) {
           const existing = listMcpServices()
@@ -140,14 +143,21 @@ app.whenReady().then(() => {
           setKbMeta({ intro: spec.kb.intro })
         }
         const model = spec.model || process.env.CHIME_ENGINE_MODEL || getProvider().defaultModel
-        const convId = `eval-${process.pid}`
-        createConversation(convId, model, Date.now())
-        setConversationKb(convId, !!spec.kb)
         const emit = (e: object): void => {
           process.stdout.write(JSON.stringify(e) + '\n')
         }
+        const convId = spec.conv ?? `eval-${process.pid}`
+        if (!spec.conv) {
+          createConversation(convId, model, Date.now())
+          setConversationKb(convId, !!spec.kb)
+        } else {
+          const store = await import('./engine/store')
+          store.repairConversation(convId, REPAIR_TEXTS) // 与界面打开会话同语义
+        }
         for (let i = 0; i < spec.messages.length; i++) {
-          await runTurn({ streamId: `t${i + 1}`, convId, text: spec.messages[i], model, emit })
+          const streamId = `t${i + 1}`
+          if (spec.stopAfterMs) setTimeout(() => stopTurn(streamId), spec.stopAfterMs)
+          await runTurn({ streamId, convId, text: spec.messages[i], model, emit })
         }
         await closeAllMcp() // 关闭 SSE 长连接，评估进程干净退出
         app.exit(0)

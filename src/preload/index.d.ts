@@ -37,10 +37,12 @@ export interface SearchToolResult {
   denied?: string // 触检索上限
   notice?: string // 知识库暂时不可用
   invalid?: string // 模型发了空检索词、被拦下自愈：非错误，中性显示
+  interrupted?: string // 停止时在途被中断（第二级文案），中性显示
 }
 
-// 通用工具（MCP 等）的返回：成功为纯文本，失败为 { error }
-export type GenericToolResult = string | { error: string }
+// 通用工具（MCP 等）的返回：成功为纯文本，失败为 { error }，
+// 拒绝授权为 { denied }，被打断为 { interrupted }（三级文案）
+export type GenericToolResult = string | { error: string } | { denied: string } | { interrupted: string }
 
 // 一轮的有序过程记录的元素（与主进程 engine/store 的 TurnItem 一致）
 export type TurnItem =
@@ -49,7 +51,10 @@ export type TurnItem =
   | {
       t: 'tool'
       name: string
+      id?: string // toolCallId（授权卡回应路由用）
       display?: string // 展示名（MCP 为「服务名:工具名」），随落库
+      desc?: string // 卡上「用途」：服务自带工具描述原样（仅需授权的调用有）
+      auth?: 'pending' | 'approved' | 'denied' | 'unanswered' // 授权状态（仅需授权的调用有）
       args: Record<string, unknown>
       result?: SearchToolResult | GenericToolResult
       ms?: number
@@ -62,6 +67,7 @@ export type ChatEvent =
   | { type: 'item-start'; streamId: string; index: number; t: TurnItem['t']; item: TurnItem }
   | { type: 'item-delta'; streamId: string; index: number; text: string }
   | { type: 'item-done'; streamId: string; index: number; item: TurnItem }
+  | { type: 'item-update'; streamId: string; index: number; item: TurnItem }
   | {
       type: 'turn-done'
       streamId: string
@@ -159,6 +165,7 @@ export interface ChimeApi {
   sendChat: (payload: { streamId: string; convId: string; text: string; model: string }) => void
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
+  cardRespond: (payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' }) => void
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
   onFullscreen: (cb: (v: boolean) => void) => () => void
   mcpList: () => Promise<McpServiceInfo[]>
