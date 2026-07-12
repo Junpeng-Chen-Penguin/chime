@@ -1,7 +1,7 @@
 // 编排引擎：一轮 = 组装上下文 → streamText 多步循环 → 类型化事件流。
 // 三个消费方共用事件（界面渲染 / 无界面 JSONL 输出），落库节点化：弹卡时 / 卡片回应后 / 轮终结（同一行 UPSERT）。
 // 本文件不依赖 BrowserWindow，界面与能力分离。
-// 双入口：runTurn（新一轮）/ resumeTurn（重启后回应恢复的授权卡，重建消息序列续跑）。
+// 重启后的等待卡不续跑：启动修复把卡作废（repairConversation），用户直接说、模型重新发起（PRD 定稿修订）。
 
 import { streamText, isStepCount } from 'ai'
 import type { ModelMessage, Tool } from 'ai'
