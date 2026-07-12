@@ -14,7 +14,7 @@ import {
 } from './db'
 import { detect, listModels, generateTitle } from './ai'
 import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
-import { respondCard } from './engine/cards'
+import { respondCard, respondAskCard, type AskOutcome } from './engine/cards'
 import { lastUserText, deleteLastAssistant, repairConversation } from './engine/store'
 import { getKb, kbStats, setConversationKb, setKbMeta, resetKb } from './db'
 import { listMcpServices, getMcpService, saveMcpService, deleteMcpService } from './db'
@@ -91,6 +91,13 @@ export function registerIpc(): void {
     'chat:card-response',
     (_e, payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' }) => {
       respondCard(payload.streamId, payload.toolCallId, payload.decision)
+    }
+  )
+  // 提问卡回应（作答 / 直接打字 / 放弃整卡）
+  ipcMain.on(
+    'chat:ask-response',
+    (_e, payload: { streamId: string; toolCallId: string; outcome: Exclude<AskOutcome, { kind: 'aborted' }> }) => {
+      respondAskCard(payload.streamId, payload.toolCallId, payload.outcome)
     }
   )
 

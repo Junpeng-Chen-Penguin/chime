@@ -21,6 +21,7 @@ interface Props {
   onPickModel: (m: string) => void
   sending: boolean
   inputDisabled?: boolean // 等待授权中：输入框禁用，只能操作卡片或点停止
+  askWaiting?: boolean // 提问卡等待中：输入框开放，发送 = 中断提问 + 开启新一轮
   value: string
   onChange: (v: string) => void
   onSubmit: () => void
@@ -38,6 +39,7 @@ export default function Composer({
   onPickModel,
   sending,
   inputDisabled,
+  askWaiting,
   value,
   onChange,
   onSubmit,
@@ -59,7 +61,8 @@ export default function Composer({
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`
   }, [value])
 
-  const canSend = value.trim().length > 0 && !sending
+  // 提问卡等待中输入框开放：有内容时可发送（中断提问、开新一轮），空时右下仍是停止
+  const canSend = value.trim().length > 0 && (!sending || askWaiting)
   const kbDisabledHint =
     kbState === 'none'
       ? '尚无知识库，请到「设置 › 知识库」添加'
@@ -86,7 +89,7 @@ export default function Composer({
                 onSubmit()
               }
             }}
-            placeholder={inputDisabled ? '等待授权中，请先处理上方卡片' : 'Chime in…'}
+            placeholder={inputDisabled ? '等待授权中，请先处理上方卡片' : askWaiting ? '或直接回复……' : 'Chime in…'}
             className="block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-base leading-[1.6] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           />
           <div className="flex items-center justify-between px-3 pb-3">
@@ -180,7 +183,7 @@ export default function Composer({
                 )}
               </div>
 
-              {sending ? (
+              {sending && !(askWaiting && value.trim()) ? (
                 <button
                   onClick={onStop}
                   title="停止生成"

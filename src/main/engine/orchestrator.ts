@@ -15,6 +15,9 @@ import { budgetFor, estimateTokens, recordUsage } from './budget'
 import {
   makeSearchTool,
   makeMcpTools,
+  makeAskTool,
+  ASK_TOOL_NAME,
+  ASK_TOOL_DISPLAY,
   TOOL_REQUEST_HARD_LIMIT,
   STEP_COUNT_LIMIT,
   type TurnToolContext
@@ -25,7 +28,10 @@ import {
   INTERRUPT_NOT_STARTED_EXIT,
   INTERRUPT_LOCAL,
   interruptExternal,
-  type CardDecision
+  ASK_INTERRUPTED,
+  ASK_INTERRUPTED_EXIT,
+  type CardDecision,
+  type AskOutcome
 } from './cards'
 import { unavailableMcpServiceNames } from '../mcp/client'
 import { saveUserMessage, saveAssistantTurn, loadHistoryMessages, type TurnItem, type TurnStatus } from './store'
@@ -54,11 +60,12 @@ export function stopTurn(streamId: string): void {
   turns.get(streamId)?.abort()
 }
 
-// 启动修复的三级文案（第一级等卡作废 / 第三级外部 / 第二级本地），store 不依赖 cards、由调用方传入
+// 启动修复的收场文案（第一级等卡作废 / 第三级外部 / 第二级本地 / 提问卡作废），store 不依赖 cards、由调用方传入
 export const REPAIR_TEXTS = {
   notStarted: INTERRUPT_NOT_STARTED_EXIT,
   external: interruptExternal('应用退出'),
-  local: INTERRUPT_LOCAL
+  local: INTERRUPT_LOCAL,
+  ask: ASK_INTERRUPTED_EXIT
 }
 
 interface SdkError extends Error {
@@ -168,26 +175,49 @@ async function streamCore(core: {
   const toolItemIndex = new Map<string, number>() // toolCallId → items 下标
   const toolStartAt = new Map<string, number>()
 
-  // 授权卡队列：用户决定回来时更新对应 tool item 的授权状态、落库并推送。
-  // 决定可能先于 tool-call 事件到达消费循环（自测钩子同步回应），先记下、建行时补上
+  // 卡片队列（授权卡 + 提问卡共用）：用户回应回来时更新对应 tool item 状态、落库并推送。
+  // 回应可能先于 tool-call 事件到达消费循环（自测钩子同步回应），先记下、建行时补上
   const earlyAuth = new Map<string, 'approved' | 'denied' | 'unanswered'>()
+  const earlyAsk = new Map<string, Extract<TurnItem, { t: 'tool' }>['ask']>()
   const authOf = (d: CardDecision): 'approved' | 'denied' | 'unanswered' =>
     d === 'aborted' ? 'unanswered' : d
-  const cards = new CardQueue(streamId, controller.signal, (toolCallId, decision) => {
-    const idx = toolItemIndex.get(toolCallId)
-    if (idx === undefined) {
-      earlyAuth.set(toolCallId, authOf(decision))
-      return
+  const askOf = (o: AskOutcome): Extract<TurnItem, { t: 'tool' }>['ask'] =>
+    o.kind === 'answers'
+      ? { state: 'answered', answers: o.answers }
+      : o.kind === 'declined'
+        ? { state: 'skipped' }
+        : { state: 'unanswered' }
+  const cards = new CardQueue(
+    streamId,
+    controller.signal,
+    (toolCallId, decision) => {
+      const idx = toolItemIndex.get(toolCallId)
+      if (idx === undefined) {
+        earlyAuth.set(toolCallId, authOf(decision))
+        return
+      }
+      const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
+      item.auth = authOf(decision)
+      if (decision !== 'aborted') persistWaiting() // 卡片回应后节点（停止收场由 catch 统一落库）
+      emit({ type: 'item-update', streamId, index: idx, item })
+    },
+    (toolCallId, outcome) => {
+      const idx = toolItemIndex.get(toolCallId)
+      if (idx === undefined) {
+        earlyAsk.set(toolCallId, askOf(outcome))
+        return
+      }
+      const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
+      item.ask = askOf(outcome)
+      if (outcome.kind !== 'aborted') persistWaiting()
+      emit({ type: 'item-update', streamId, index: idx, item })
     }
-    const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
-    item.auth = authOf(decision)
-    if (decision !== 'aborted') persistWaiting() // 卡片回应后节点（停止收场由 catch 统一落库）
-    emit({ type: 'item-update', streamId, index: idx, item })
-  })
+  )
 
-  // 工具组装：内置（挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
+  // 工具组装：内置（询问用户常备、挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
   const mcp = makeMcpTools(controller.signal, cards)
   const turnTools: Record<string, Tool> = { ...mcp.tools }
+  turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
   // 已启用但连不上的服务：提示一句，本轮按无该服务工具继续，不阻断对话
   const down = unavailableMcpServiceNames()
@@ -250,20 +280,23 @@ async function streamCore(core: {
           endItem()
           break
         case 'tool-call': {
-          // 工具步骤无 delta：item-start 即「执行中」；需授权的调用初始为 pending（排队/弹卡由渲染层从 items 推导）
+          // 工具步骤无 delta：item-start 即「执行中」；需授权/提问的调用初始为 pending（排队/弹卡由渲染层从 items 推导）
           const meta = mcp.meta.get(part.toolName)
+          const isAsk = part.toolName === ASK_TOOL_NAME
           startItem('tool', {
             t: 'tool',
             name: part.toolName,
             id: part.toolCallId,
-            display: meta?.display,
+            display: isAsk ? ASK_TOOL_DISPLAY : meta?.display,
             desc: meta?.needsAuth ? meta.desc : undefined,
             auth: meta?.needsAuth ? (earlyAuth.get(part.toolCallId) ?? 'pending') : undefined,
+            ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
             args: (part.input ?? {}) as Record<string, unknown>
           })
           toolItemIndex.set(part.toolCallId, cur)
           toolStartAt.set(part.toolCallId, Date.now())
-          if ((items[cur] as Extract<TurnItem, { t: 'tool' }>).auth === 'pending') persistWaiting() // 弹卡即落库
+          const it = items[cur] as Extract<TurnItem, { t: 'tool' }>
+          if (it.auth === 'pending' || it.ask?.state === 'pending') persistWaiting() // 弹卡即落库
           break
         }
         case 'tool-result': {
@@ -307,13 +340,19 @@ async function streamCore(core: {
       items.forEach((it, idx) => {
         if (it.t !== 'tool' || it.result !== undefined) return
         if (it.auth === 'pending') it.auth = 'unanswered' // execute 未及入队时兜底
-        it.result = {
-          interrupted:
-            it.auth === 'unanswered'
-              ? INTERRUPT_NOT_STARTED
-              : it.auth === 'approved'
-                ? interruptExternal('用户停止')
-                : INTERRUPT_LOCAL
+        if (it.ask) {
+          // 提问卡被停止：记「未回应」，收 PRD 提问卡收场文案
+          it.ask = { state: 'unanswered' }
+          it.result = { interrupted: ASK_INTERRUPTED }
+        } else {
+          it.result = {
+            interrupted:
+              it.auth === 'unanswered'
+                ? INTERRUPT_NOT_STARTED
+                : it.auth === 'approved'
+                  ? interruptExternal('用户停止')
+                  : INTERRUPT_LOCAL
+          }
         }
         emit({ type: 'item-update', streamId, index: idx, item: it })
       })

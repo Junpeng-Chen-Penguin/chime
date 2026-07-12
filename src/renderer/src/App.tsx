@@ -6,7 +6,7 @@ import SidePanel, { type DocPanelData } from './components/SidePanel'
 import ConfirmDialog from './components/ConfirmDialog'
 import { useChat, type Msg, type MsgStatus } from './hooks/useChat'
 import type { Conversation, PersistedMessage } from './types'
-import type { SourceRef } from '../../preload/index.d'
+import type { SourceRef, TurnItem } from '../../preload/index.d'
 
 const toMsg = (p: PersistedMessage): Msg => ({
   id: p.id,
@@ -117,13 +117,29 @@ function App(): React.JSX.Element {
   const messages = chat.threads[activeId] ?? []
   const sending = chat.streamingConv === activeId
   const input = inputs[activeId] ?? ''
+  // 队首待回应的卡（授权 / 提问）：提问卡活跃时主输入框保持开放，打字即整体回答
+  const lastItems = messages[messages.length - 1]?.items ?? []
+  const activeCard = sending
+    ? lastItems.find(
+        (it): it is Extract<TurnItem, { t: 'tool' }> =>
+          it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending')
+      )
+    : undefined
+  const askActive = activeCard?.ask?.state === 'pending' ? activeCard : undefined
   // 会话定性：草稿（未发首条消息）可切换挂库，已发消息后不可更改
   const kbLocked = draftId !== activeId
   const kbSelected = kbLocked ? !!active?.kbEnabled : !!kbDraftSel[activeId]
 
   const submit = async (): Promise<void> => {
     const text = input.trim()
-    if (!text || sending) return
+    if (!text) return
+    // 提问卡等待中打字发送 = 中断提问 + 开启新一轮（Claude 同此；想回答问题用卡内作答）
+    if (askActive) {
+      chat.interruptAskAndSend(activeId, activeModel, text)
+      setInputs((m) => ({ ...m, [activeId]: '' }))
+      return
+    }
+    if (sending) return
     // 草稿会话发出第一条时才真正建库、进列表；此刻定性是否挂知识库
     if (draftId === activeId) {
       const c = await window.api.createConversation({ id: activeId, model: activeModel })
@@ -197,6 +213,7 @@ function App(): React.JSX.Element {
         onPickModel={(m) => setConvModel((cm) => ({ ...cm, [activeId]: m }))}
         onOpenSource={openSource}
         onRespondCard={chat.respondCard}
+        onRespondAsk={chat.respondAsk}
       />
 
       {doc && <SidePanel doc={doc} onClose={() => setDoc(null)} />}

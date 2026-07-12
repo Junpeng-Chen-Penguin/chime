@@ -21,10 +21,15 @@ export type TurnItem =
   | {
       t: 'tool'
       name: string
-      id?: string // toolCallId：卡片路由、落库幂等、启动修复、续跑重建都以它为键
+      id?: string // toolCallId：卡片路由、落库幂等、启动修复都以它为键
       display?: string
       desc?: string // 卡上「用途」：服务自带工具描述原样（仅需授权的调用有）
       auth?: 'pending' | 'approved' | 'denied' | 'unanswered' // 授权状态（仅需授权的调用有）
+      // 提问卡状态（仅询问用户工具有）：answered 附问答结构（点开折叠记录看每题问答）
+      ask?: {
+        state: 'pending' | 'answered' | 'skipped' | 'unanswered'
+        answers?: { question: string; answer: string | null }[]
+      }
       args: Record<string, unknown>
       result?: unknown
       ms?: number
@@ -138,13 +143,16 @@ function getWaitingTurn(convId: string): WaitingTurn | null {
 // 修复后轮收场为 interrupted，会话可正常继续。
 export function repairConversation(
   convId: string,
-  texts: { notStarted: string; external: string; local: string }
+  texts: { notStarted: string; external: string; local: string; ask: string }
 ): void {
   const w = getWaitingTurn(convId)
   if (!w) return
   for (const it of w.items) {
     if (it.t !== 'tool' || it.result !== undefined) continue
-    if (it.auth === 'pending') {
+    if (it.ask) {
+      it.ask = { state: 'unanswered' }
+      it.result = { interrupted: texts.ask }
+    } else if (it.auth === 'pending') {
       it.auth = 'unanswered'
       it.result = { interrupted: texts.notStarted }
     } else {
@@ -173,6 +181,17 @@ function summarizeToolCalls(items: TurnItem[]): string {
     const label = it.display ?? it.name
     const argsShort = JSON.stringify(it.args ?? {}).slice(0, 100)
     const r = it.result as { error?: unknown; denied?: string; interrupted?: string } | string | undefined
+    if (it.ask) {
+      // 提问结果原样保留：问答是下一轮的关键上下文，不做规模摘要。
+      // 问题清单一并带上——用户中断提问后直接打字时，模型靠它把回复对应到当时的问题
+      const qs = ((it.args as { questions?: { question: string }[] }).questions ?? [])
+        .map((q) => q.question)
+        .join('；')
+      const prefix = qs ? `本轮向用户提问（${qs}）` : '本轮向用户提问'
+      if (typeof r === 'string') lines.push(`${prefix} → ${r}`)
+      else if (r?.interrupted) lines.push(`${prefix} → ${r.interrupted}`)
+      continue
+    }
     if (typeof r === 'string') {
       lines.push(`本轮调用：${label}(${argsShort}) → 返回约 ${r.length} 字`)
     } else if (r?.denied || r?.interrupted) {

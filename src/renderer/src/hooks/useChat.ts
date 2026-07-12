@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { TurnItem } from '../../../preload/index.d'
+import type { TurnItem, AskOutcomePayload } from '../../../preload/index.d'
 
 // interrupted = 应用退出打断、启动修复后收场（仅出现在水合的历史消息里）
 export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error' | 'interrupted'
@@ -27,6 +27,8 @@ export interface ChatHandle {
   stop: () => void
   retry: (convId: string, model: string) => void
   respondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
+  respondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
+  interruptAskAndSend: (convId: string, model: string, text: string) => void
 }
 
 // chat:event 的 items 归约器：对话历史所有权在主进程，这里只维护展示态
@@ -38,6 +40,8 @@ export function useChat(onChange?: () => void): ChatHandle {
   const routeRef = useRef<{ convId: string; msgId: string; streamId: string } | null>(null)
   const titledRef = useRef(new Set<string>())
   const onChangeRef = useRef(onChange)
+  const pendingSendRef = useRef<{ convId: string; model: string; text: string } | null>(null)
+  const sendRef = useRef<(convId: string, model: string, text: string) => void>(() => {})
 
   useEffect(() => {
     threadsRef.current = threads
@@ -118,6 +122,12 @@ export function useChat(onChange?: () => void): ChatHandle {
           }
           routeRef.current = null
           setStreamingConv(null)
+          // 打字中断提问：本轮收场后立刻把用户输入作为新消息发出
+          const p = pendingSendRef.current
+          if (p) {
+            pendingSendRef.current = null
+            sendRef.current(p.convId, p.model, p.text)
+          }
           return
         }
       }
@@ -136,7 +146,7 @@ export function useChat(onChange?: () => void): ChatHandle {
     return streamId
   }, [])
 
-  const send = useCallback(
+  const send: (convId: string, model: string, text: string) => void = useCallback(
     (convId: string, model: string, text: string) => {
       if (routeRef.current) return
       const now = Date.now()
@@ -155,6 +165,7 @@ export function useChat(onChange?: () => void): ChatHandle {
     },
     [begin]
   )
+  sendRef.current = send
 
   // 重试 / 重新生成：只对末轮回答有效（主进程删末轮 assistant 行后按历史重跑）
   const retry = useCallback(
@@ -188,5 +199,20 @@ export function useChat(onChange?: () => void): ChatHandle {
     if (r) window.api.cardRespond({ streamId: r.streamId, toolCallId, decision })
   }, [])
 
-  return { threads, streamingConv, contextRatio, hydrate, send, stop, retry, respondCard }
+  // 提问卡回应（作答 / 放弃整卡）
+  const respondAsk = useCallback((toolCallId: string, outcome: AskOutcomePayload) => {
+    const r = routeRef.current
+    if (r) window.api.askRespond({ streamId: r.streamId, toolCallId, outcome })
+  }, [])
+
+  // 提问卡等待中打字发送 = 中断提问 + 开启新一轮（Claude 同此）：
+  // 停止本轮（卡记未回应），本轮收场事件到达后把输入的文字作为新消息发出
+  const interruptAskAndSend = useCallback((convId: string, model: string, text: string) => {
+    const r = routeRef.current
+    if (!r) return
+    pendingSendRef.current = { convId, model, text }
+    window.api.stopChat(r.streamId)
+  }, [])
+
+  return { threads, streamingConv, contextRatio, hydrate, send, stop, retry, respondCard, respondAsk, interruptAskAndSend }
 }

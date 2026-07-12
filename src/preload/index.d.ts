@@ -44,6 +44,18 @@ export interface SearchToolResult {
 // 拒绝授权为 { denied }，被打断为 { interrupted }（三级文案）
 export type GenericToolResult = string | { error: string } | { denied: string } | { interrupted: string }
 
+// 提问卡回应（作答 / 放弃整卡；停止与打字中断走全局停止通道）
+export type AskOutcomePayload =
+  | { kind: 'answers'; answers: { question: string; answer: string | null }[] }
+  | { kind: 'declined' }
+
+// 提问卡的问题结构（询问用户工具的 args.questions）
+export interface AskQuestionSpec {
+  question: string
+  options: { label: string }[]
+  multiSelect?: boolean
+}
+
 // 一轮的有序过程记录的元素（与主进程 engine/store 的 TurnItem 一致）
 export type TurnItem =
   | { t: 'reasoning'; text: string }
@@ -55,6 +67,11 @@ export type TurnItem =
       display?: string // 展示名（MCP 为「服务名:工具名」），随落库
       desc?: string // 卡上「用途」：服务自带工具描述原样（仅需授权的调用有）
       auth?: 'pending' | 'approved' | 'denied' | 'unanswered' // 授权状态（仅需授权的调用有）
+      // 提问卡状态（仅询问用户工具有）：answered 附问答结构（折叠记录点开看每题问答）
+      ask?: {
+        state: 'pending' | 'answered' | 'skipped' | 'unanswered'
+        answers?: { question: string; answer: string | null }[]
+      }
       args: Record<string, unknown>
       result?: SearchToolResult | GenericToolResult
       ms?: number
@@ -166,6 +183,7 @@ export interface ChimeApi {
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
   cardRespond: (payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' }) => void
+  askRespond: (payload: { streamId: string; toolCallId: string; outcome: AskOutcomePayload }) => void
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
   onFullscreen: (cb: (v: boolean) => void) => () => void
   mcpList: () => Promise<McpServiceInfo[]>

@@ -5,15 +5,18 @@ import {
   RotateCw,
   AlertCircle,
   ArrowDown,
+  ArrowRight,
+  CornerDownLeft,
   Copy,
   Check,
   Info,
   Sparkles,
-  FileText
+  FileText,
+  X
 } from 'lucide-react'
 import { cn, stripCitations } from '@/lib/utils'
 import type { Msg } from '@/hooks/useChat'
-import type { SourceRef, TurnItem, SearchToolResult } from '../../../preload/index.d'
+import type { SourceRef, TurnItem, SearchToolResult, AskOutcomePayload, AskQuestionSpec } from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { Markdown } from './Markdown'
 import Composer, { type KbState } from './Composer'
@@ -46,6 +49,7 @@ interface Props {
   onToggleKb: () => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
   onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
+  onRespondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
 }
 
 export default function ChatArea({
@@ -72,16 +76,23 @@ export default function ChatArea({
   kbLocked,
   onToggleKb,
   onOpenSource,
-  onRespondCard
+  onRespondCard,
+  onRespondAsk
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
   const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
   const overLimit = input.length > SEND_CHAR_LIMIT
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
-  // 等待授权中：输入框禁用（用户只能操作卡片或点停止）；提问卡（后续模块）保持开放
+  // 队首待回应的卡决定输入框状态：授权卡→禁用（只能操作卡片或点停止）；提问卡→开放，打字即整体回答
   const lastMsg = messages[messages.length - 1]
-  const authWaiting =
-    sending && (lastMsg?.items ?? []).some((it) => it.t === 'tool' && it.auth === 'pending')
+  const activeCard = sending
+    ? (lastMsg?.items ?? []).find(
+        (it): it is Extract<TurnItem, { t: 'tool' }> =>
+          it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending')
+      )
+    : undefined
+  const authWaiting = activeCard?.auth === 'pending'
+  const askItem = activeCard?.ask?.state === 'pending' ? activeCard : undefined
 
   const composer = (
     <Composer
@@ -90,6 +101,7 @@ export default function ChatArea({
       onPickModel={onPickModel}
       sending={sending}
       inputDisabled={authWaiting}
+      askWaiting={!!askItem}
       value={input}
       onChange={onInput}
       onSubmit={() => {
@@ -167,6 +179,9 @@ export default function ChatArea({
               </button>
             )}
           </div>
+
+          {/* 提问卡：悬浮于输入框上方，不占对话流位置（key 随卡切换重置内部作答状态） */}
+          {askItem?.id && <AskCard key={askItem.id} item={askItem} onRespond={onRespondAsk} />}
 
           {/* 输入框上方轻提示：过长消息就地拦下；对话较长建议新开（均不阻断界面其他操作） */}
           {(overLimit || contextRatio > 0.7) && (
@@ -290,8 +305,11 @@ function AssistantMsg({
   const streaming = m.status === 'streaming'
   const finished = m.status === 'done' || m.status === 'stopped' || m.status === 'interrupted'
   const items = m.items ?? []
-  // 授权排队：第一个待授权的调用行下挂卡，其余 pending 行是排队；一次只面对一个决定
-  const pendingIdx = streaming ? items.findIndex((it) => it.t === 'tool' && it.auth === 'pending') : -1
+  // 卡片排队（授权 + 提问共用一条队列）：队首是授权卡时挂在调用行下方；队首是提问卡时悬浮于输入框上方（由 ChatArea 渲染）
+  const pendingIdx = streaming
+    ? items.findIndex((it) => it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending'))
+    : -1
+  const pendingIsAuth = pendingIdx >= 0 && (items[pendingIdx] as Extract<TurnItem, { t: 'tool' }>).auth === 'pending'
 
   // 位置即语义：末位非空 text 为最终回答，之前的 text 为意图叙述
   const lastTextIdx = useMemo(() => {
@@ -329,7 +347,7 @@ function AssistantMsg({
             return (
               <div key={i} className="flex flex-col gap-2">
                 <ToolRow item={it} active={i === pendingIdx} />
-                {i === pendingIdx && (
+                {i === pendingIdx && pendingIsAuth && (
                   <AuthCard item={it} onRespond={onRespondCard} />
                 )}
               </div>
@@ -451,12 +469,73 @@ function ToolRow({
   active
 }: {
   item: Extract<TurnItem, { t: 'tool' }>
-  active: boolean // 当前弹卡行（授权排队中一次只有一行活跃）
+  active: boolean // 当前弹卡行（卡片排队中一次只有一行活跃）
 }): React.JSX.Element {
+  if (item.ask) return <AskToolRow item={item} active={active} />
   return item.name === 'search_knowledge_base' ? (
     <SearchToolRow item={item} />
   ) : (
     <GenericToolRow item={item} active={active} />
+  )
+}
+
+// 提问步骤的时间线记录：等待中一行状态，收场后三态（已回答 / 已跳过 / 未回应），点开看每题问答
+function AskToolRow({
+  item,
+  active
+}: {
+  item: Extract<TurnItem, { t: 'tool' }>
+  active: boolean
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const ask = item.ask!
+  const questions = ((item.args as { questions?: AskQuestionSpec[] }).questions ?? []).map((q) => q.question)
+  const waiting = ask.state === 'pending'
+  const summary = waiting
+    ? active
+      ? '等待回答'
+      : '排队中'
+    : ask.state === 'answered'
+      ? '已回答'
+      : ask.state === 'skipped'
+        ? '已跳过'
+        : '未回应'
+  // 详情：逐题问答；跳过/未回应只列问题
+  const detail: string[] = ask.answers
+    ? ask.answers.map((a) => `${a.question} → ${a.answer ?? '未回答'}`)
+    : questions
+  return (
+    <div className="flex gap-2.5">
+      <Dot tone={waiting && active ? 'running' : waiting ? 'queued' : 'neutral'} />
+      <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
+        <div className="truncate">
+          {item.display ?? '询问用户'}（{questions.length} 个问题）
+        </div>
+        <button
+          onClick={() => !waiting && detail.length > 0 && setOpen((o) => !o)}
+          className={cn(
+            '-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5',
+            !waiting && detail.length > 0 && 'transition-colors hover:bg-muted'
+          )}
+        >
+          <span className="text-muted-foreground/50">⎿</span>
+          <span>{summary}</span>
+          {!waiting && detail.length > 0 && (
+            <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+          )}
+        </button>
+        {open && !waiting && (
+          <div className="mt-1 ml-5 flex flex-col gap-0.5">
+            {detail.map((d, i) => (
+              <div key={i} className="flex gap-1.5">
+                <span className="flex-none text-muted-foreground/50">-</span>
+                <span className="min-w-0">{d}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -616,6 +695,209 @@ function AuthCard({
         >
           同意
         </button>
+      </div>
+    </div>
+  )
+}
+
+// 提问卡（悬浮于输入框上方）：逐题展示 + 进度切换可回头改；选项整行按钮（单选点击即进下一题，
+// 多选勾选后点下一题）；「其他」输入行属作答（有内容时选项置灰、右下按钮由跳过变提交）；✕ 放弃整卡。
+// 最后一题完成后提交全部答案。宽度与输入框一致，沿用其浮起阴影（悬浮层同族）。
+function AskCard({
+  item,
+  onRespond
+}: {
+  item: Extract<TurnItem, { t: 'tool' }>
+  onRespond: (toolCallId: string, outcome: AskOutcomePayload) => void
+}): React.JSX.Element {
+  const questions = (item.args as { questions?: AskQuestionSpec[] }).questions ?? []
+  // 模型偶发自设「其他」类选项，与卡片自带的输入行功能重叠，渲染时去重（仅匹配「其他」本身，不误伤正常选项）
+  const dedupe = (ops: { label: string }[]): { label: string }[] => {
+    const kept = ops.filter((op) => !/^其他([（(].*[)）])?$/.test(op.label.trim()))
+    return kept.length >= 1 ? kept : ops
+  }
+  const [qIdx, setQIdx] = useState(0)
+  // 每题作答态：undefined=未答，null=跳过，string=单选/其他，string[]=多选
+  const [answers, setAnswers] = useState<(string | string[] | null | undefined)[]>(() =>
+    questions.map(() => undefined)
+  )
+  const [others, setOthers] = useState<string[]>(() => questions.map(() => ''))
+  const q = questions[qIdx]
+  const last = qIdx === questions.length - 1
+  const other = others[qIdx] ?? ''
+  const cur = answers[qIdx]
+  const multiPicked = Array.isArray(cur) ? cur : []
+
+  const submitAll = (all: (string | string[] | null | undefined)[]): void => {
+    if (!item.id) return
+    onRespond(item.id, {
+      kind: 'answers',
+      answers: questions.map((qu, i) => {
+        const a = all[i]
+        return {
+          question: qu.question,
+          answer: a == null ? null : Array.isArray(a) ? (a.length ? a.join('、') : null) : a
+        }
+      })
+    })
+  }
+  const commit = (answer: string | string[] | null): void => {
+    const next = [...answers]
+    next[qIdx] = answer
+    setAnswers(next)
+    if (last) submitAll(next)
+    else setQIdx(qIdx + 1)
+  }
+
+  if (!q) return <></>
+  return (
+    <div className="flex-none pt-2">
+      <div className="mx-auto w-full max-w-[840px] px-8">
+        <div className="rounded-2xl border border-input bg-background px-5 py-4 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_28px_-8px_rgba(0,0,0,0.14)]">
+          {/* 标题行：问题（多选题带标签）+ 进度切换 + 放弃整卡 */}
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1 text-[14px] font-medium text-foreground">
+              {q.question}
+              {q.multiSelect && (
+                <span className="ml-2 inline-block rounded border border-border bg-muted px-1.5 py-0.5 align-middle text-[11px] font-normal text-muted-foreground">
+                  可多选
+                </span>
+              )}
+            </div>
+            {questions.length > 1 && (
+              <div className="flex flex-none items-center gap-1 text-[12px] text-muted-foreground">
+                <button
+                  onClick={() => setQIdx(Math.max(0, qIdx - 1))}
+                  disabled={qIdx === 0}
+                  className="grid size-5 place-items-center rounded hover:bg-muted disabled:opacity-30"
+                >
+                  ‹
+                </button>
+                {qIdx + 1} / {questions.length}
+                <button
+                  onClick={() => setQIdx(Math.min(questions.length - 1, qIdx + 1))}
+                  disabled={last}
+                  className="grid size-5 place-items-center rounded hover:bg-muted disabled:opacity-30"
+                >
+                  ›
+                </button>
+              </div>
+            )}
+            <button
+              onClick={() => item.id && onRespond(item.id, { kind: 'declined' })}
+              title="不回答这些问题"
+              className="grid size-5 flex-none place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+
+          {/* 选项：编号整行按钮；「其他」框有内容时置灰（输入了内容就是在回应）。
+              单选=圆徽标、点击即走，悬停显示去向（→ 下一题 / ↵ 提交，借鉴 Claude）；
+              多选=方形复选框语义（勾中打 ✓），选完点右下「下一题/提交」 */}
+          <div className="mt-3 flex flex-col gap-1.5">
+            {dedupe(q.options).map((op, i) => {
+              const picked = q.multiSelect ? multiPicked.includes(op.label) : cur === op.label
+              return (
+                <button
+                  key={i}
+                  disabled={!!other}
+                  onClick={() => {
+                    if (q.multiSelect) {
+                      const set = picked ? multiPicked.filter((x) => x !== op.label) : [...multiPicked, op.label]
+                      const next = [...answers]
+                      next[qIdx] = set
+                      setAnswers(next)
+                    } else {
+                      commit(op.label) // 单选点击即选定并自动进下一题
+                    }
+                  }}
+                  className={cn(
+                    'group flex min-h-[44px] w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors',
+                    picked ? 'border-ring bg-primary/5' : 'border-border hover:bg-muted',
+                    other && 'cursor-default opacity-40'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'grid size-5 flex-none place-items-center text-[12px]',
+                      q.multiSelect ? 'rounded-[5px]' : 'rounded-full',
+                      // 悬停时行底变灰，徽标换白底避免融进背景
+                      picked ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground group-hover:bg-background'
+                    )}
+                  >
+                    {q.multiSelect && picked ? <Check className="size-3" strokeWidth={3} /> : i + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 text-[14px] text-foreground">{op.label}</span>
+                  {!q.multiSelect && !other && (
+                    // 悬停提示点击后的去向：非末题 → 进下一题；末题 ↵ 提交
+                    <span className="flex-none text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                      {last ? <CornerDownLeft className="size-4" /> : <ArrowRight className="size-4" />}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+
+            {/* 「其他」行：与选项同样式的整行，序号位换 ✎ 图标，点击行内输入（对齐 Claude 桌面端）；
+                右侧单按钮随状态切换语义：跳过 ↔ 提交（其他框有内容 / 多选已勾选） */}
+            <div
+              className={cn(
+                'flex min-h-[44px] w-full items-center gap-3 rounded-lg border px-3 py-2 transition-colors',
+                other ? 'border-ring bg-primary/5' : 'border-border'
+              )}
+            >
+              <span className="grid size-5 flex-none place-items-center rounded-full bg-muted text-[12px] text-muted-foreground">
+                ✎
+              </span>
+              <input
+                value={other}
+                onChange={(e) => {
+                  const next = [...others]
+                  next[qIdx] = e.target.value
+                  setOthers(next)
+                }}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                  if (e.key === 'Enter' && other.trim()) {
+                    e.preventDefault()
+                    commit(other.trim())
+                  }
+                }}
+                placeholder="其他……"
+                className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-muted-foreground"
+              />
+              {other.trim() ? (
+                <button
+                  onClick={() => commit(other.trim())}
+                  title={last ? '提交答案' : '进下一题'}
+                  className="grid size-7 flex-none place-items-center rounded-lg bg-primary text-primary-foreground hover:bg-primary/90"
+                >
+                  {/* 与选项悬停提示同一套语义：非末题 → 下一题；末题 ↵ 提交 */}
+                  {last ? (
+                    <CornerDownLeft className="size-3.5" strokeWidth={2.2} />
+                  ) : (
+                    <ArrowRight className="size-3.5" strokeWidth={2.2} />
+                  )}
+                </button>
+              ) : q.multiSelect && multiPicked.length ? (
+                <button
+                  onClick={() => commit(multiPicked)}
+                  className="flex-none rounded-lg bg-primary px-3 py-1 text-[13px] font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  {last ? '提交' : '下一题'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => commit(null)}
+                  className="flex-none rounded-lg border border-border px-3 py-1 text-[13px] font-medium text-foreground hover:bg-muted"
+                >
+                  跳过
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )

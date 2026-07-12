@@ -36,6 +36,9 @@ const api = {
   // 授权卡回应（同意 / 拒绝）
   cardRespond: (payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' }) =>
     ipcRenderer.send('chat:card-response', payload),
+  // 提问卡回应（作答 / 直接打字 / 放弃整卡）
+  askRespond: (payload: { streamId: string; toolCallId: string; outcome: unknown }) =>
+    ipcRenderer.send('chat:ask-response', payload),
 
   // MCP 服务：mcp:status 为无载荷提醒，收到后重新拉列表即可
   mcpList: () => ipcRenderer.invoke('mcp:list'),

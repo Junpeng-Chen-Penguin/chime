@@ -7,7 +7,7 @@ import type { Tool } from 'ai'
 import { retrieve } from '../retrieve'
 import { callMcpTool, getMcpToolList } from '../mcp/client'
 import { SEARCH_TOOL_DESCRIPTION } from './prompts'
-import { AUTH_DENIED, INTERRUPT_NOT_STARTED, type CardQueue } from './cards'
+import { AUTH_DENIED, INTERRUPT_NOT_STARTED, ASK_INTERRUPTED, type CardQueue, type AskQuestion } from './cards'
 import type { SourceSnapshot } from './store'
 
 export const SEARCH_LIMIT_PER_TURN = 3 // 工具级闸门（软约束 3 次的硬性面）
@@ -54,6 +54,79 @@ export function makeMcpTools(signal: AbortSignal, cards: CardQueue): {
     })
   }
   return { tools, meta }
+}
+
+// 「询问用户」内置工具：模型缺信息时停下来弹提问卡（命名沿用 Claude Code 的 AskUserQuestion）。
+// execute 挂起等用户回应，四条出路各对应一份固定文案（PRD 出路表），模型的后续行为由文案驱动。
+export const ASK_TOOL_NAME = 'ask_user_question'
+export const ASK_TOOL_DISPLAY = '询问用户'
+
+const ASK_TOOL_DESCRIPTION = `向用户提出选择题收集信息，问题以选择卡片呈现。
+
+什么时候用：
+- 只在答案能落在几个明确候选里时使用：几个方案选一个、确认某个操作、选范围或口径
+- 调用工具前缺必填参数、执行前需要用户定夺时，缺几个信息就一次问齐（一次调用 1-4 个问题），不要连环发起提问
+- 答案完全开放、你给不出真实候选时（如让用户自由填写一个名称），不要用这个工具——直接在回复正文里向用户提问
+
+怎么写问题：
+- 问题本身要写清晰完整（选项没有附加说明，差别要在问题里交代清楚）
+- 选项必须是答案本身，简短明确；不要写「我直接输入」「见下方」这类操作指引选项
+- 有推荐选项时放在第一位，并在 label 末尾标注「（推荐）」
+- 不要自设「其他」「其他（请输入）」「以上都不是」这类选项——卡片界面已自带「其他」自由输入行，再提供就会重复出现两个
+
+返回语义：
+- 「用户的回答：…」= 逐题作答结果，标「未回答」的题用户选择跳过
+- 用户选择不回答时：不要换个说法重复问，按已有信息继续，无法继续就说明缺什么、等用户指示`
+
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导
+export function makeAskTool(signal: AbortSignal, cards: CardQueue) {
+  return tool({
+    description: ASK_TOOL_DESCRIPTION,
+    inputSchema: jsonSchema<{ questions: AskQuestion[] }>({
+      type: 'object',
+      properties: {
+        questions: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 4,
+          description: '要问用户的问题（1-4 个，缺几个信息一次问齐）',
+          items: {
+            type: 'object',
+            properties: {
+              question: { type: 'string', description: '问题文字，完整的一句话' },
+              options: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 4,
+                description: '选项（2-4 个），推荐项放第一位并在 label 末尾标注「（推荐）」',
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: { type: 'string', description: '选项文字：简短明确（不超过十几个字），就是答案本身' }
+                  },
+                  required: ['label']
+                }
+              },
+              multiSelect: { type: 'boolean', description: '是否允许多选，默认单选' }
+            },
+            required: ['question', 'options']
+          }
+        }
+      },
+      required: ['questions']
+    }),
+    execute: async ({ questions }, { toolCallId }) => {
+      const outcome = await cards.requestAsk(toolCallId, questions ?? [], signal)
+      switch (outcome.kind) {
+        case 'answers':
+          return `用户的回答：\n${outcome.answers.map((a) => `${a.question}=${a.answer ?? '未回答'}`).join('\n')}`
+        case 'declined':
+          return '用户选择不回答这些问题。不要换个说法重复问；按已有信息继续，无法继续就说明缺什么、等用户指示。'
+        case 'aborted':
+          return { interrupted: ASK_INTERRUPTED }
+      }
+    }
+  })
 }
 
 // 按模型可见名执行 MCP 调用：成功纯文本，失败 { error }
