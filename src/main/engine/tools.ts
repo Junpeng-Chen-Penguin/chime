@@ -8,6 +8,7 @@ import { retrieve } from '../retrieve'
 import { callMcpTool, getMcpToolList } from '../mcp/client'
 import { SEARCH_TOOL_DESCRIPTION } from './prompts'
 import { AUTH_DENIED, INTERRUPT_NOT_STARTED, ASK_INTERRUPTED, type CardQueue, type AskQuestion } from './cards'
+import { guardSingle, fetchFromResult, FETCH_LIMIT, type OverflowCtx } from './overflow'
 import type { SourceSnapshot } from './store'
 
 export const SEARCH_LIMIT_PER_TURN = 3 // 工具级闸门（软约束 3 次的硬性面）
@@ -32,8 +33,8 @@ export interface ToolMeta {
 // MCP 工具动态注册：模型可见名 mcp__服务id__工具名（重名天然隔离），展示名「服务名:工具名」。
 // 结果原样交回：成功为纯文本（存储不归一），失败为 { error }（模型据此重试、换路或说明），
 // 拒绝授权为 { denied }、停止未执行为 { interrupted }（历史映射原样保留文案）。
-// MCP 工具统一需授权：execute 先过卡片队列，同意才发起调用。
-export function makeMcpTools(signal: AbortSignal, cards: CardQueue): {
+// MCP 工具统一需授权：execute 先过卡片队列，同意才发起调用；成功结果过单结果闸（超限落库换摘要）。
+export function makeMcpTools(signal: AbortSignal, cards: CardQueue, overflow: OverflowCtx): {
   tools: Record<string, Tool>
   meta: Map<string, ToolMeta> // 模型可见名 → 元信息（display/desc 随 tool item 落库，渲染层不反查）
 } {
@@ -49,11 +50,46 @@ export function makeMcpTools(signal: AbortSignal, cards: CardQueue): {
         const decision = await cards.request(toolCallId, signal)
         if (decision === 'denied') return { denied: AUTH_DENIED }
         if (decision === 'aborted') return { interrupted: INTERRUPT_NOT_STARTED }
-        return execMcpTool(name, (args ?? {}) as Record<string, unknown>, signal)
+        const r = await execMcpTool(name, (args ?? {}) as Record<string, unknown>, signal)
+        return typeof r === 'string' ? guardSingle(overflow, toolCallId, name, r) : r
       }
     })
   }
   return { tools, meta }
+}
+
+// 「查结果集」内置工具：模型取用已落库超限结果的手段。免授权（只读本地已存数据）、超限豁免（取回的片段不再落库）。
+export const FETCH_TOOL_NAME = 'fetch_tool_result'
+export const FETCH_TOOL_DISPLAY = '查结果集'
+
+const FETCH_TOOL_DESCRIPTION = `按结果编号取用已存的超限工具结果。
+
+什么时候用：
+- 之前的调用结果超限被存库（摘要里有「结果编号 #N」），摘要不够决策、需要看具体内容时
+- 结果编号在本会话内一直有效：用户追问之前查过的数据时直接用原编号取，不必重新调外部系统
+
+用法（两种取数方式，对任何格式都成立）：
+- 按位置读一段：mode 填 "range"，start 为起始字符位置（从 0 起），length 为长度
+- 按关键词搜：mode 填 "search"，keyword 为要找的词，返回每处命中的前后文
+- 单次最多返回 ${FETCH_LIMIT} 字，大结果分多次取`
+
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导
+export function makeFetchResultTool(convId: string) {
+  return tool({
+    description: FETCH_TOOL_DESCRIPTION,
+    inputSchema: jsonSchema<{ resultId: number; mode?: 'range' | 'search'; start?: number; length?: number; keyword?: string }>({
+      type: 'object',
+      properties: {
+        resultId: { type: 'number', description: '结果编号（摘要里的 #N，传数字 N）' },
+        mode: { type: 'string', enum: ['range', 'search'], description: '取数方式：range 按位置读一段（默认），search 按关键词搜' },
+        start: { type: 'number', description: 'range：起始字符位置，从 0 起' },
+        length: { type: 'number', description: 'range：读取长度（字符）' },
+        keyword: { type: 'string', description: 'search：要查找的关键词' }
+      },
+      required: ['resultId']
+    }),
+    execute: async (args) => fetchFromResult(convId, args ?? {})
+  })
 }
 
 // 「询问用户」内置工具：模型缺信息时停下来弹提问卡（命名沿用 Claude Code 的 AskUserQuestion）。

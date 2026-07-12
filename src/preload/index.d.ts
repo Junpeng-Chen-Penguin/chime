@@ -74,6 +74,7 @@ export type TurnItem =
       }
       args: Record<string, unknown>
       result?: SearchToolResult | GenericToolResult
+      resultRef?: number // 超限结果的结果编号（result 存摘要，全量在结果库）
       ms?: number
     }
   | { t: 'sources'; list: SourceRef[] }

@@ -84,6 +84,16 @@ export function initDb(): void {
       enabled    INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS tool_result (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id    TEXT NOT NULL,
+      tool_call_id       TEXT NOT NULL,
+      tool_name          TEXT NOT NULL,
+      content            TEXT NOT NULL,
+      structured_content TEXT,
+      chars              INTEGER NOT NULL,
+      created_at         INTEGER NOT NULL
+    );
   `)
   // 迁移：知识库名称（录入时可自定义）
   try {
@@ -175,7 +185,42 @@ export function createConversation(id: string, model: string, now: number): Conv
 
 export function deleteConversation(id: string): void {
   db.prepare('DELETE FROM message WHERE conversation_id = ?').run(id)
+  db.prepare('DELETE FROM tool_result WHERE conversation_id = ?').run(id) // 结果随会话删除（未启用外键，手工清）
   db.prepare('DELETE FROM conversation WHERE id = ?').run(id)
+}
+
+// ── 超限结果库（工具结果超限处理机制）────────────────────
+// 全量原样落库，自增 id 即「结果编号」；本会话内一直有效，跨会话不可用
+
+export function insertToolResult(row: {
+  conversationId: string
+  toolCallId: string
+  toolName: string
+  content: string
+  structuredContent?: string | null
+}): number {
+  const r = db
+    .prepare(
+      `INSERT INTO tool_result (conversation_id, tool_call_id, tool_name, content, structured_content, chars, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      row.conversationId,
+      row.toolCallId,
+      row.toolName,
+      row.content,
+      row.structuredContent ?? null,
+      row.content.length,
+      Date.now()
+    )
+  return Number(r.lastInsertRowid)
+}
+
+export function getToolResult(id: number, conversationId: string): { content: string; chars: number } | null {
+  const row = db
+    .prepare('SELECT content, chars FROM tool_result WHERE id = ? AND conversation_id = ?')
+    .get(id, conversationId) as { content: string; chars: number } | undefined
+  return row ?? null
 }
 
 export function getMessages(conversationId: string): MessageRow[] {

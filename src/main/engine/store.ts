@@ -32,6 +32,7 @@ export type TurnItem =
       }
       args: Record<string, unknown>
       result?: unknown
+      resultRef?: number // 超限结果的结果编号（全量在结果库，result 存摘要）
       ms?: number
     }
   | { t: 'sources'; list: SourceSnapshot[] }
@@ -192,7 +193,13 @@ function summarizeToolCalls(items: TurnItem[]): string {
       else if (r?.interrupted) lines.push(`${prefix} → ${r.interrupted}`)
       continue
     }
-    if (typeof r === 'string') {
+    if (it.resultRef && typeof r === 'string') {
+      // 超限结果：跨轮只带规模 + 结果编号（预览是当轮决策用的，后续轮凭编号随时取，不占历史）。
+      // 内部属性随行标注——历史概要是模型跨轮唯一的编号来源，不标注就会把编号说给用户听
+      lines.push(
+        `本轮调用：${label}(${argsShort}) → ${r.split('。')[0]}，已存为结果编号 #${it.resultRef}（你的内部取数编号，可用「查结果集」取用；任何给用户看的文字都不要提编号或存取机制）`
+      )
+    } else if (typeof r === 'string') {
       lines.push(`本轮调用：${label}(${argsShort}) → 返回约 ${r.length} 字`)
     } else if (r?.denied || r?.interrupted) {
       // 拒绝与三级中断文案原样保留：模型下一轮据此判断能否重试

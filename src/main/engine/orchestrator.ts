@@ -16,12 +16,16 @@ import {
   makeSearchTool,
   makeMcpTools,
   makeAskTool,
+  makeFetchResultTool,
   ASK_TOOL_NAME,
   ASK_TOOL_DISPLAY,
+  FETCH_TOOL_NAME,
+  FETCH_TOOL_DISPLAY,
   TOOL_REQUEST_HARD_LIMIT,
   STEP_COUNT_LIMIT,
   type TurnToolContext
 } from './tools'
+import { sessionFullResultChars, applyTotalGate, type OverflowCtx } from './overflow'
 import {
   CardQueue,
   INTERRUPT_NOT_STARTED,
@@ -174,6 +178,7 @@ async function streamCore(core: {
   let limitHit = false
   const toolItemIndex = new Map<string, number>() // toolCallId → items 下标
   const toolStartAt = new Map<string, number>()
+  const lateSummaries = new Map<string, string>() // 总量闸先于 tool-result 事件时的暂存（toolCallId → 摘要）
 
   // 卡片队列（授权卡 + 提问卡共用）：用户回应回来时更新对应 tool item 状态、落库并推送。
   // 回应可能先于 tool-call 事件到达消费循环（自测钩子同步回应），先记下、建行时补上
@@ -214,10 +219,16 @@ async function streamCore(core: {
     }
   )
 
-  // 工具组装：内置（询问用户常备、挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
-  const mcp = makeMcpTools(controller.signal, cards)
+  // 超限处理轮内状态：会话基线一次算好，本轮增量随批累计
+  const overflow: OverflowCtx = { convId, refs: new Map(), turnFullChars: 0 }
+  const sessionBase = sessionFullResultChars(convId)
+  const gatedSteps = new Set<number>() // 总量闸按步只跑一次
+
+  // 工具组装：内置（询问用户、查结果集常备，挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
+  const mcp = makeMcpTools(controller.signal, cards, overflow)
   const turnTools: Record<string, Tool> = { ...mcp.tools }
   turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
+  turnTools[FETCH_TOOL_NAME] = makeFetchResultTool(convId)
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
   // 已启用但连不上的服务：提示一句，本轮按无该服务工具继续，不阻断对话
   const down = unavailableMcpServiceNames()
@@ -251,14 +262,67 @@ async function streamCore(core: {
       messages: history,
       abortSignal: controller.signal,
       tools: Object.keys(turnTools).length ? turnTools : undefined,
-      // 接口级禁止（最硬）：请求总数（含被拒）触顶后不再下发工具清单，模型只能作答
-      prepareStep: ({ steps }) => {
+      // 两件事：接口级禁止（请求总数触顶后摘工具清单，模型只能作答）+
+      // 总量闸（上一步结果集齐、交给模型之前统一判定——批内从大到小落库改摘要，已给过的不回头改）
+      prepareStep: ({ steps, messages }) => {
         const requested = steps.reduce((s, st) => s + st.toolCalls.length, 0)
-        if (requested >= TOOL_REQUEST_HARD_LIMIT) {
-          limitHit = true
-          return { activeTools: [] }
+        const hardLimit = requested >= TOOL_REQUEST_HARD_LIMIT
+        if (hardLimit) limitHit = true
+
+        const lastIdx = steps.length - 1
+        let gated: Map<string, string> | null = null
+        if (lastIdx >= 0 && !gatedSteps.has(lastIdx)) {
+          gatedSteps.add(lastIdx)
+          const batch = (steps[lastIdx].toolResults as { toolCallId: string; toolName: string; output: unknown }[])
+            .filter(
+              (tr) =>
+                typeof tr.output === 'string' &&
+                tr.toolName !== FETCH_TOOL_NAME && // 豁免：取回的片段不再落库
+                tr.toolName !== ASK_TOOL_NAME && // 用户的回答不是外部数据
+                !overflow.refs.has(tr.toolCallId) // 单结果闸已处理的不重复
+            )
+            .map((tr) => ({ toolCallId: tr.toolCallId, toolName: tr.toolName, text: tr.output as string }))
+          if (batch.length) {
+            const replaced = applyTotalGate(overflow, sessionBase, batch)
+            if (replaced.size) {
+              gated = replaced
+              for (const [callId, summary] of replaced) {
+                const idx = toolItemIndex.get(callId)
+                if (idx === undefined) {
+                  lateSummaries.set(callId, summary) // tool-result 事件还没到消费循环，建行时补
+                  continue
+                }
+                const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
+                item.result = summary
+                item.resultRef = overflow.refs.get(callId)
+                emit({ type: 'item-update', streamId, index: idx, item })
+              }
+            }
+          }
         }
-        return undefined
+
+        if (!hardLimit && !gated) return undefined
+        return {
+          ...(hardLimit ? { activeTools: [] as never[] } : {}),
+          ...(gated
+            ? {
+                // 改写消息序列：被落库的结果以摘要文本替代原文（override 会带到后续步）
+                messages: messages.map((m) => {
+                  if (m.role !== 'tool' || !Array.isArray(m.content)) return m
+                  return {
+                    ...m,
+                    content: m.content.map((part) => {
+                      const p = part as { type: string; toolCallId?: string }
+                      if (p.type === 'tool-result' && p.toolCallId && gated!.has(p.toolCallId)) {
+                        return { ...part, output: { type: 'text', value: gated!.get(p.toolCallId)! } }
+                      }
+                      return part
+                    })
+                  } as typeof m
+                })
+              }
+            : {})
+        }
       },
       stopWhen: isStepCount(STEP_COUNT_LIMIT) // 防御性兜底，正常永远先触发硬闸
     })
@@ -287,7 +351,7 @@ async function streamCore(core: {
             t: 'tool',
             name: part.toolName,
             id: part.toolCallId,
-            display: isAsk ? ASK_TOOL_DISPLAY : meta?.display,
+            display: isAsk ? ASK_TOOL_DISPLAY : part.toolName === FETCH_TOOL_NAME ? FETCH_TOOL_DISPLAY : meta?.display,
             desc: meta?.needsAuth ? meta.desc : undefined,
             auth: meta?.needsAuth ? (earlyAuth.get(part.toolCallId) ?? 'pending') : undefined,
             ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
@@ -303,7 +367,10 @@ async function streamCore(core: {
           const idx = toolItemIndex.get(part.toolCallId)
           if (idx === undefined) break
           const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
-          item.result = part.output
+          // 超限结果：item 存摘要（全量在结果库），resultRef 指向结果编号
+          item.result = lateSummaries.get(part.toolCallId) ?? part.output
+          const ref = overflow.refs.get(part.toolCallId)
+          if (ref !== undefined) item.resultRef = ref
           item.ms = Date.now() - (toolStartAt.get(part.toolCallId) ?? Date.now())
           emit({ type: 'item-done', streamId, index: idx, item })
           break

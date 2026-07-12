@@ -169,6 +169,55 @@ app.whenReady().then(() => {
     return
   }
 
+  // v0.5.0 验证钩子：CHIME_OVERFLOW_TEST=1 跑超限机制工程自检（总量闸从大到小 / 取数两式 / 删会话清结果）后退出
+  if (process.env.CHIME_OVERFLOW_TEST) {
+    void (async () => {
+      try {
+        initDb()
+        const ov = await import('./engine/overflow')
+        const db = await import('./db')
+        const conv = 'overflow-test'
+        createConversation(conv, 'test', Date.now())
+        const assert = (cond: boolean, name: string): void => {
+          process.stdout.write(`${cond ? '✅' : '❌'} ${name}\n`)
+          if (!cond) process.exitCode = 1
+        }
+        // 单结果闸：超限落库换摘要
+        const ctx: import('./engine/overflow').OverflowCtx = { convId: conv, refs: new Map(), turnFullChars: 0 }
+        const big = 'x'.repeat(ov.RESULT_LIMIT + 5)
+        const s1 = ov.guardSingle(ctx, 'c1', 'tool_a', big)
+        assert(s1.includes('结果编号 #') && s1.length < 3000, '单结果闸：超限换摘要')
+        assert(ov.guardSingle(ctx, 'c2', 'tool_a', 'short') === 'short', '单结果闸：未超限原样放行')
+        // 总量闸：批内从大到小落库至回线内，PRD 例：基线 4 万 + 批 [B=5万, C=3万]，上限 10 万 → 落 B、C 放行
+        const ctx2: import('./engine/overflow').OverflowCtx = { convId: conv, refs: new Map(), turnFullChars: 0 }
+        const batch = [
+          { toolCallId: 'b', toolName: 'tool_b', text: 'b'.repeat(50_000) },
+          { toolCallId: 'c', toolName: 'tool_c', text: 'c'.repeat(30_000) }
+        ]
+        const replaced = ov.applyTotalGate(ctx2, ov.TOTAL_LIMIT - 60_000, batch) // 基线=上限-6万，批计 8 万超 2 万
+        assert(replaced.has('b') && !replaced.has('c'), '总量闸：从大到小落库（大者落、小者放行）')
+        assert(ctx2.turnFullChars === 30_000, '总量闸：放行量计入本轮累计')
+        // 取数两式
+        const bigId = ctx.refs.get('c1')!
+        const range = ov.fetchFromResult(conv, { resultId: bigId, mode: 'range', start: 10, length: 20 })
+        assert(typeof range === 'string' && range.includes('x'.repeat(20)), '查结果集：按位置读一段')
+        const idB = ctx2.refs.get('b')!
+        const hit = ov.fetchFromResult(conv, { resultId: idB, mode: 'search', keyword: 'bbb' })
+        assert(typeof hit === 'string' && hit.includes('命中'), '查结果集：按关键词搜')
+        assert(typeof ov.fetchFromResult(conv, { resultId: 9999 }) === 'object', '查结果集：无效编号报错')
+        assert(typeof ov.fetchFromResult('other-conv', { resultId: bigId }) === 'object', '查结果集：跨会话不可用')
+        // 删会话清结果
+        db.deleteConversation(conv)
+        assert(db.getToolResult(bigId, conv) === null, '删除会话：结果一并清除')
+        app.exit(Number(process.exitCode ?? 0))
+      } catch (e) {
+        process.stderr.write(`[overflow-test] ERROR ${String(e)}\n`)
+        app.exit(1)
+      }
+    })()
+    return
+  }
+
   // v4 验证钩子：CHIME_ENGINE_TEST=1 时跑引擎主链自检（两轮无库对话，验流式事件、落库、历史组装）后退出
   if (process.env.CHIME_ENGINE_TEST) {
     void (async () => {

@@ -338,11 +338,9 @@ function AssistantMsg({
           case 'reasoning':
             return <ThinkRow key={i} text={it.text} running={streaming && i === items.length - 1} />
           case 'text':
-            return i === lastTextIdx ? (
-              <AnswerRow key={i} text={it.text} streaming={streaming} />
-            ) : (
-              <IntentRow key={i} text={it.text} />
-            )
+            // 模型的话一律正文样式（Markdown），不因后续步骤回溯降级——中途回复也是给用户看的内容，
+            // 过程行样式只留给工具步骤与状态标记（对齐 Claude：文本与工具行交替、样式稳定）
+            return <AnswerRow key={i} text={it.text} streaming={streaming && i === items.length - 1} />
           case 'tool':
             return (
               <div key={i} className="flex flex-col gap-2">
@@ -398,16 +396,6 @@ function Dot({ tone = 'neutral' }: { tone?: 'neutral' | 'running' | 'error' | 'q
         tone === 'queued' && 'border border-foreground/35 bg-transparent'
       )}
     />
-  )
-}
-
-// 意图叙述：常显短句，不折叠
-function IntentRow({ text }: { text: string }): React.JSX.Element {
-  return (
-    <div className="flex gap-2.5">
-      <Dot />
-      <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>{text}</div>
-    </div>
   )
 }
 
@@ -539,6 +527,22 @@ function AskToolRow({
   )
 }
 
+// 「查结果集」参数翻译成人话（原始键值是研发口径，用户看不懂）
+const FETCH_ARG_LABELS: Record<string, string> = {
+  resultId: '取自结果',
+  mode: '取数方式',
+  start: '起始位置',
+  length: '读取长度',
+  keyword: '关键词'
+}
+function fetchArgValue(k: string, v: unknown): string {
+  if (k === 'mode') return v === 'search' ? '按关键词搜索' : '按位置读取'
+  if (k === 'resultId') return `#${v}`
+  if (k === 'start') return `第 ${Number(v).toLocaleString()} 字起`
+  if (k === 'length') return `${Number(v).toLocaleString()} 字`
+  return typeof v === 'string' ? v : JSON.stringify(v)
+}
+
 // 结果规模口径（与主进程摘要一致的读法）：千字 / 万字取整
 function formatChars(n: number): string {
   if (n < 1000) return `${n} 字`
@@ -560,9 +564,17 @@ function GenericToolRow({
   const failed = typeof r === 'object' && !!r?.error
   const interrupted = typeof r === 'object' && !!r?.interrupted
   const args = Object.entries(item.args ?? {})
-  // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")
+  const isFetch = item.name === 'fetch_tool_result'
+  // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")；查结果集用人话概要
   const firstArg = args.length ? args[0][1] : undefined
-  const argPreview = firstArg === undefined ? '' : JSON.stringify(firstArg)
+  const argPreview = isFetch
+    ? (() => {
+        const a = item.args as { resultId?: number; mode?: string; keyword?: string; start?: number }
+        return a.mode === 'search' ? `#${a.resultId} 搜"${a.keyword ?? ''}"` : `#${a.resultId} 按位置读取`
+      })()
+    : firstArg === undefined
+      ? ''
+      : JSON.stringify(firstArg)
   // 卡片收场折叠为记录：行首加授权去向（已授权 / 已拒绝 / 未回应）
   const prefix =
     item.auth === 'denied'
@@ -584,7 +596,10 @@ function GenericToolRow({
         ? '调用失败'
         : interrupted
           ? '已中断'
-          : `返回${formatChars((r as string).length)}`
+          : item.resultRef
+            ? // 超限已存：显示真实规模（result 是摘要，长度不代表结果大小）
+              `${(r as string).split('。')[0]}，超限已存（#${item.resultRef}）`
+            : `返回${formatChars((r as string).length)}`
   const expandable = !waiting && !running
   // 结果详情：规整 JSON 自动格式化便于阅读
   const resultText = useMemo(() => {
@@ -625,8 +640,12 @@ function GenericToolRow({
                 <div className="mb-2 flex flex-col gap-0.5">
                   {args.map(([k, v]) => (
                     <div key={k} className="flex gap-3 text-[13px]">
-                      <span className="w-[120px] flex-none truncate text-muted-foreground">{k}</span>
-                      <span className="min-w-0 break-all">{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                      <span className="w-[120px] flex-none truncate text-muted-foreground">
+                        {isFetch ? (FETCH_ARG_LABELS[k] ?? k) : k}
+                      </span>
+                      <span className="min-w-0 break-all">
+                        {isFetch ? fetchArgValue(k, v) : typeof v === 'string' ? v : JSON.stringify(v)}
+                      </span>
                     </div>
                   ))}
                 </div>
