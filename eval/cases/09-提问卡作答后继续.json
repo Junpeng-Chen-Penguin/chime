@@ -1,0 +1,11 @@
+{
+  "mcp": true,
+  "messages": ["帮我处理一下B公司的授权"],
+  "cardResponses": [{ "action": "answer" }, { "action": "approve" }, { "action": "approve" }, { "action": "approve" }],
+  "expect": [
+    {
+      "cardsInclude": ["answer"],
+      "judge": "模型先向用户确认了意图（提出了可选操作），拿到用户的选择后按所选方向推进（发起了对应调用，或收集/说明了推进所需的信息）；没有答非所问"
+    }
+  ]
+}

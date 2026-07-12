@@ -121,14 +121,26 @@ app.whenReady().then(() => {
           messages: string[]
           conv?: string // 往既有会话续发（跨重启多轮自测）；缺省新建会话
           stopAfterMs?: number // 停止路径自测：每轮开跑后定时触发停止（同用户点停止）
+          // 卡片代答（Case 7 正式机制）：按弹卡顺序逐条消费；耗尽后自动收口（授权拒绝/提问放弃）防挂起
+          cardResponses?: { action: 'approve' | 'deny' | 'answer' | 'skip' }[]
         }
         const { runTurn, stopTurn, REPAIR_TEXTS } = await import('./engine/orchestrator')
-        // MCP 用例：预置服务并连接（同名服务已存在则不重复建）
-        if (spec.mcp) {
+        // MCP 用例隔离：声明了 mcp 才启用（地址/停用状态变了就更新）；没声明就停用全部服务——
+        // 评估共用数据目录，前一用例注册的服务不能泄漏进「无手段」类用例
+        {
           const existing = listMcpServices()
-          for (const s of spec.mcp) {
-            if (!existing.some((e) => e.name === s.name)) {
-              saveMcpService({ name: s.name, url: s.url, headers: s.headers ?? {}, enabled: true })
+          if (spec.mcp) {
+            for (const s of spec.mcp) {
+              const found = existing.find((e) => e.name === s.name)
+              if (!found) {
+                saveMcpService({ name: s.name, url: s.url, headers: s.headers ?? {}, enabled: true })
+              } else if (found.url !== s.url || !found.enabled) {
+                saveMcpService({ id: found.id, name: s.name, url: s.url, headers: s.headers ?? {}, enabled: true })
+              }
+            }
+          } else {
+            for (const e of existing) {
+              if (e.enabled) saveMcpService({ id: e.id, name: e.name, url: e.url, headers: null, enabled: false })
             }
           }
         }
@@ -146,6 +158,30 @@ app.whenReady().then(() => {
         const emit = (e: object): void => {
           process.stdout.write(JSON.stringify(e) + '\n')
         }
+        // 卡片代答：弹卡即按预设回应，动作以 card-answered 事件记入评估输出（可核查）。
+        // 预设按卡类分队列消费（approve/deny 归授权卡，answer/skip 归提问卡）——
+        // 模型先查数还是先弹卡的顺序不定，按类匹配消除抖动。
+        // 代答器无条件挂载：没有预设（或预设耗尽）的卡自动收口（授权拒绝/提问放弃）——评估必须零挂起
+        let currentStreamId = ''
+        {
+          const cardsMod = await import('./engine/cards')
+          const presets = spec.cardResponses ?? []
+          const authQ = presets.filter((c) => c.action === 'approve' || c.action === 'deny')
+          const askQ = presets.filter((c) => c.action === 'answer' || c.action === 'skip')
+          cardsMod.setCardResponder((kind, toolCallId, questions) => {
+            const next = (kind === 'auth' ? authQ : askQ).shift()
+            const action = next?.action ?? (kind === 'auth' ? 'deny' : 'skip')
+            emit({ type: 'card-answered', streamId: currentStreamId, kind, toolCallId, action, exhausted: !next })
+            if (kind === 'auth') return action === 'approve' ? 'approved' : 'denied'
+            if (action === 'answer') {
+              return {
+                kind: 'answers',
+                answers: (questions ?? []).map((q) => ({ question: q.question, answer: q.options[0]?.label ?? null }))
+              }
+            }
+            return { kind: 'declined' }
+          })
+        }
         const convId = spec.conv ?? `eval-${process.pid}`
         if (!spec.conv) {
           createConversation(convId, model, Date.now())
@@ -156,6 +192,7 @@ app.whenReady().then(() => {
         }
         for (let i = 0; i < spec.messages.length; i++) {
           const streamId = `t${i + 1}`
+          currentStreamId = streamId
           if (spec.stopAfterMs) setTimeout(() => stopTurn(streamId), spec.stopAfterMs)
           await runTurn({ streamId, convId, text: spec.messages[i], model, emit })
         }

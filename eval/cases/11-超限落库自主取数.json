@@ -1,0 +1,14 @@
+{
+  "mcp": true,
+  "messages": ["导出全部账单数据，然后告诉我一共有多少条、编号范围是什么"],
+  "cardResponses": [{ "action": "approve" }],
+  "expect": [
+    {
+      "mcpCalled": "export_billing_data",
+      "overflowStored": true,
+      "fetched": true,
+      "noInternalRefs": true,
+      "judge": "回答给出了总条数（8000 条）和编号范围（000001 到 008000，表述形式不限）"
+    }
+  ]
+}

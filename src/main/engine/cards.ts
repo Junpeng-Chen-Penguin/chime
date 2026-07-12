@@ -35,6 +35,15 @@ interface PendingCard {
   resolve: (outcome: never) => void
 }
 
+// 评估代答（Case 7 正式机制）：注入后弹卡即按用例预设回应，不经 UI。
+// 优先级：注入的代答器 > 环境变量快速钩子 > UI 队列
+let responder:
+  | ((kind: 'auth' | 'ask', toolCallId: string, questions?: AskQuestion[]) => CardDecision | AskOutcome | null)
+  | null = null
+export function setCardResponder(r: typeof responder): void {
+  responder = r
+}
+
 // 每轮一个队列实例；streamId → 实例，供 IPC 路由用户回应
 const queues = new Map<string, CardQueue>()
 
@@ -56,7 +65,13 @@ export class CardQueue {
   request(toolCallId: string, signal: AbortSignal): Promise<CardDecision> {
     return new Promise((resolve) => {
       if (signal.aborted) return resolve('aborted')
-      // 无界面自测钩子：三去向不经 UI 直接给决定（正式卡片代答随评估收口模块）
+      // 评估代答（按用例预设）
+      const r = responder?.('auth', toolCallId)
+      if (r) {
+        this.onAuth(toolCallId, r as CardDecision)
+        return resolve(r as CardDecision)
+      }
+      // 无界面自测钩子：快速手测用（正式代答走 setCardResponder）
       const auto = process.env.CHIME_CARD_AUTO
       if (auto === 'approve' || auto === 'deny') {
         const d: CardDecision = auto === 'approve' ? 'approved' : 'denied'
@@ -67,10 +82,16 @@ export class CardQueue {
     })
   }
 
-  // 提问卡：同一条队列排队；questions 供自测钩子代答用
+  // 提问卡：同一条队列排队；questions 供代答用
   requestAsk(toolCallId: string, questions: AskQuestion[], signal: AbortSignal): Promise<AskOutcome> {
     return new Promise((resolve) => {
       if (signal.aborted) return resolve({ kind: 'aborted' })
+      // 评估代答（按用例预设）
+      const r = responder?.('ask', toolCallId, questions)
+      if (r) {
+        this.onAsk(toolCallId, r as AskOutcome)
+        return resolve(r as AskOutcome)
+      }
       // 无界面自测钩子：answer = 每题选第一项，decline = 放弃整卡
       const auto = process.env.CHIME_ASK_AUTO
       if (auto === 'answer' || auto === 'decline') {

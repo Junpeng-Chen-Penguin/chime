@@ -1,0 +1,11 @@
+{
+  "mcp": true,
+  "messages": ["A公司的授权还有效吗？"],
+  "cardResponses": [{ "action": "approve" }],
+  "expect": [
+    {
+      "artifact": false,
+      "judge": "直接给出结论（授权生效中，或含到期日），没有绕弯子"
+    }
+  ]
+}

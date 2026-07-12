@@ -1,0 +1,12 @@
+{
+  "mcp": true,
+  "messages": ["A公司的授权什么时候到期？"],
+  "cardResponses": [{ "action": "approve" }, { "action": "approve" }],
+  "expect": [
+    {
+      "mcpCalled": "query_tenant_auth",
+      "cardsInclude": ["approve"],
+      "judge": "回答明确给出了 A公司 授权到期日 2026-12-31（表述形式不限），没有编造其他关键信息"
+    }
+  ]
+}

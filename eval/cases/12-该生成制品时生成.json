@@ -1,0 +1,12 @@
+{
+  "mcp": true,
+  "messages": ["查一下A公司和C公司的授权状态，整理成表格给我核对"],
+  "cardResponses": [{ "action": "approve" }, { "action": "approve" }, { "action": "approve" }],
+  "expect": [
+    {
+      "artifact": true,
+      "noInternalRefs": true,
+      "judge": "表格生成后回答简短收束，没有把表格内容整段复述一遍，也没有向用户解释内部机制"
+    }
+  ]
+}
