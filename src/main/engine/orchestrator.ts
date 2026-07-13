@@ -24,7 +24,7 @@ import {
   FETCH_TOOL_DISPLAY,
   ARTIFACT_TOOL_NAME,
   ARTIFACT_TOOL_DISPLAY,
-  TOOL_REQUEST_HARD_LIMIT,
+  TOOL_ROUND_HARD_LIMIT,
   STEP_COUNT_LIMIT,
   type TurnToolContext
 } from './tools'
@@ -74,6 +74,9 @@ export const REPAIR_TEXTS = {
   local: INTERRUPT_LOCAL,
   ask: ASK_INTERRUPTED_EXIT
 }
+
+// 额度信号统一前缀：注入时以此识别旧注去重，模型端据此知道是内部信号（随行标注，集中声明拦不住）
+const BUDGET_NOTE_PREFIX = '（内部信号，不要向用户提及：'
 
 interface SdkError extends Error {
   statusCode?: number
@@ -279,11 +282,13 @@ async function streamCore(core: {
       messages: history,
       abortSignal: controller.signal,
       tools: Object.keys(turnTools).length ? turnTools : undefined,
-      // 两件事：接口级禁止（请求总数触顶后摘工具清单，模型只能作答）+
+      // 三件事（07-13 修订：计轮 + 触顶告知，原为触顶静默摘工具清单——模型不知情会把调用吐进正文）：
+      // 接口级禁止（含工具调用的轮数触顶后保留清单但禁止选择 + 注入收尾指令，模型只能作答）+
+      // 额度过半预警（goose 同款，注入轻提示让模型收敛探索）+
       // 总量闸（上一步结果集齐、交给模型之前统一判定——批内从大到小落库改摘要，已给过的不回头改）
       prepareStep: ({ steps, messages }) => {
-        const requested = steps.reduce((s, st) => s + st.toolCalls.length, 0)
-        const hardLimit = requested >= TOOL_REQUEST_HARD_LIMIT
+        const rounds = steps.filter((st) => st.toolCalls.length > 0).length
+        const hardLimit = rounds >= TOOL_ROUND_HARD_LIMIT
         if (hardLimit) limitHit = true
 
         const lastIdx = steps.length - 1
@@ -318,27 +323,41 @@ async function streamCore(core: {
           }
         }
 
-        if (!hardLimit && !gated) return undefined
+        // 额度信号（内部属性随行标注，且每步去旧注新，避免 override 带到后续步时重复累积）
+        const needNote = hardLimit || rounds * 2 >= TOOL_ROUND_HARD_LIMIT
+        if (!hardLimit && !gated && !needNote) return undefined
+        let msgs = messages
+        if (gated) {
+          // 改写消息序列：被落库的结果以摘要文本替代原文（override 会带到后续步）
+          msgs = msgs.map((m) => {
+            if (m.role !== 'tool' || !Array.isArray(m.content)) return m
+            return {
+              ...m,
+              content: m.content.map((part) => {
+                const p = part as { type: string; toolCallId?: string }
+                if (p.type === 'tool-result' && p.toolCallId && gated!.has(p.toolCallId)) {
+                  return { ...part, output: { type: 'text', value: gated!.get(p.toolCallId)! } }
+                }
+                return part
+              })
+            } as typeof m
+          })
+        }
+        if (needNote) {
+          msgs = msgs.filter((m) => !(m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(BUDGET_NOTE_PREFIX)))
+          msgs = [
+            ...msgs,
+            {
+              role: 'user' as const,
+              content: hardLimit
+                ? `${BUDGET_NOTE_PREFIX}工具调用轮次已达上限，本轮不能再调用任何工具。请立即基于已获得的信息回答用户；信息不足则说明还缺什么，然后停止。）`
+                : `${BUDGET_NOTE_PREFIX}工具调用额度已用 ${rounds}/${TOOL_ROUND_HARD_LIMIT} 轮。请减少探索、合并必要的调用、尽快基于已有信息收尾作答。）`
+            }
+          ]
+        }
         return {
-          ...(hardLimit ? { activeTools: [] as never[] } : {}),
-          ...(gated
-            ? {
-                // 改写消息序列：被落库的结果以摘要文本替代原文（override 会带到后续步）
-                messages: messages.map((m) => {
-                  if (m.role !== 'tool' || !Array.isArray(m.content)) return m
-                  return {
-                    ...m,
-                    content: m.content.map((part) => {
-                      const p = part as { type: string; toolCallId?: string }
-                      if (p.type === 'tool-result' && p.toolCallId && gated!.has(p.toolCallId)) {
-                        return { ...part, output: { type: 'text', value: gated!.get(p.toolCallId)! } }
-                      }
-                      return part
-                    })
-                  } as typeof m
-                })
-              }
-            : {})
+          ...(hardLimit ? { toolChoice: 'none' as const } : {}),
+          messages: msgs
         }
       },
       stopWhen: isStepCount(STEP_COUNT_LIMIT) // 防御性兜底，正常永远先触发硬闸

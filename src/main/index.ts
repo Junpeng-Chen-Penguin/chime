@@ -252,13 +252,22 @@ app.whenReady().then(() => {
         const replaced = ov.applyTotalGate(ctx2, ov.TOTAL_LIMIT - 60_000, batch) // 基线=上限-6万，批计 8 万超 2 万
         assert(replaced.has('b') && !replaced.has('c'), '总量闸：从大到小落库（大者落、小者放行）')
         assert(ctx2.turnFullChars === 30_000, '总量闸：放行量计入本轮累计')
-        // 取数两式
+        // 取数两式（07-13 修订：按行 + 正则）
         const bigId = ctx.refs.get('c1')!
-        const range = ov.fetchFromResult(conv, { resultId: bigId, mode: 'range', start: 10, length: 20 })
-        assert(typeof range === 'string' && range.includes('x'.repeat(20)), '查结果集：按位置读一段')
+        const read = ov.fetchFromResult(conv, { resultId: bigId, mode: 'read', startLine: 1, lines: 1 })
+        assert(typeof read === 'string' && read.includes('x'.repeat(20)) && read.includes('1: '), '查结果集：按行读取带行号')
         const idB = ctx2.refs.get('b')!
-        const hit = ov.fetchFromResult(conv, { resultId: idB, mode: 'search', keyword: 'bbb' })
-        assert(typeof hit === 'string' && hit.includes('命中'), '查结果集：按关键词搜')
+        const hit = ov.fetchFromResult(conv, { resultId: idB, mode: 'search', pattern: 'b{10}' })
+        assert(typeof hit === 'string' && hit.includes('命中'), '查结果集：正则搜索')
+        // 压缩单行 JSON：落库时格式化多行，命中带行号可接力按行读取
+        const mini = JSON.stringify(
+          Array.from({ length: 1500 }, (_, i) => ({ 租户: `t${i}`, 负责人: i === 700 ? '陈某' : '别人' }))
+        )
+        const s3 = ov.guardSingle(ctx, 'c3', 'tool_a', mini)
+        assert(s3.includes('行。') || / \d+ 行/.test(s3), '单结果闸：摘要带行数')
+        const jid = ctx.refs.get('c3')!
+        const found = ov.fetchFromResult(conv, { resultId: jid, mode: 'search', pattern: '陈某', context: 2 })
+        assert(typeof found === 'string' && found.includes('陈某') && /\d+: /.test(found), '查结果集：压缩 JSON 格式化落库，搜索命中带行号')
         assert(typeof ov.fetchFromResult(conv, { resultId: 9999 }) === 'object', '查结果集：无效编号报错')
         assert(typeof ov.fetchFromResult('other-conv', { resultId: bigId }) === 'object', '查结果集：跨会话不可用')
         // 制品解析三层

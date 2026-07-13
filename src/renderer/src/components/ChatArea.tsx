@@ -557,13 +557,22 @@ function AskToolRow({
 const FETCH_ARG_LABELS: Record<string, string> = {
   resultId: '取自结果',
   mode: '取数方式',
-  start: '起始位置',
+  pattern: '匹配',
+  context: '上下文',
+  fromHit: '翻页',
+  startLine: '起始行',
+  lines: '行数',
+  start: '起始位置', // 以下三项为历史轮的旧参数形态
   length: '读取长度',
   keyword: '关键词'
 }
 function fetchArgValue(k: string, v: unknown): string {
-  if (k === 'mode') return v === 'search' ? '按关键词搜索' : '按位置读取'
+  if (k === 'mode') return v === 'search' ? '按关键词搜索' : v === 'read' ? '按行读取' : '按位置读取'
   if (k === 'resultId') return `#${v}`
+  if (k === 'startLine') return `第 ${Number(v).toLocaleString()} 行起`
+  if (k === 'lines') return `${Number(v).toLocaleString()} 行`
+  if (k === 'context') return `前后 ${Number(v)} 行`
+  if (k === 'fromHit') return `跳过前 ${Number(v)} 处命中`
   if (k === 'start') return `第 ${Number(v).toLocaleString()} 字起`
   if (k === 'length') return `${Number(v).toLocaleString()} 字`
   return typeof v === 'string' ? v : JSON.stringify(v)
@@ -595,8 +604,10 @@ function GenericToolRow({
   const firstArg = args.length ? args[0][1] : undefined
   const argPreview = isFetch
     ? (() => {
-        const a = item.args as { resultId?: number; mode?: string; keyword?: string; start?: number }
-        return a.mode === 'search' ? `#${a.resultId} 搜"${a.keyword ?? ''}"` : `#${a.resultId} 按位置读取`
+        const a = item.args as { resultId?: number; mode?: string; pattern?: string; keyword?: string; startLine?: number }
+        if (a.mode === 'search') return `#${a.resultId} 搜"${a.pattern ?? a.keyword ?? ''}"`
+        if (a.startLine !== undefined || a.mode === 'read') return `#${a.resultId} 读第 ${a.startLine ?? 1} 行起`
+        return `#${a.resultId} 按位置读取` // 历史轮的旧参数形态
       })()
     : firstArg === undefined
       ? ''

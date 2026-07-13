@@ -13,9 +13,9 @@ import { createArtifact, type ArtifactRef } from './artifact'
 import type { SourceSnapshot } from './store'
 
 export const SEARCH_LIMIT_PER_TURN = 3 // 工具级闸门（软约束 3 次的硬性面）
-// 接口级禁止：请求总数（含被拒）触顶即摘工具清单。
-// v0.5.0 放宽（6 → 16）：一次多系统查数（提问 + 多调用 + 取数 + 制品）约 6–10 次调用，旧值必触闸
-export const TOOL_REQUEST_HARD_LIMIT = 16
+// 接口级禁止：按「轮」计数（一轮内并行多次调用计 1 轮，对齐 Claude Code / Cherry / goose 计轮惯例；07-13 修订，原按次计）。
+// 触顶步保留工具清单、toolChoice: none + 注入收尾指令；过半注入预警——见 orchestrator prepareStep
+export const TOOL_ROUND_HARD_LIMIT = 16
 export const STEP_COUNT_LIMIT = 24 // 防御性兜底步数（v0.4.0 为 10），正常永远先触发硬闸
 const RESULT_CHAR_LIMIT = 6000 // 规则 2：单次工具返回入场上限（字符，联调校准）
 
@@ -64,29 +64,40 @@ export function makeMcpTools(signal: AbortSignal, cards: CardQueue, overflow: Ov
 export const FETCH_TOOL_NAME = 'fetch_tool_result'
 export const FETCH_TOOL_DISPLAY = '查结果集'
 
-const FETCH_TOOL_DESCRIPTION = `按结果编号取用已存的超限工具结果。
+const FETCH_TOOL_DESCRIPTION = `按结果编号取用已存的超限工具结果，内容按行组织。
 
 什么时候用：
 - 之前的调用结果超限被存库（摘要里有「结果编号 #N」），摘要不够决策、需要看具体内容时
 - 结果编号在本会话内一直有效：用户追问之前查过的数据时直接用原编号取，不必重新调外部系统
 
-用法（两种取数方式，对任何格式都成立）：
-- 按位置读一段：mode 填 "range"，start 为起始字符位置（从 0 起），length 为长度
-- 按关键词搜：mode 填 "search"，keyword 为要找的词，返回每处命中的前后文
-- 单次最多返回 ${FETCH_LIMIT} 字，大结果分多次取`
+两种取数方式，配合使用：
+- 搜索：mode 填 "search"，pattern 为正则或普通文本，逐行匹配；返回命中行及前后 context 行（默认 5、最大 50），全部带行号；命中超过 10 处时用 fromHit 翻页
+- 读取：mode 填 "read"（默认），从第 startLine 行起读 lines 行
+
+高效取数：先搜关键词拿到行号，再从该处一次读取整段。单次最多返回 ${FETCH_LIMIT} 字，要看一条完整记录就把 lines 给足（如 200 行）；不要几行几行地多次小取——调用轮次有限额`
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导
 export function makeFetchResultTool(convId: string) {
   return tool({
     description: FETCH_TOOL_DESCRIPTION,
-    inputSchema: jsonSchema<{ resultId: number; mode?: 'range' | 'search'; start?: number; length?: number; keyword?: string }>({
+    inputSchema: jsonSchema<{
+      resultId: number
+      mode?: 'read' | 'search'
+      pattern?: string
+      context?: number
+      fromHit?: number
+      startLine?: number
+      lines?: number
+    }>({
       type: 'object',
       properties: {
         resultId: { type: 'number', description: '结果编号（摘要里的 #N，传数字 N）' },
-        mode: { type: 'string', enum: ['range', 'search'], description: '取数方式：range 按位置读一段（默认），search 按关键词搜' },
-        start: { type: 'number', description: 'range：起始字符位置，从 0 起' },
-        length: { type: 'number', description: 'range：读取长度（字符）' },
-        keyword: { type: 'string', description: 'search：要查找的关键词' }
+        mode: { type: 'string', enum: ['read', 'search'], description: '取数方式：read 按行读取（默认），search 按关键词搜' },
+        pattern: { type: 'string', description: 'search：正则或普通文本，逐行匹配' },
+        context: { type: 'number', description: 'search：每处命中带前后多少行上下文（默认 5，最大 50）' },
+        fromHit: { type: 'number', description: 'search：跳过前 N 处命中（翻页用）' },
+        startLine: { type: 'number', description: 'read：起始行号，从 1 起' },
+        lines: { type: 'number', description: 'read：读取行数（一次给足，不要小取多次）' }
       },
       required: ['resultId']
     }),
