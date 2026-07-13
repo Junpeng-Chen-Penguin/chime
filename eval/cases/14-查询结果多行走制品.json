@@ -1,0 +1,12 @@
+{
+  "mcp": true,
+  "messages": ["A公司现在开通了哪些应用？"],
+  "cardResponses": [{ "action": "approve" }, { "action": "approve" }, { "action": "approve" }],
+  "expect": [
+    {
+      "artifact": true,
+      "noInternalRefs": true,
+      "judge": "回答正文没有手写多行 Markdown 表格或逐条罗列全部应用，只有简短结论（如共几个应用、几个运行中），明细交由表格承载"
+    }
+  ]
+}

@@ -125,7 +125,7 @@ const ASK_TOOL_DESCRIPTION = `向用户提出选择题收集信息，问题以�
 
 返回语义：
 - 「用户的回答：…」= 逐题作答结果，标「未回答」的题用户选择跳过
-- 用户选择不回答时：不要换个说法重复问，按已有信息继续，无法继续就说明缺什么、等用户指示`
+- 用户选择不回答时：不要换个说法重复问——包括在正文里再列一遍选项、以问句结尾再次征询；按已有信息继续，无法继续就用陈述句说明缺什么，然后停下等用户指示`
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导
 export function makeAskTool(signal: AbortSignal, cards: CardQueue) {
@@ -170,7 +170,7 @@ export function makeAskTool(signal: AbortSignal, cards: CardQueue) {
         case 'answers':
           return `用户的回答：\n${outcome.answers.map((a) => `${a.question}=${a.answer ?? '未回答'}`).join('\n')}`
         case 'declined':
-          return '用户选择不回答这些问题。不要换个说法重复问；按已有信息继续，无法继续就说明缺什么、等用户指示。'
+          return '用户选择不回答这些问题。不要换个说法重复问——不要在正文里再列一遍选项，也不要以问句结尾再次征询。按已有信息继续；无法继续就用陈述句说明缺什么，然后停下等用户指示。'
         case 'aborted':
           return { interrupted: ASK_INTERRUPTED }
       }
@@ -206,8 +206,9 @@ export const ARTIFACT_TOOL_DISPLAY = '生成制品'
 
 const ARTIFACT_TOOL_DESCRIPTION = `把一批行列结构的数据生成表格制品，用户点开在侧板查看全貌。
 
-什么时候用：
-- 用户需要亲眼查看或核对这批数据时（如查出的明细清单、筛选结果）
+什么时候用（看回答的形态定，不等用户提「表格」二字）：
+- 查出的数据超过 5 条（清单、明细、多条记录的汇总或对比），明细一律交给制品呈现；正文只写一句结论（如「共 8 个应用，7 个运行中」），不要手写 Markdown 表格，也不要逐条罗列——对话流放不下成批数据
+- 5 条以内的小对比、单条记录、单个数值：直接在正文里说清，不生成
 - 数据只是你得出结论的材料、结论已经说清时，不要生成
 - 仅适合行列结构的数据（清单、明细、统计行）；散文式内容不适合
 
