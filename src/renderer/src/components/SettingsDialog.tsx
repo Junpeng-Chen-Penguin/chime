@@ -621,7 +621,7 @@ function ToolsPanel({ initialSub }: { initialSub: 'builtin' | 'mcp' }): React.JS
   const [sub, setSub] = useState<'builtin' | 'mcp'>(initialSub)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-none gap-1 px-6 pt-5">
+      <div className="flex flex-none gap-1 px-6 pt-4">
         {(['builtin', 'mcp'] as const).map((k) => (
           <button
             key={k}
@@ -650,7 +650,7 @@ const BUILTIN_TOOLS = [
 
 function BuiltinToolsPane(): React.JSX.Element {
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5">
+    <div className="flex-1 overflow-y-auto px-6 py-6">
       <div className="rounded-lg border border-border">
         {BUILTIN_TOOLS.map((t, i) => (
           <div key={t.name} className={cn('flex items-center gap-3 px-4 py-3', i > 0 && 'border-t border-border')}>
@@ -659,7 +659,7 @@ function BuiltinToolsPane(): React.JSX.Element {
             </span>
             <div className="min-w-0 flex-1">
               <div className="text-[14px] font-medium">{t.name}</div>
-              <div className="mt-0.5 text-[13px] text-muted-foreground">{t.desc}</div>
+              <div className="mt-1 text-[13px] text-muted-foreground">{t.desc}</div>
             </div>
             <span className="flex-none text-[12px] text-muted-foreground">默认开启</span>
           </div>
