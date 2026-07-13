@@ -90,7 +90,7 @@ export default function Composer({
               }
             }}
             placeholder={inputDisabled ? '等待授权中，请先处理上方卡片' : askWaiting ? '或直接回复……' : 'Chime in…'}
-            className="block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-base leading-[1.6] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+            className="block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-[14px] leading-[1.6] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           />
           <div className="flex items-center justify-between px-3 pb-3">
             {/* 左下：知识库控件（未选=图标，点击弹选择器 / 已选=浅蓝胶囊 / 定性后胶囊无 × / 不可用置灰） */}
@@ -156,7 +156,7 @@ export default function Composer({
                   className="flex items-center gap-1 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
                 >
                   {model}
-                  <ChevronDown className="size-3 text-muted-foreground" />
+                  <ChevronDown className="size-3.5 text-muted-foreground" />
                 </button>
                 {menuOpen && models.length > 0 && (
                   <div className="absolute right-0 bottom-[calc(100%+8px)] z-20 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">

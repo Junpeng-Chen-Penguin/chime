@@ -22,11 +22,11 @@ export default function SidePanel({
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div className="animate-in slide-in-from-right-4 flex h-full flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.09] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)] duration-300 min-w-[380px]">
+    <div className="animate-in slide-in-from-right-4 flex h-full flex-1 flex-col overflow-hidden rounded-[12px] border border-border bg-background shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)] duration-300 min-w-[380px]">
       <header className="flex h-[44px] flex-none items-center gap-2.5 border-b border-border px-4">
         {icon}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[14px] leading-tight font-semibold">{title}</div>
+          <div className="truncate text-[15px] leading-tight font-semibold">{title}</div>
           {subtitle && <div className="truncate text-[11px] text-muted-foreground">{subtitle}</div>}
         </div>
         <button
@@ -246,7 +246,7 @@ function PanelEmpty({ error }: { error: NonNullable<DocPanelData['error']> }): R
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-10 text-center">
       <div className="grid size-12 place-items-center rounded-2xl bg-muted">
-        <Icon className={error === 'busy' ? 'size-5 animate-spin text-muted-foreground' : 'size-5 text-muted-foreground'} />
+        <Icon className={error === 'busy' ? 'size-[18px] animate-spin text-muted-foreground' : 'size-[18px] text-muted-foreground'} />
       </div>
       <div className="text-[14px] font-semibold">{title}</div>
       <div className="max-w-[300px] text-[12px] leading-[1.7] text-muted-foreground">{desc}</div>

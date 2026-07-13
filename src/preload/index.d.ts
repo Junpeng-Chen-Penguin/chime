@@ -1,5 +1,3 @@
-import { ElectronAPI } from '@electron-toolkit/preload'
-
 export interface ProviderInfo {
   baseUrl: string
   defaultModel: string
@@ -225,7 +223,6 @@ export interface ArtifactView {
 
 declare global {
   interface Window {
-    electron: ElectronAPI
     api: ChimeApi
   }
 }

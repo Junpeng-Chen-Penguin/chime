@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, protocol, net } from 'electron'
 import { join, dirname, resolve } from 'path'
+import { appendFileSync } from 'fs'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -35,7 +36,7 @@ function createWindow(): BrowserWindow {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: true // preload 只用 ipcRenderer，无需 Node 权限
     }
   })
 
@@ -49,9 +50,13 @@ function createWindow(): BrowserWindow {
   mainWindow.on('leave-full-screen', () => sendFs(false))
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    // 只放行 http(s)，防 file: / 自定义协议被系统打开
+    if (/^https?:/i.test(details.url)) shell.openExternal(details.url)
     return { action: 'deny' }
   })
+
+  // 兜底：窗口永不导航离开应用页面（渲染层 preventDefault 之外的第二道防线）
+  mainWindow.webContents.on('will-navigate', (e) => e.preventDefault())
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
@@ -74,6 +79,19 @@ const dataDirFlag = ((): string | null => {
 if (dataDirFlag) {
   app.setPath('userData', resolve(dataDirFlag))
 }
+
+// 未预期异常兜底：落日志（userData/error.log）便于排查，不静默也不弹系统崩溃框
+const logFatal = (kind: string, e: unknown): void => {
+  const line = `[${new Date().toISOString()}] ${kind}: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`
+  try {
+    appendFileSync(join(app.getPath('userData'), 'error.log'), line)
+  } catch {
+    // 日志写不进也不能再抛
+  }
+  console.error(line)
+}
+process.on('uncaughtException', (e) => logFatal('uncaughtException', e))
+process.on('unhandledRejection', (e) => logFatal('unhandledRejection', e))
 if (process.env.CHIME_ENGINE_TEST) {
   app.setPath('userData', join(tmpdir(), 'chime-engine-test'))
 }
@@ -414,7 +432,7 @@ app.whenReady().then(() => {
   }
 
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.chime.app')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.

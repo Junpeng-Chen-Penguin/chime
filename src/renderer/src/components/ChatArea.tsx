@@ -120,7 +120,7 @@ export default function ChatArea({
   )
 
   return (
-    <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-black/[0.09] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)]">
+    <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-border bg-background shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)]">
       <header
         className={cn(
           'app-drag flex h-[44px] flex-none items-center gap-1',
@@ -417,9 +417,9 @@ function Dot({ tone = 'neutral' }: { tone?: 'neutral' | 'running' | 'error' | 'q
       className={cn(
         'mt-[8px] size-[6px] flex-none rounded-full',
         tone === 'running' && 'animate-pulse bg-primary',
-        tone === 'neutral' && 'bg-foreground/25',
+        tone === 'neutral' && 'bg-muted-foreground/50',
         tone === 'error' && 'bg-destructive',
-        tone === 'queued' && 'border border-foreground/35 bg-transparent'
+        tone === 'queued' && 'border border-muted-foreground/50 bg-transparent'
       )}
     />
   )
@@ -539,7 +539,7 @@ function AskToolRow({
           )}
         </button>
         {open && !waiting && (
-          <div className="mt-1 ml-5 flex flex-col gap-0.5">
+          <div className="mt-1 ml-5 flex flex-col gap-1">
             {detail.map((d, i) => (
               <div key={i} className="flex gap-1.5">
                 <span className="flex-none text-muted-foreground/50">-</span>
@@ -653,17 +653,17 @@ function GenericToolRow({
               expandable && 'transition-colors hover:bg-muted'
             )}
           >
-            <span className={cn('text-muted-foreground/50', failed && 'text-destructive/60')}>⎿</span>
+            <span className={cn('text-muted-foreground/50', failed && 'text-destructive')}>⎿</span>
             <span className={cn(failed && 'font-medium text-destructive')}>{summary}</span>
             {expandable && <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />}
           </button>
         )}
         {open && expandable && (
-          <div className="mt-1.5 ml-5 rounded-lg border border-border bg-muted/30 px-3.5 py-2.5">
+          <div className="mt-1.5 ml-5 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
             {args.length > 0 && (
               <>
                 <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">参数</div>
-                <div className="mb-2 flex flex-col gap-0.5">
+                <div className="mb-2 flex flex-col gap-1">
                   {args.map(([k, v]) => (
                     <div key={k} className="flex gap-3 text-[13px]">
                       <span className="w-[120px] flex-none truncate text-muted-foreground">
@@ -730,13 +730,13 @@ function AuthCard({
       <div className="mt-3 flex justify-end gap-2 border-t border-border pt-3">
         <button
           onClick={() => respond('denied')}
-          className="rounded-lg border border-border px-3.5 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+          className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
         >
           拒绝
         </button>
         <button
           onClick={() => respond('approved')}
-          className="rounded-lg bg-primary px-3.5 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
         >
           同意
         </button>
@@ -859,19 +859,19 @@ function AskCard({
                   }}
                   className={cn(
                     'group flex min-h-[44px] w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors',
-                    picked ? 'border-ring bg-primary/5' : 'border-border hover:bg-muted',
+                    picked ? 'border-ring bg-primary-soft' : 'border-border hover:bg-muted',
                     other && 'cursor-default opacity-40'
                   )}
                 >
                   <span
                     className={cn(
                       'grid size-5 flex-none place-items-center text-[12px]',
-                      q.multiSelect ? 'rounded-[5px]' : 'rounded-full',
+                      q.multiSelect ? 'rounded-md' : 'rounded-full',
                       // 悬停时行底变灰，徽标换白底避免融进背景
                       picked ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground group-hover:bg-background'
                     )}
                   >
-                    {q.multiSelect && picked ? <Check className="size-3" strokeWidth={3} /> : i + 1}
+                    {q.multiSelect && picked ? <Check className="size-3.5" strokeWidth={3} /> : i + 1}
                   </span>
                   <span className="min-w-0 flex-1 text-[14px] text-foreground">{op.label}</span>
                   {!q.multiSelect && !other && (
@@ -889,7 +889,7 @@ function AskCard({
             <div
               className={cn(
                 'flex min-h-[44px] w-full items-center gap-3 rounded-lg border px-3 py-2 transition-colors',
-                other ? 'border-ring bg-primary/5' : 'border-border'
+                other ? 'border-ring bg-primary-soft' : 'border-border'
               )}
             >
               <span className="grid size-5 flex-none place-items-center rounded-full bg-muted text-[12px] text-muted-foreground">
@@ -991,7 +991,7 @@ function SearchToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): Re
             detail.length && 'transition-colors hover:bg-muted'
           )}
         >
-          <span className={cn('text-muted-foreground/50', failed && 'text-destructive/60')}>⎿</span>
+          <span className={cn('text-muted-foreground/50', failed && 'text-destructive')}>⎿</span>
           {/* 真故障标红，对齐 Claude Code 工具失败的视觉 */}
           <span className={cn(failed && 'font-medium text-destructive')}>{summary}</span>
           {detail.length > 0 && (
@@ -1000,7 +1000,7 @@ function SearchToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): Re
         </button>
         {open && (
           // 「-」无序列表，缩进到结果行文字之下体现父子；不用竖线
-          <div className="mt-1 ml-5 flex flex-col gap-0.5">
+          <div className="mt-1 ml-5 flex flex-col gap-1">
             {detail.map((d, i) => (
               <div key={i} className="flex gap-1.5">
                 <span className="flex-none text-muted-foreground/50">-</span>
@@ -1056,7 +1056,7 @@ function SourcesFooter({
             key={a.file}
             onClick={() => onOpen(a.file, a.sources)}
             title={a.file}
-            className="group flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors hover:bg-muted"
+            className="group flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted"
           >
             <FileText className="size-4 flex-none text-muted-foreground" />
             <span className="truncate text-[13px] text-muted-foreground group-hover:text-foreground">
@@ -1083,7 +1083,7 @@ function MessageActions({
     setTimeout(() => setCopied(false), 1500)
   }
   return (
-    <div className="-ml-1.5 flex items-center gap-0.5">
+    <div className="-ml-1.5 flex items-center gap-1">
       {content && (
         <ActionBtn title={copied ? '已复制' : '复制'} onClick={copy}>
           {copied ? <Check className="size-4 text-emerald-600" /> : <Copy className="size-4" />}
@@ -1130,7 +1130,7 @@ function ErrorCard({
   return (
     <div
       className={cn(
-        'flex items-center gap-3 rounded-lg border border-l-[3px] border-destructive/25 border-l-destructive bg-destructive/[0.04] px-3.5 py-2.5',
+        'flex items-center gap-3 rounded-lg border border-l-[3px] border-destructive/25 border-l-destructive bg-destructive/[0.04] px-3 py-2.5',
         className
       )}
     >

@@ -24,7 +24,7 @@ export default function Sidebar({
   onDelete
 }: Props): React.JSX.Element {
   return (
-    <aside className="flex h-full w-[256px] flex-none flex-col overflow-hidden rounded-[12px] border border-black/[0.09] bg-[#f8f8f7] shadow-[0_1px_2px_rgba(20,22,30,0.04),0_2px_8px_rgba(20,22,30,0.05)]">
+    <aside className="flex h-full w-[256px] flex-none flex-col overflow-hidden rounded-[12px] border border-border bg-[#f8f8f7] shadow-[0_1px_2px_rgba(20,22,30,0.04),0_2px_8px_rgba(20,22,30,0.05)]">
       {/* 收起按钮左侧为红绿灯留空；全屏时红绿灯隐藏，回到常规内边距 */}
       <div className={cn('app-drag flex h-[44px] flex-none items-center', fullscreen ? 'pl-3' : 'pl-[84px]')}>
         <button
@@ -39,7 +39,7 @@ export default function Sidebar({
       <div className="flex-1 overflow-y-auto px-2.5 pb-2">
         <button
           onClick={onNewChat}
-          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[15px] text-foreground transition-colors hover:bg-black/5"
+          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] text-foreground transition-colors hover:bg-black/5"
         >
           <CirclePlus className="size-[18px] text-muted-foreground" />
           新建对话
@@ -79,7 +79,7 @@ export default function Sidebar({
       <div className="flex-none border-t border-border p-2.5">
         <button
           onClick={onOpenSettings}
-          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[15px] text-muted-foreground transition-colors hover:bg-black/5"
+          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] text-muted-foreground transition-colors hover:bg-black/5"
         >
           <Settings className="size-[18px] text-muted-foreground" />
           设置

@@ -2,6 +2,7 @@
 // 对话组装只读缓存，不现场请求服务；清单变更通知到达时重拉。
 // 失败语义从简：调用失败标脏、下次调用前重连；缓存不持久化，启动连不上即当次「服务不可用」。
 
+import { app } from 'electron'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -52,7 +53,7 @@ function shortMessage(e: unknown): string {
 }
 
 function makeClient(config: McpServiceRow): { client: Client; transport: StreamableHTTPClientTransport } {
-  const client = new Client({ name: 'chime', version: '0.5.0' })
+  const client = new Client({ name: 'chime', version: app.getVersion() })
   const transport = new StreamableHTTPClientTransport(new URL(config.url), {
     requestInit: { headers: config.headers }
   })

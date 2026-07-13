@@ -108,7 +108,7 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
         className="flex h-[560px] max-h-[88vh] w-[780px] flex-col overflow-hidden rounded-2xl bg-background shadow-2xl"
       >
         <div className="flex h-14 flex-none items-center justify-between border-b border-border px-5">
-          <div className="text-[14px] font-semibold">设置</div>
+          <div className="text-[15px] font-semibold">设置</div>
           <button
             onClick={onClose}
             className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -143,7 +143,7 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
               <>
                 <div className="flex-1 overflow-y-auto px-6 py-6">
                   <Section title="平台">
-                    <div className="flex items-center gap-2.5 rounded-lg border border-primary/40 bg-primary-soft px-3.5 py-2.5">
+                    <div className="flex items-center gap-2.5 rounded-lg border border-primary/40 bg-primary-soft px-3 py-2.5">
                       <span className="grid size-6 flex-none place-items-center rounded-md bg-primary text-[12px] font-semibold text-primary-foreground">
                         D
                       </span>
@@ -205,7 +205,7 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
 
           <Section title="模型" hint="检测成功后自动获取，选择一个作为默认模型">
             {models.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border px-4 py-3.5 text-[13px] text-muted-foreground">
+              <div className="rounded-lg border border-dashed border-border px-4 py-3 text-[13px] text-muted-foreground">
                 {status === 'detecting' ? '正在获取模型列表…' : '检测成功后在这里选择默认模型'}
               </div>
             ) : (
@@ -217,7 +217,7 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
                       key={m}
                       onClick={() => setDefaultModel(m)}
                       className={cn(
-                        'flex items-center gap-3 rounded-lg border px-3.5 py-3 text-left text-[14px] transition-colors',
+                        'flex items-center gap-3 rounded-lg border px-3 py-3 text-left text-[14px] transition-colors',
                         sel ? 'border-primary/40 bg-primary-soft' : 'border-border hover:bg-muted'
                       )}
                     >
@@ -366,7 +366,7 @@ function KbPanel(): React.JSX.Element {
     const formBusy = !!progress || formDone !== null
     return (
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        <div className="mb-5 text-[14px] font-semibold">
+        <div className="mb-5 text-[15px] font-semibold">
           {formMode === 'add' ? '新建知识库' : '编辑知识库'}
         </div>
         <Section title="名称 *">
@@ -452,7 +452,7 @@ function KbPanel(): React.JSX.Element {
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6">
       <div className="mb-4 flex items-center justify-between">
-        <div className="text-[13px] font-semibold">知识库</div>
+        <div className="text-[15px] font-semibold">知识库</div>
         <Button
           variant="outline"
           onClick={() => openForm('add')}
@@ -714,7 +714,7 @@ function McpPanel(): React.JSX.Element {
   if (showForm) {
     return (
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        <div className="mb-5 text-[14px] font-semibold">{editing ? '编辑服务' : '新建服务'}</div>
+        <div className="mb-5 text-[15px] font-semibold">{editing ? '编辑服务' : '新建服务'}</div>
         <Section title="名称 *">
           <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="例：计费系统" className={INPUT_CLS} />
         </Section>
@@ -783,7 +783,7 @@ function McpPanel(): React.JSX.Element {
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6">
       <div className="mb-4 flex items-center justify-between">
-        <div className="text-[13px] font-semibold">MCP 服务</div>
+        <div className="text-[15px] font-semibold">MCP 服务</div>
         <Button variant="outline" onClick={() => openForm(null)} className="h-8 gap-1 px-3 text-[13px]">
           <Plus className="size-3.5" />
           添加服务

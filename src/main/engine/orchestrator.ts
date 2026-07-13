@@ -107,6 +107,16 @@ export async function runTurn(opts: {
   emit: Emit
   saveUser?: boolean // 重试时为 false：用户消息已在库里，不重复写
 }): Promise<void> {
+  try {
+    await runTurnBody(opts)
+  } catch (e) {
+    // 兜底收场：组装 / 落库等未预期异常也必须发 turn-done，否则渲染端路由不清空、输入框永久锁死
+    console.error('[chime] runTurn 未预期异常:', e)
+    opts.emit({ type: 'turn-done', streamId: opts.streamId, status: 'error', error: '处理出错，请重试', contextRatio: 0 })
+  }
+}
+
+async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
   const { streamId, convId, text, model, emit } = opts
   const p = getProvider()
 

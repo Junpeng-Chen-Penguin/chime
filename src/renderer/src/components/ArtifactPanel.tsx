@@ -13,7 +13,7 @@ export function ArtifactContent({ artifact }: { artifact: ArtifactView }): React
               <th
                 key={c.key}
                 className={
-                  'sticky top-0 z-10 border-b border-border bg-white px-3 py-2 text-left font-medium whitespace-nowrap' +
+                  'sticky top-0 z-10 border-b border-border bg-background px-3 py-2 text-left font-medium whitespace-nowrap' +
                   (i === 0 ? ' pl-6' : '') +
                   (i === artifact.columns.length - 1 ? ' pr-6' : '')
                 }
@@ -30,7 +30,7 @@ export function ArtifactContent({ artifact }: { artifact: ArtifactView }): React
                 <td
                   key={c.key}
                   className={
-                    'border-b border-border/60 px-3 py-1.5 align-top' +
+                    'border-b border-border px-3 py-1.5 align-top' +
                     (j === 0 ? ' pl-6' : '') +
                     (j === artifact.columns.length - 1 ? ' pr-6' : '')
                   }
