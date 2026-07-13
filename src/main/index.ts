@@ -252,24 +252,29 @@ app.whenReady().then(() => {
         const replaced = ov.applyTotalGate(ctx2, ov.TOTAL_LIMIT - 60_000, batch) // 基线=上限-6万，批计 8 万超 2 万
         assert(replaced.has('b') && !replaced.has('c'), '总量闸：从大到小落库（大者落、小者放行）')
         assert(ctx2.turnFullChars === 30_000, '总量闸：放行量计入本轮累计')
-        // 取数两式（07-13 修订：按行 + 正则）
+        // 取数两工具（07-13 二次修订：grep_result / read_result，形态仿 grep -n / 按行读）
         const bigId = ctx.refs.get('c1')!
-        const read = ov.fetchFromResult(conv, { resultId: bigId, mode: 'read', startLine: 1, lines: 1 })
-        assert(typeof read === 'string' && read.includes('x'.repeat(20)) && read.includes('1: '), '查结果集：按行读取带行号')
+        const read = ov.readResult(conv, { resultId: bigId, offset: 1, limit: 1 })
+        assert(typeof read === 'string' && read.includes('x'.repeat(20)) && read.includes('1:'), '读结果集：按行读取带行号')
         const idB = ctx2.refs.get('b')!
-        const hit = ov.fetchFromResult(conv, { resultId: idB, mode: 'search', pattern: 'b{10}' })
-        assert(typeof hit === 'string' && hit.includes('命中'), '查结果集：正则搜索')
-        // 压缩单行 JSON：落库时格式化多行，命中带行号可接力按行读取
+        const hit = ov.grepResult(conv, { resultId: idB, pattern: 'b{10}' })
+        assert(typeof hit === 'string' && hit.includes('命中'), '搜结果集：正则匹配')
+        // 压缩单行 JSON：落库时格式化多行；交替正则一次搜多词，命中行冒号、上下文行连字符、块间 --
         const mini = JSON.stringify(
-          Array.from({ length: 1500 }, (_, i) => ({ 租户: `t${i}`, 负责人: i === 700 ? '陈某' : '别人' }))
+          Array.from({ length: 1500 }, (_, i) => ({ 租户: `t${i}`, 负责人: i === 700 ? '陈某' : i === 900 ? '李某' : '别人' }))
         )
         const s3 = ov.guardSingle(ctx, 'c3', 'tool_a', mini)
         assert(s3.includes('行。') || / \d+ 行/.test(s3), '单结果闸：摘要带行数')
         const jid = ctx.refs.get('c3')!
-        const found = ov.fetchFromResult(conv, { resultId: jid, mode: 'search', pattern: '陈某', context: 2 })
-        assert(typeof found === 'string' && found.includes('陈某') && /\d+: /.test(found), '查结果集：压缩 JSON 格式化落库，搜索命中带行号')
-        assert(typeof ov.fetchFromResult(conv, { resultId: 9999 }) === 'object', '查结果集：无效编号报错')
-        assert(typeof ov.fetchFromResult('other-conv', { resultId: bigId }) === 'object', '查结果集：跨会话不可用')
+        const found = ov.grepResult(conv, { resultId: jid, pattern: '陈某|李某', context: 1 })
+        assert(
+          typeof found === 'string' && found.includes('命中 2 处') && /\d+:.*陈某/.test(found) && /\d+-/.test(found) && found.includes('--'),
+          '搜结果集：交替正则多词一次搜，命中带行号、上下文连字符、块间分隔'
+        )
+        const paged = ov.grepResult(conv, { resultId: jid, pattern: '别人', head_limit: 5, offset: 5 })
+        assert(typeof paged === 'string' && paged.includes('offset='), '搜结果集：head_limit/offset 翻页提示')
+        assert(typeof ov.readResult(conv, { resultId: 9999 }) === 'object', '读结果集：无效编号报错')
+        assert(typeof ov.readResult('other-conv', { resultId: bigId }) === 'object', '读结果集：跨会话不可用')
         // 制品解析三层
         const art = await import('./engine/artifact')
         const a1 = art.createArtifact(conv, { title: 'T1', data: [{ 租户: 'A', 金额: 1 }, { 租户: 'B', 金额: 2 }] })

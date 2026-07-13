@@ -16,12 +16,15 @@ import {
   makeSearchTool,
   makeMcpTools,
   makeAskTool,
-  makeFetchResultTool,
+  makeGrepResultTool,
+  makeReadResultTool,
   makeArtifactTool,
   ASK_TOOL_NAME,
   ASK_TOOL_DISPLAY,
-  FETCH_TOOL_NAME,
-  FETCH_TOOL_DISPLAY,
+  GREP_TOOL_NAME,
+  GREP_TOOL_DISPLAY,
+  READ_TOOL_NAME,
+  READ_TOOL_DISPLAY,
   ARTIFACT_TOOL_NAME,
   ARTIFACT_TOOL_DISPLAY,
   TOOL_ROUND_HARD_LIMIT,
@@ -247,7 +250,8 @@ async function streamCore(core: {
   const mcp = makeMcpTools(controller.signal, cards, overflow)
   const turnTools: Record<string, Tool> = { ...mcp.tools }
   turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
-  turnTools[FETCH_TOOL_NAME] = makeFetchResultTool(convId)
+  turnTools[GREP_TOOL_NAME] = makeGrepResultTool(convId)
+  turnTools[READ_TOOL_NAME] = makeReadResultTool(convId)
   turnTools[ARTIFACT_TOOL_NAME] = makeArtifactTool(convId, (toolCallId, info) => artifacts.set(toolCallId, info))
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
   // 已启用但连不上的服务：提示一句，本轮按无该服务工具继续，不阻断对话
@@ -299,7 +303,8 @@ async function streamCore(core: {
             .filter(
               (tr) =>
                 typeof tr.output === 'string' &&
-                tr.toolName !== FETCH_TOOL_NAME && // 豁免：取回的片段不再落库
+                tr.toolName !== GREP_TOOL_NAME &&
+                tr.toolName !== READ_TOOL_NAME && // 豁免：取数工具取回的片段不再落库
                 tr.toolName !== ASK_TOOL_NAME && // 用户的回答不是外部数据
                 !overflow.refs.has(tr.toolCallId) // 单结果闸已处理的不重复
             )
@@ -389,9 +394,11 @@ async function streamCore(core: {
             id: part.toolCallId,
             display: isAsk
               ? ASK_TOOL_DISPLAY
-              : part.toolName === FETCH_TOOL_NAME
-                ? FETCH_TOOL_DISPLAY
-                : part.toolName === ARTIFACT_TOOL_NAME
+              : part.toolName === GREP_TOOL_NAME
+                ? GREP_TOOL_DISPLAY
+                : part.toolName === READ_TOOL_NAME
+                  ? READ_TOOL_DISPLAY
+                  : part.toolName === ARTIFACT_TOOL_NAME
                   ? ARTIFACT_TOOL_DISPLAY
                   : meta?.display,
             desc: meta?.needsAuth ? meta.desc : undefined,

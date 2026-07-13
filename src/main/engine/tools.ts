@@ -8,7 +8,7 @@ import { retrieve } from '../retrieve'
 import { callMcpTool, getMcpToolList } from '../mcp/client'
 import { SEARCH_TOOL_DESCRIPTION } from './prompts'
 import { AUTH_DENIED, INTERRUPT_NOT_STARTED, ASK_INTERRUPTED, type CardQueue, type AskQuestion } from './cards'
-import { guardSingle, fetchFromResult, FETCH_LIMIT, type OverflowCtx } from './overflow'
+import { guardSingle, grepResult, readResult, FETCH_LIMIT, GREP_HEAD_LIMIT, READ_LINES_DEFAULT, type OverflowCtx } from './overflow'
 import { createArtifact, type ArtifactRef } from './artifact'
 import type { SourceSnapshot } from './store'
 
@@ -60,48 +60,72 @@ export function makeMcpTools(signal: AbortSignal, cards: CardQueue, overflow: Ov
   return { tools, meta }
 }
 
-// 「查结果集」内置工具：模型取用已落库超限结果的手段。免授权（只读本地已存数据）、超限豁免（取回的片段不再落库）。
+// 取数内置工具（07-13 二次修订）：拆为 grep_result / read_result 两个，形态照搬模型语料里的 Grep/Read——
+// 单工具 mode 切换是语料外结构，模型用不地道。免授权（只读本地已存数据）、超限豁免（取回的片段不再落库）。
+// FETCH_TOOL_NAME 为退役工具名，仅供渲染层识别历史会话的旧调用行。
 export const FETCH_TOOL_NAME = 'fetch_tool_result'
-export const FETCH_TOOL_DISPLAY = '查结果集'
+export const GREP_TOOL_NAME = 'grep_result'
+export const GREP_TOOL_DISPLAY = '搜结果集'
+export const READ_TOOL_NAME = 'read_result'
+export const READ_TOOL_DISPLAY = '读结果集'
 
-const FETCH_TOOL_DESCRIPTION = `按结果编号取用已存的超限工具结果，内容按行组织。
+const GREP_TOOL_DESCRIPTION = `在已存的超限结果里逐行正则搜索，相当于对结果内容执行 grep -n。用于结果超限被存库（摘要里有「结果编号 #N」）、需要定位具体内容时；结果编号在本会话内一直有效。
 
-什么时候用：
-- 之前的调用结果超限被存库（摘要里有「结果编号 #N」），摘要不够决策、需要看具体内容时
-- 结果编号在本会话内一直有效：用户追问之前查过的数据时直接用原编号取，不必重新调外部系统
+- 支持完整正则语法（如 "账单.*超额"）；要查一批关键词时用 | 合并一次搜完（如 "词A|词B|词C"），不要逐词多次调用
+- context：命中行前后各带几行上下文（相当于 grep -C N），默认不带
+- head_limit：输出最多多少行（相当于 | head -N），默认 ${GREP_HEAD_LIMIT}；offset：跳过前 N 行输出（翻页用）
+- 输出「行号:内容」，命中行用冒号、上下文行用连字符、不连续块间以 -- 分隔
+- 拿到行号后用 read_result 一次读取整段，不要反复小搜
+- 结果编号与这套存取机制是内部机制，任何给用户看的文字不要提及`
 
-两种取数方式，配合使用：
-- 搜索：mode 填 "search"，pattern 为正则或普通文本，逐行匹配；返回命中行及前后 context 行（默认 5、最大 50），全部带行号；命中超过 10 处时用 fromHit 翻页
-- 读取：mode 填 "read"（默认），从第 startLine 行起读 lines 行
+const READ_TOOL_DESCRIPTION = `按行号读取已存超限结果（结果编号 #N）的一段原文，相当于 sed -n 'N,Mp'。与 grep_result 配合：先搜索定位拿行号，再用本工具一次读取整段。
 
-高效取数：先搜关键词拿到行号，再从该处一次读取整段。单次最多返回 ${FETCH_LIMIT} 字，要看一条完整记录就把 lines 给足（如 200 行）；不要几行几行地多次小取——调用轮次有限额`
+- offset：起始行号（从 1 起），仅在内容太大一次读不完、或已知要读哪一段时提供
+- limit：读取行数，默认从头读 ${READ_LINES_DEFAULT} 行；要看完整记录就把 limit 给足，不要几行几行地多次小读
+- 输出「行号:内容」；单次最多返回 ${FETCH_LIMIT} 字，超出会提示从哪行续读
+- 结果编号与这套存取机制是内部机制，任何给用户看的文字不要提及`
 
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导
-export function makeFetchResultTool(convId: string) {
+export function makeGrepResultTool(convId: string) {
   return tool({
-    description: FETCH_TOOL_DESCRIPTION,
+    description: GREP_TOOL_DESCRIPTION,
     inputSchema: jsonSchema<{
       resultId: number
-      mode?: 'read' | 'search'
-      pattern?: string
+      pattern: string
+      '-i'?: boolean
       context?: number
-      fromHit?: number
-      startLine?: number
-      lines?: number
+      head_limit?: number
+      offset?: number
     }>({
       type: 'object',
       properties: {
         resultId: { type: 'number', description: '结果编号（摘要里的 #N，传数字 N）' },
-        mode: { type: 'string', enum: ['read', 'search'], description: '取数方式：read 按行读取（默认），search 按关键词搜' },
-        pattern: { type: 'string', description: 'search：正则或普通文本，逐行匹配' },
-        context: { type: 'number', description: 'search：每处命中带前后多少行上下文（默认 5，最大 50）' },
-        fromHit: { type: 'number', description: 'search：跳过前 N 处命中（翻页用）' },
-        startLine: { type: 'number', description: 'read：起始行号，从 1 起' },
-        lines: { type: 'number', description: 'read：读取行数（一次给足，不要小取多次）' }
+        pattern: { type: 'string', description: '正则表达式，逐行匹配；多个关键词用 | 合并' },
+        '-i': { type: 'boolean', description: '忽略大小写（默认区分）' },
+        context: { type: 'number', description: '命中行前后各带几行上下文（相当于 grep -C N）' },
+        head_limit: { type: 'number', description: `输出最多多少行（相当于 | head -N），默认 ${GREP_HEAD_LIMIT}` },
+        offset: { type: 'number', description: '跳过前 N 行输出再取 head_limit 行（翻页用）' }
+      },
+      required: ['resultId', 'pattern']
+    }),
+    execute: async (args) => grepResult(convId, args ?? ({} as never))
+  })
+}
+
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 返回类型由 tool() 泛型推导
+export function makeReadResultTool(convId: string) {
+  return tool({
+    description: READ_TOOL_DESCRIPTION,
+    inputSchema: jsonSchema<{ resultId: number; offset?: number; limit?: number }>({
+      type: 'object',
+      properties: {
+        resultId: { type: 'number', description: '结果编号（摘要里的 #N，传数字 N）' },
+        offset: { type: 'number', description: '起始行号（从 1 起）。仅在内容太大一次读不完时提供' },
+        limit: { type: 'number', description: `读取行数，默认 ${READ_LINES_DEFAULT}。一次给足，不要小读多次` }
       },
       required: ['resultId']
     }),
-    execute: async (args) => fetchFromResult(convId, args ?? {})
+    execute: async (args) => readResult(convId, args ?? ({} as never))
   })
 }
 

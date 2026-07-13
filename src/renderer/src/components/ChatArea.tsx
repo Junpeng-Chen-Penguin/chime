@@ -554,24 +554,34 @@ function AskToolRow({
 }
 
 // 「查结果集」参数翻译成人话（原始键值是研发口径，用户看不懂）
-const FETCH_ARG_LABELS: Record<string, string> = {
-  resultId: '取自结果',
-  mode: '取数方式',
-  pattern: '匹配',
-  context: '上下文',
-  fromHit: '翻页',
-  startLine: '起始行',
-  lines: '行数',
-  start: '起始位置', // 以下三项为历史轮的旧参数形态
-  length: '读取长度',
-  keyword: '关键词'
+// 取数工具参数的人话标签与取值（grep_result / read_result；带 mode/startLine/start 等键的是历史会话旧形态）
+function fetchArgLabel(name: string | undefined, k: string): string {
+  if (k === 'offset') return name === 'read_result' ? '起始行' : '翻页'
+  const labels: Record<string, string> = {
+    resultId: '取自结果',
+    pattern: '匹配',
+    context: '上下文',
+    head_limit: '行数上限',
+    '-i': '大小写',
+    limit: '行数',
+    mode: '取数方式',
+    fromHit: '翻页',
+    startLine: '起始行',
+    lines: '行数',
+    start: '起始位置',
+    length: '读取长度',
+    keyword: '关键词'
+  }
+  return labels[k] ?? k
 }
-function fetchArgValue(k: string, v: unknown): string {
+function fetchArgValue(name: string | undefined, k: string, v: unknown): string {
   if (k === 'mode') return v === 'search' ? '按关键词搜索' : v === 'read' ? '按行读取' : '按位置读取'
   if (k === 'resultId') return `#${v}`
+  if (k === 'offset') return name === 'read_result' ? `第 ${Number(v).toLocaleString()} 行起` : `跳过前 ${Number(v)} 行`
   if (k === 'startLine') return `第 ${Number(v).toLocaleString()} 行起`
-  if (k === 'lines') return `${Number(v).toLocaleString()} 行`
+  if (k === 'lines' || k === 'limit' || k === 'head_limit') return `${Number(v).toLocaleString()} 行`
   if (k === 'context') return `前后 ${Number(v)} 行`
+  if (k === '-i') return v ? '忽略' : '区分'
   if (k === 'fromHit') return `跳过前 ${Number(v)} 处命中`
   if (k === 'start') return `第 ${Number(v).toLocaleString()} 字起`
   if (k === 'length') return `${Number(v).toLocaleString()} 字`
@@ -599,12 +609,22 @@ function GenericToolRow({
   const failed = typeof r === 'object' && !!r?.error
   const interrupted = typeof r === 'object' && !!r?.interrupted
   const args = Object.entries(item.args ?? {})
-  const isFetch = item.name === 'fetch_tool_result'
-  // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")；查结果集用人话概要
+  // fetch_tool_result 为退役工具名，仅历史会话的旧调用行
+  const isFetch = item.name === 'fetch_tool_result' || item.name === 'grep_result' || item.name === 'read_result'
+  // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")；取数工具用人话概要
   const firstArg = args.length ? args[0][1] : undefined
   const argPreview = isFetch
     ? (() => {
-        const a = item.args as { resultId?: number; mode?: string; pattern?: string; keyword?: string; startLine?: number }
+        const a = item.args as {
+          resultId?: number
+          mode?: string
+          pattern?: string
+          keyword?: string
+          startLine?: number
+          offset?: number
+        }
+        if (item.name === 'grep_result') return `#${a.resultId} 搜"${a.pattern ?? ''}"`
+        if (item.name === 'read_result') return `#${a.resultId} 读第 ${a.offset ?? 1} 行起`
         if (a.mode === 'search') return `#${a.resultId} 搜"${a.pattern ?? a.keyword ?? ''}"`
         if (a.startLine !== undefined || a.mode === 'read') return `#${a.resultId} 读第 ${a.startLine ?? 1} 行起`
         return `#${a.resultId} 按位置读取` // 历史轮的旧参数形态
@@ -678,10 +698,10 @@ function GenericToolRow({
                   {args.map(([k, v]) => (
                     <div key={k} className="flex gap-3 text-[13px]">
                       <span className="w-[120px] flex-none truncate text-muted-foreground">
-                        {isFetch ? (FETCH_ARG_LABELS[k] ?? k) : k}
+                        {isFetch ? fetchArgLabel(item.name, k) : k}
                       </span>
                       <span className="min-w-0 break-all">
-                        {isFetch ? fetchArgValue(k, v) : typeof v === 'string' ? v : JSON.stringify(v)}
+                        {isFetch ? fetchArgValue(item.name, k, v) : typeof v === 'string' ? v : JSON.stringify(v)}
                       </span>
                     </div>
                   ))}

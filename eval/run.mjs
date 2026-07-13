@@ -102,7 +102,7 @@ function turnFacts(events, streamId) {
   const mcpNames = tools.filter((t) => t.name?.startsWith('mcp__')).map((t) => t.name)
   const artifact = items.find((i) => i?.t === 'artifact')
   const cardActions = evs.filter((e) => e.type === 'card-answered').map((e) => e.action)
-  const fetched = tools.some((t) => t.name === 'fetch_tool_result')
+  const fetched = tools.some((t) => t.name === 'grep_result' || t.name === 'read_result')
   const overflowStored = tools.some((t) => t.resultRef)
   // 提问卡问答记录：判分材料用（问答发生在卡片里，不在回答文本里）
   const askRecords = tools

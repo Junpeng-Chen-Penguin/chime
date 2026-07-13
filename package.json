@@ -1,6 +1,6 @@
 {
   "name": "chime",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Chime — 本地 AI 对话桌面应用",
   "main": "./out/main/index.js",
   "author": "Chen Junpeng",

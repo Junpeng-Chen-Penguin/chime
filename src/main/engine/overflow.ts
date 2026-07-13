@@ -8,10 +8,9 @@ import { getDb, insertToolResult, getToolResult } from '../db'
 export const RESULT_LIMIT = 30_000 // 单结果上限（字符）
 export const TOTAL_LIMIT = 100_000 // 会话内工具结果总量上限
 export const PREVIEW_CHARS = 1_000 // 摘要开头样例 / 时间线预览
-export const FETCH_LIMIT = 30_000 // 查结果集单次返回上限（业界单次 2000 行量级，1 万实测逼出小段多次）
-export const SEARCH_CONTEXT_DEFAULT = 5 // 命中上下文默认行数（模型可调，对齐 Grep -C）
-export const SEARCH_CONTEXT_MAX = 50
-export const SEARCH_HITS = 10 // 单次最多返回命中处数（超出可用 fromHit 翻页）
+export const FETCH_LIMIT = 30_000 // 取数单次返回上限（字符兜底；行数上限见 GREP_HEAD_LIMIT / READ_LINES_DEFAULT）
+export const GREP_HEAD_LIMIT = 250 // grep 输出默认行数上限（对齐 Claude Code Grep head_limit 默认值）
+export const READ_LINES_DEFAULT = 2_000 // read 默认读取行数（对齐 Claude Code Read 默认值）
 
 // 落库归一的唯一例外：压缩成单行的 JSON 格式化为多行——不改数据，只为按行取数有行可依
 function normalizeForStore(text: string): string {
@@ -30,7 +29,7 @@ function normalizeForStore(text: string): string {
 // 编号的内部属性写进摘要本身：仅靠输出约定条款拦不住模型把编号转述给用户（实测约半数泄漏）
 export function overflowSummary(id: number, content: string): string {
   const lineCount = content.split('\n').length
-  return `共约 ${content.length} 字、${lineCount} 行。开头样例：${content.slice(0, PREVIEW_CHARS)}。已存为结果编号 #${id}——这是你的内部取数编号，需要更多内容时用「查结果集」：先搜关键词拿到行号，再从该行起一次读取整段，不要小段多次。不要在给用户的回答里提到编号或这套存取机制。`
+  return `共约 ${content.length} 字、${lineCount} 行。开头样例：${content.slice(0, PREVIEW_CHARS)}。已存为结果编号 #${id}——这是你的内部取数编号，需要更多内容时先用 grep_result 搜关键词定位（多个词用 | 合并一次搜），再用 read_result 从命中行号一次读取整段，不要小段多次。不要在给用户的回答里提到编号或这套存取机制。`
 }
 
 // 轮内超限状态：resultRef 映射（tool item 标注用）+ 本轮已全文放行的字数累计
@@ -71,7 +70,7 @@ export function sessionFullResultChars(convId: string): number {
     try {
       for (const it of JSON.parse(r.items) as { t: string; name?: string; result?: unknown; resultRef?: number }[]) {
         if (it.t !== 'tool' || it.resultRef || typeof it.result !== 'string') continue
-        if (it.name === 'fetch_tool_result') continue // 豁免工具取回的片段不计
+        if (it.name === 'fetch_tool_result' || it.name === 'grep_result' || it.name === 'read_result') continue // 豁免：取数工具取回的片段不计（fetch_tool_result 为历史轮的旧工具名）
         sum += it.result.length
       }
     } catch {
@@ -107,76 +106,86 @@ export function applyTotalGate(
   return replaced
 }
 
-// 「查结果集」取数（07-13 修订，参数面对齐 Claude Code Grep/Read）：
-// 按关键词搜（正则、逐行匹配、命中带行号、上下文行数可调、可翻页）/ 按行读取整段，单次返回封顶
-export function fetchFromResult(
-  convId: string,
-  args: {
-    resultId?: number
-    mode?: string
-    pattern?: string
-    context?: number
-    fromHit?: number
-    startLine?: number
-    lines?: number
-  }
-): string | { error: string } {
-  const id = Number(args.resultId)
+// 取数两工具（07-13 二次修订：单工具 mode 切换拆为 grep/read 两工具，形态与输出仿 grep -n / 按行读，
+// 参数面照搬 Claude Code Grep/Read，仅把文件路径换成结果编号——mode 参数映射是语料外结构，模型用不地道）
+
+function loadResult(convId: string, resultId: unknown): { all: string[]; id: number } | { error: string } {
+  const id = Number(resultId)
   if (!Number.isInteger(id)) return { error: '缺少 resultId：请传入要取用的结果编号（如 #3 传 3）' }
   const row = getToolResult(id, convId)
   if (!row) return { error: `结果编号 #${id} 不存在或不属于本会话` }
-  const all = row.content.split('\n')
+  return { all: row.content.split('\n'), id }
+}
 
-  if (args.mode === 'search') {
-    const raw = String(args.pattern ?? '').trim()
-    if (!raw) return { error: 'search 模式需要 pattern 参数' }
-    let re: RegExp
-    try {
-      re = new RegExp(raw, 'i')
-    } catch {
-      re = new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') // 非法正则退回普通文本匹配
-    }
-    const ctx = Math.min(SEARCH_CONTEXT_MAX, Math.max(0, Number(args.context ?? SEARCH_CONTEXT_DEFAULT) || 0))
-    const from = Math.max(0, Number(args.fromHit ?? 0) || 0)
-    const matched: number[] = []
-    for (let i = 0; i < all.length; i++) if (re.test(all[i])) matched.push(i)
-    if (!matched.length) return `结果 #${id}（共 ${all.length} 行）中未匹配到「${raw}」`
-    if (from >= matched.length) return { error: `fromHit=${from} 超出命中范围（共 ${matched.length} 处）` }
-    const page = matched.slice(from, from + SEARCH_HITS)
-    const blocks = page.map((i) => {
-      const s = Math.max(0, i - ctx)
-      const e = Math.min(all.length - 1, i + ctx)
-      return all
-        .slice(s, e + 1)
-        .map((l, k) => `${s + k + 1}: ${l}`)
-        .join('\n')
-    })
-    let text =
-      `结果 #${id}（共 ${all.length} 行）中「${raw}」命中 ${matched.length} 处，` +
-      `显示第 ${from + 1}-${from + page.length} 处（每处前后 ${ctx} 行，行号: 内容）：\n\n${blocks.join('\n---\n')}`
-    if (matched.length > from + page.length) {
-      text += `\n\n（还有 ${matched.length - from - page.length} 处命中，用 fromHit=${from + page.length} 翻页）`
-    }
-    return text.length > FETCH_LIMIT ? `${text.slice(0, FETCH_LIMIT)}\n（已达单次上限截断，可调小 context 或翻页）` : text
+// grep_result：逐行正则匹配，输出仿 rg -n（命中行「N:内容」、上下文行「N-内容」、不连续块间 --）
+export function grepResult(
+  convId: string,
+  args: { resultId?: number; pattern?: string; '-i'?: boolean; context?: number; head_limit?: number; offset?: number }
+): string | { error: string } {
+  const r = loadResult(convId, args.resultId)
+  if ('error' in r) return r
+  const { all, id } = r
+  const raw = String(args.pattern ?? '').trim()
+  if (!raw) return { error: '缺少 pattern 参数' }
+  const flags = args['-i'] ? 'i' : ''
+  let re: RegExp
+  try {
+    re = new RegExp(raw, flags)
+  } catch {
+    re = new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags) // 非法正则退回普通文本匹配
   }
+  const ctx = Math.max(0, Number(args.context ?? 0) || 0)
+  const matched = new Set<number>()
+  for (let i = 0; i < all.length; i++) if (re.test(all[i])) matched.add(i)
+  if (!matched.size) return `结果 #${id}（共 ${all.length} 行）中未匹配到「${raw}」`
+  // 汇总要输出的行（命中 ± 上下文），按行序生成，间断处插 --
+  const show = new Set<number>()
+  for (const i of matched) {
+    for (let k = Math.max(0, i - ctx); k <= Math.min(all.length - 1, i + ctx); k++) show.add(k)
+  }
+  const ordered = [...show].sort((a, b) => a - b)
+  const outLines: string[] = []
+  let prev = -2
+  for (const i of ordered) {
+    if (i !== prev + 1 && prev >= 0) outLines.push('--')
+    outLines.push(`${i + 1}${matched.has(i) ? ':' : '-'}${all[i]}`)
+    prev = i
+  }
+  const skip = Math.max(0, Number(args.offset ?? 0) || 0)
+  const head = Math.max(1, Number(args.head_limit ?? GREP_HEAD_LIMIT) || GREP_HEAD_LIMIT)
+  const page = outLines.slice(skip, skip + head)
+  let text = `结果 #${id}（共 ${all.length} 行）「${raw}」命中 ${matched.size} 处：\n${page.join('\n')}`
+  if (text.length > FETCH_LIMIT) text = `${text.slice(0, FETCH_LIMIT)}\n[超过单次 ${FETCH_LIMIT} 字上限截断，可缩小 context 或用 offset 翻页]`
+  else if (outLines.length > skip + page.length) {
+    text += `\n[输出共 ${outLines.length} 行，已显示第 ${skip + 1}-${skip + page.length} 行；继续用 offset=${skip + page.length}]`
+  }
+  return text
+}
 
-  // 缺省按行读取
-  const start = Math.max(1, Number(args.startLine ?? 1) || 1)
+// read_result：按行号读一段原文（输出「N:内容」），单次字符封顶
+export function readResult(
+  convId: string,
+  args: { resultId?: number; offset?: number; limit?: number }
+): string | { error: string } {
+  const r = loadResult(convId, args.resultId)
+  if ('error' in r) return r
+  const { all, id } = r
+  const start = Math.max(1, Number(args.offset ?? 1) || 1)
   if (start > all.length) return { error: `起始行 ${start} 超出范围（共 ${all.length} 行）` }
-  const want = Math.max(1, Number(args.lines ?? all.length) || all.length)
+  const want = Math.max(1, Number(args.limit ?? READ_LINES_DEFAULT) || READ_LINES_DEFAULT)
   const out: string[] = []
   let used = 0
   let end = start - 1
   for (let i = start - 1; i < Math.min(all.length, start - 1 + want); i++) {
-    const line = `${i + 1}: ${all[i]}`
+    const line = `${i + 1}:${all[i]}`
     if (used + line.length > FETCH_LIMIT && out.length) break
     out.push(line)
     used += line.length + 1
     end = i + 1
   }
-  let text = `结果 #${id}（共 ${all.length} 行，第 ${start}-${end} 行，行号: 内容）：\n${out.join('\n')}`
+  let text = `结果 #${id}（共 ${all.length} 行，第 ${start}-${end} 行）：\n${out.join('\n')}`
   if (end < Math.min(all.length, start - 1 + want)) {
-    text += `\n（已达单次 ${FETCH_LIMIT} 字上限，续读用 startLine=${end + 1}）`
+    text += `\n[已达单次 ${FETCH_LIMIT} 字上限，续读用 offset=${end + 1}]`
   }
   return text
 }

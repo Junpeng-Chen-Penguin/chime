@@ -202,7 +202,7 @@ function summarizeToolCalls(items: TurnItem[]): string {
       // 超限结果：跨轮只带规模 + 结果编号（预览是当轮决策用的，后续轮凭编号随时取，不占历史）。
       // 内部属性随行标注——历史概要是模型跨轮唯一的编号来源，不标注就会把编号说给用户听
       lines.push(
-        `本轮调用：${label}(${argsShort}) → ${r.split('。')[0]}，已存为结果编号 #${it.resultRef}（你的内部取数编号，可用「查结果集」取用；任何给用户看的文字都不要提编号或存取机制）`
+        `本轮调用：${label}(${argsShort}) → ${r.split('。')[0]}，已存为结果编号 #${it.resultRef}（你的内部取数编号，可用 grep_result 搜索、read_result 按行读取；任何给用户看的文字都不要提编号或存取机制）`
       )
     } else if (typeof r === 'string') {
       lines.push(`本轮调用：${label}(${argsShort}) → 返回约 ${r.length} 字`)
