@@ -17,9 +17,10 @@ interface Props {
   open: boolean
   onClose: () => void
   onSaved: (defaultModel: string) => void
+  initialTab?: Tab // 外部入口直达分区（如输入框服务状态面板的「前往设置」）
 }
 
-export default function SettingsDialog({ open, onClose, onSaved }: Props): React.JSX.Element | null {
+export default function SettingsDialog({ open, onClose, onSaved, initialTab }: Props): React.JSX.Element | null {
   const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com')
   const [keyInput, setKeyInput] = useState('')
   const [keyMask, setKeyMask] = useState('')
@@ -55,7 +56,7 @@ export default function SettingsDialog({ open, onClose, onSaved }: Props): React
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    setTab('provider')
+    setTab(initialTab ?? 'provider')
     setStatus('idle')
     setError('')
     setModels([])

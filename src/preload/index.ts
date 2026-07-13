@@ -41,6 +41,7 @@ const api = {
 
   // MCP 服务：mcp:status 为无载荷提醒，收到后重新拉列表即可
   mcpList: () => ipcRenderer.invoke('mcp:list'),
+  mcpRetry: () => ipcRenderer.invoke('mcp:retry'),
   mcpSave: (input: {
     id?: number
     name: string

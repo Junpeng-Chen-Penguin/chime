@@ -187,6 +187,7 @@ export interface ChimeApi {
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
   onFullscreen: (cb: (v: boolean) => void) => () => void
   mcpList: () => Promise<McpServiceInfo[]>
+  mcpRetry: () => Promise<void>
   mcpSave: (input: {
     id?: number
     name: string

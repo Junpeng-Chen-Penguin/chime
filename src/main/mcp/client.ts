@@ -142,11 +142,6 @@ export function getMcpToolList(): McpToolInfo[] {
   return out
 }
 
-// 已启用但当前不可用的服务名（组装时提示一句，不阻断对话）
-export function unavailableMcpServiceNames(): string[] {
-  return [...states.values()].filter((s) => s.status !== 'connected').map((s) => s.config.name)
-}
-
 export interface McpServiceRuntime {
   status: McpServiceStatus
   error?: string

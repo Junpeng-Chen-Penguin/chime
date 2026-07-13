@@ -20,7 +20,7 @@ import type { Msg } from '@/hooks/useChat'
 import type { SourceRef, TurnItem, SearchToolResult, AskOutcomePayload, AskQuestionSpec } from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { Markdown } from './Markdown'
-import Composer, { type KbState } from './Composer'
+import Composer, { type KbState, type ServiceStatus } from './Composer'
 
 // 规则 5：单条消息上限（字符），发送前就地拦下；与主进程常量同值（engine/budget SEND_CHAR_LIMIT）
 const SEND_CHAR_LIMIT = 30000
@@ -48,6 +48,9 @@ interface Props {
   kbSelected: boolean
   kbLocked: boolean
   onToggleKb: () => void
+  services: ServiceStatus[]
+  onRetryServices: () => void
+  onOpenSettings: () => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
   onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
   onRespondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
@@ -77,6 +80,9 @@ export default function ChatArea({
   kbSelected,
   kbLocked,
   onToggleKb,
+  services,
+  onRetryServices,
+  onOpenSettings,
   onOpenSource,
   onRespondCard,
   onRespondAsk,
@@ -116,6 +122,9 @@ export default function ChatArea({
       kbSelected={kbSelected}
       kbLocked={kbLocked}
       onToggleKb={onToggleKb}
+      services={services}
+      onRetryServices={onRetryServices}
+      onOpenSettings={onOpenSettings}
     />
   )
 

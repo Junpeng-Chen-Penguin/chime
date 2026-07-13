@@ -161,6 +161,9 @@ export function registerIpc(): void {
   )
 
   // ── MCP 服务 ──────────────────────────────────────
+  // 重试连接（输入框状态标识的入口）：重连全部已启用服务，完成后 mcp:status 事件自会刷新界面
+  ipcMain.handle('mcp:retry', () => syncMcpServices())
+
   // 列表：配置 + 运行时状态；认证请求头只回打码值（明文不出主进程，与 provider 密钥同一约定）
   ipcMain.handle('mcp:list', () =>
     listMcpServices().map((s) => {

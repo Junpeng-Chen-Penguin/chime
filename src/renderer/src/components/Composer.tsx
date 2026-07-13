@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUp, ChevronDown, Check, BookOpen, X } from 'lucide-react'
+import { ArrowUp, ChevronDown, Check, BookOpen, X, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+// 服务状态标识（方案 A）：全部正常时不渲染；有不可用服务时输入框左下出安静标识，点开看明细
+export interface ServiceStatus {
+  name: string
+  status: 'connected' | 'auth' | 'error'
+}
 
 function Kbd({ children }: { children: ReactNode }): React.JSX.Element {
   return (
@@ -31,6 +37,9 @@ interface Props {
   kbSelected: boolean
   kbLocked: boolean // 会话已定性（发过首条消息）
   onToggleKb: () => void
+  services?: ServiceStatus[] // 已启用的外部服务及连接状态
+  onRetryServices?: () => void
+  onOpenSettings?: () => void
 }
 
 export default function Composer({
@@ -48,11 +57,16 @@ export default function Composer({
   kbName,
   kbSelected,
   kbLocked,
-  onToggleKb
+  onToggleKb,
+  services,
+  onRetryServices,
+  onOpenSettings
 }: Props): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [kbMenuOpen, setKbMenuOpen] = useState(false)
+  const [svcMenuOpen, setSvcMenuOpen] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const downCount = (services ?? []).filter((s) => s.status !== 'connected').length
 
   useEffect(() => {
     const ta = taRef.current
@@ -93,7 +107,8 @@ export default function Composer({
             className="block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-[14px] leading-[1.6] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           />
           <div className="flex items-center justify-between px-3 pb-3">
-            {/* 左下：知识库控件（未选=图标，点击弹选择器 / 已选=浅蓝胶囊 / 定性后胶囊无 × / 不可用置灰） */}
+            {/* 左下：知识库控件 + 服务状态标识（全部正常时不显示） */}
+            <div className="flex items-center gap-1">
             {kbSelected ? (
               <span
                 className="group flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
@@ -146,6 +161,60 @@ export default function Composer({
                 )}
               </div>
             )}
+
+            {downCount > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => setSvcMenuOpen((v) => !v)}
+                  onBlur={() => setTimeout(() => setSvcMenuOpen(false), 120)}
+                  className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
+                >
+                  <TriangleAlert className="size-3.5" />
+                  {downCount} 个服务不可用
+                </button>
+                {svcMenuOpen && (
+                  <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 min-w-[260px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                    <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-medium text-muted-foreground">服务状态</div>
+                    {(services ?? []).map((s) => (
+                      <div key={s.name} className="flex items-center gap-2 px-2.5 py-2 text-[13px]">
+                        <span
+                          className={cn(
+                            'size-1.5 flex-none rounded-full',
+                            s.status === 'connected' ? 'bg-emerald-600' : 'bg-destructive'
+                          )}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                        <span className="flex-none text-[12px] text-muted-foreground">
+                          {s.status === 'connected' ? '已连接' : s.status === 'auth' ? '认证失效' : '连接失败'}
+                        </span>
+                      </div>
+                    ))}
+                    <div className="mt-1 flex gap-1 border-t border-border px-1 pt-1.5">
+                      <button
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          onRetryServices?.()
+                        }}
+                        className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
+                      >
+                        重试连接
+                      </button>
+                      <button
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          setSvcMenuOpen(false)
+                          onOpenSettings?.()
+                        }}
+                        className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
+                      >
+                        前往设置
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            </div>
 
             {/* 右下：模型选择（模型名 + ▾）+ 发送 */}
             <div className="flex items-center gap-1.5">

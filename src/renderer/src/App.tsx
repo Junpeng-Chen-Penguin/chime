@@ -29,6 +29,8 @@ function App(): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 设置打开时直达的分区：侧栏入口用默认分区，服务状态面板的「前往设置」直达 MCP 分区
+  const [settingsTab, setSettingsTab] = useState<'provider' | 'kb' | 'mcp' | undefined>(undefined)
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
   const [defaultModel, setDefaultModel] = useState('deepseek-v4-pro')
   const [models, setModels] = useState<string[]>([])
@@ -43,6 +45,8 @@ function App(): React.JSX.Element {
   >(null)
   const [kbName, setKbName] = useState('业务知识库')
   const [kbDraftSel, setKbDraftSel] = useState<Record<string, boolean>>({})
+  // 服务连接状态（输入框状态标识用）：启动加载 + mcp:status 事件刷新
+  const [services, setServices] = useState<{ name: string; status: 'connected' | 'auth' | 'error' }[]>([])
 
   const reloadKb = useCallback(() => {
     window.api.getKb().then((k) => {
@@ -58,6 +62,19 @@ function App(): React.JSX.Element {
       else setKbState('busy')
     })
   }, [reloadKb])
+
+  const reloadServices = useCallback(() => {
+    window.api.mcpList().then((list) => {
+      setServices(
+        list.filter((s) => s.enabled).map((s) => ({ name: s.name, status: (s.status ?? 'error') as 'connected' | 'auth' | 'error' }))
+      )
+    })
+  }, [])
+
+  useEffect(() => {
+    reloadServices()
+    return window.api.onMcpStatus(reloadServices)
+  }, [reloadServices])
 
   // 会话变更（切换 / 新建 / 删除当前）统一关闭侧板——内容与原会话强相关
   useEffect(() => {
@@ -189,7 +206,10 @@ function App(): React.JSX.Element {
       setActiveId(id)
     },
     onNewChat: openDraft,
-    onOpenSettings: () => setSettingsOpen(true),
+    onOpenSettings: () => {
+      setSettingsTab(undefined)
+      setSettingsOpen(true)
+    },
     onDelete: (c: Conversation) => setDeleteTarget(c)
   }
 
@@ -218,6 +238,14 @@ function App(): React.JSX.Element {
         onToggleKb={() => {
           if (kbLocked) return
           setKbDraftSel((m) => ({ ...m, [activeId]: !m[activeId] }))
+        }}
+        services={services}
+        onRetryServices={() => {
+          window.api.mcpRetry().then(reloadServices)
+        }}
+        onOpenSettings={() => {
+          setSettingsTab('mcp')
+          setSettingsOpen(true)
         }}
         onRename={(t) => {
           if (!activeId || activeId === draftId) return
@@ -248,6 +276,7 @@ function App(): React.JSX.Element {
 
       <SettingsDialog
         open={settingsOpen}
+        initialTab={settingsTab}
         onClose={() => setSettingsOpen(false)}
         onSaved={(m) => {
           if (m) setDefaultModel(m)

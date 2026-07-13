@@ -43,7 +43,6 @@ import {
   type CardDecision,
   type AskOutcome
 } from './cards'
-import { unavailableMcpServiceNames } from '../mcp/client'
 import { saveUserMessage, saveAssistantTurn, loadHistoryMessages, type TurnItem, type TurnStatus } from './store'
 
 export type ChatEvent =
@@ -254,11 +253,7 @@ async function streamCore(core: {
   turnTools[READ_TOOL_NAME] = makeReadResultTool(convId)
   turnTools[ARTIFACT_TOOL_NAME] = makeArtifactTool(convId, (toolCallId, info) => artifacts.set(toolCallId, info))
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
-  // 已启用但连不上的服务：提示一句，本轮按无该服务工具继续，不阻断对话
-  const down = unavailableMcpServiceNames()
-  if (down.length) {
-    emit({ type: 'notice', streamId, text: `服务暂时不可用：${down.join('、')}；本轮按无该服务工具继续` })
-  }
+  // 已启用但连不上的服务：工具静默不挂载，不进对话流提醒（07-13 修订——状态常驻输入框标识，与主流一致）
 
   // 组装：系统提示词（固定主干 +（带工具）输出约定 +（挂库）条件段 + 环境信息）+ 消息序列
   const system = buildSystemPrompt(kbEnv, Object.keys(turnTools).length > 0)
