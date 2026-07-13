@@ -188,6 +188,8 @@ export interface ChimeApi {
   onFullscreen: (cb: (v: boolean) => void) => () => void
   mcpList: () => Promise<McpServiceInfo[]>
   mcpRetry: () => Promise<void>
+  setConversationMcpSelection: (input: { id: string; serviceIds: number[] }) => Promise<void>
+  getConversationMcpSelection: (id: string) => Promise<number[]>
   mcpSave: (input: {
     id?: number
     name: string

@@ -49,6 +49,8 @@ interface Props {
   kbLocked: boolean
   onToggleKb: () => void
   services: ServiceStatus[]
+  selectedServiceIds: number[]
+  onToggleService: (id: number) => void
   onRetryServices: () => void
   onOpenSettings: () => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
@@ -81,6 +83,8 @@ export default function ChatArea({
   kbLocked,
   onToggleKb,
   services,
+  selectedServiceIds,
+  onToggleService,
   onRetryServices,
   onOpenSettings,
   onOpenSource,
@@ -123,6 +127,8 @@ export default function ChatArea({
       kbLocked={kbLocked}
       onToggleKb={onToggleKb}
       services={services}
+      selectedServiceIds={selectedServiceIds}
+      onToggleService={onToggleService}
       onRetryServices={onRetryServices}
       onOpenSettings={onOpenSettings}
     />

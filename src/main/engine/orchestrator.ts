@@ -7,7 +7,7 @@ import { streamText, isStepCount } from 'ai'
 import type { ModelMessage, Tool } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { randomUUID } from 'crypto'
-import { getProvider, getConversationKb, getKb, kbStats } from '../db'
+import { getProvider, getConversationKb, getConversationMcpSelection, getKb, kbStats } from '../db'
 import { EMBED_MODEL_ID } from '../model'
 import { humanize } from '../ai'
 import { buildSystemPrompt, type KbEnv } from './prompts'
@@ -246,7 +246,7 @@ async function streamCore(core: {
   const artifacts = new Map<string, { id: number; title: string; rowCount: number }>()
 
   // 工具组装：内置（询问用户、查结果集、生成制品常备，挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
-  const mcp = makeMcpTools(controller.signal, cards, overflow)
+  const mcp = makeMcpTools(controller.signal, cards, overflow, new Set(getConversationMcpSelection(convId)))
   const turnTools: Record<string, Tool> = { ...mcp.tools }
   turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
   turnTools[GREP_TOOL_NAME] = makeGrepResultTool(convId)

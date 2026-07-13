@@ -138,6 +138,7 @@ app.whenReady().then(() => {
           model?: string
           messages: string[]
           conv?: string // 往既有会话续发（跨重启多轮自测）；缺省新建会话
+          mcpSelected?: boolean // Case 8：false = 服务启用但本会话未选用；缺省 = 声明的服务全部选入
           stopAfterMs?: number // 停止路径自测：每轮开跑后定时触发停止（同用户点停止）
           // 卡片代答（Case 7 正式机制）：按弹卡顺序逐条消费；耗尽后自动收口（授权拒绝/提问放弃）防挂起
           cardResponses?: { action: 'approve' | 'deny' | 'answer' | 'skip' }[]
@@ -207,6 +208,18 @@ app.whenReady().then(() => {
         } else {
           const store = await import('./engine/store')
           store.repairConversation(convId, REPAIR_TEXTS) // 与界面打开会话同语义
+        }
+        // Case 8 会话选用：声明了 mcp 的用例默认全部选入用例会话（既有用例语义不变）；
+        // mcpSelected:false = 服务启用但本会话未选用（选用机制本身的用例）
+        {
+          const db = await import('./db')
+          const ids =
+            spec.mcp && spec.mcpSelected !== false
+              ? listMcpServices()
+                  .filter((s) => s.enabled)
+                  .map((s) => s.id)
+              : []
+          db.setConversationMcpSelection(convId, ids)
         }
         for (let i = 0; i < spec.messages.length; i++) {
           const streamId = `t${i + 1}`

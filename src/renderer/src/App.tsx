@@ -45,8 +45,10 @@ function App(): React.JSX.Element {
   >(null)
   const [kbName, setKbName] = useState('业务知识库')
   const [kbDraftSel, setKbDraftSel] = useState<Record<string, boolean>>({})
-  // 服务连接状态（输入框状态标识用）：启动加载 + mcp:status 事件刷新
-  const [services, setServices] = useState<{ name: string; status: 'connected' | 'auth' | 'error' }[]>([])
+  // 服务连接状态（输入框工具菜单用）：启动加载 + mcp:status 事件刷新
+  const [services, setServices] = useState<{ id: number; name: string; status: 'connected' | 'auth' | 'error' }[]>([])
+  // 会话选用的 MCP 服务（Case 8）：按会话缓存，真实会话首次激活时从库读，草稿只在内存
+  const [mcpSel, setMcpSel] = useState<Record<string, number[]>>({})
 
   const reloadKb = useCallback(() => {
     window.api.getKb().then((k) => {
@@ -66,7 +68,9 @@ function App(): React.JSX.Element {
   const reloadServices = useCallback(() => {
     window.api.mcpList().then((list) => {
       setServices(
-        list.filter((s) => s.enabled).map((s) => ({ name: s.name, status: (s.status ?? 'error') as 'connected' | 'auth' | 'error' }))
+        list
+          .filter((s) => s.enabled)
+          .map((s) => ({ id: s.id, name: s.name, status: (s.status ?? 'error') as 'connected' | 'auth' | 'error' }))
       )
     })
   }, [])
@@ -75,6 +79,13 @@ function App(): React.JSX.Element {
     reloadServices()
     return window.api.onMcpStatus(reloadServices)
   }, [reloadServices])
+
+  // 激活真实会话时补读它的选用清单（草稿会话默认空、只在内存）
+  useEffect(() => {
+    if (!activeId || activeId === draftId || activeId in mcpSel) return
+    window.api.getConversationMcpSelection(activeId).then((ids) => setMcpSel((m) => ({ ...m, [activeId]: ids })))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, draftId])
 
   // 会话变更（切换 / 新建 / 删除当前）统一关闭侧板——内容与原会话强相关
   useEffect(() => {
@@ -178,6 +189,9 @@ function App(): React.JSX.Element {
       const c = await window.api.createConversation({ id: activeId, model: activeModel })
       const kb = !!kbDraftSel[activeId]
       if (kb) await window.api.setConversationKb({ id: activeId, enabled: true })
+      // 草稿期勾选的服务随会话落库（Case 8）
+      const sel = mcpSel[activeId]
+      if (sel?.length) await window.api.setConversationMcpSelection({ id: activeId, serviceIds: sel })
       setConversations((cs) => [{ ...c, kbEnabled: kb ? 1 : 0 }, ...cs])
       setDraftId(null)
     }
@@ -240,6 +254,14 @@ function App(): React.JSX.Element {
           setKbDraftSel((m) => ({ ...m, [activeId]: !m[activeId] }))
         }}
         services={services}
+        selectedServiceIds={mcpSel[activeId] ?? []}
+        onToggleService={(id) => {
+          const cur = mcpSel[activeId] ?? []
+          const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+          setMcpSel((m) => ({ ...m, [activeId]: next }))
+          // 真实会话立即持久化；草稿会话等发首条消息时随会话落库
+          if (activeId !== draftId) window.api.setConversationMcpSelection({ id: activeId, serviceIds: next })
+        }}
         onRetryServices={() => {
           window.api.mcpRetry().then(reloadServices)
         }}

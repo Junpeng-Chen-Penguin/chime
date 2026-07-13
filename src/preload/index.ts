@@ -66,6 +66,10 @@ const api = {
   kbRemove: () => ipcRenderer.invoke('kb:remove'),
   setConversationKb: (input: { id: string; enabled: boolean }) =>
     ipcRenderer.invoke('conv:setKb', input),
+  setConversationMcpSelection: (input: { id: string; serviceIds: number[] }) =>
+    ipcRenderer.invoke('conv:setMcpSel', input),
+  getConversationMcpSelection: (id: string): Promise<number[]> =>
+    ipcRenderer.invoke('conv:getMcpSel', id),
   openDoc: (filePath: string) => ipcRenderer.invoke('doc:open', filePath),
   getArtifact: (id: number) => ipcRenderer.invoke('artifact:get', id),
   onKbProgress: (cb: (p: unknown) => void): (() => void) => {

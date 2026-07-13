@@ -35,13 +35,19 @@ export interface ToolMeta {
 // 结果原样交回：成功为纯文本（存储不归一），失败为 { error }（模型据此重试、换路或说明），
 // 拒绝授权为 { denied }、停止未执行为 { interrupted }（历史映射原样保留文案）。
 // MCP 工具统一需授权：execute 先过卡片队列，同意才发起调用；成功结果过单结果闸（超限落库换摘要）。
-export function makeMcpTools(signal: AbortSignal, cards: CardQueue, overflow: OverflowCtx): {
+export function makeMcpTools(
+  signal: AbortSignal,
+  cards: CardQueue,
+  overflow: OverflowCtx,
+  allowed: Set<number> // 本会话选用的服务 id（Case 8）：未选用的服务工具不进清单
+): {
   tools: Record<string, Tool>
   meta: Map<string, ToolMeta> // 模型可见名 → 元信息（display/desc 随 tool item 落库，渲染层不反查）
 } {
   const tools: Record<string, Tool> = {}
   const meta = new Map<string, ToolMeta>()
   for (const t of getMcpToolList()) {
+    if (!allowed.has(t.serviceId)) continue
     const name = `mcp__${t.serviceId}__${t.name}`
     meta.set(name, { display: `${t.serviceName}:${t.name}`, desc: t.description, needsAuth: true })
     tools[name] = tool({

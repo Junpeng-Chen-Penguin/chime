@@ -121,6 +121,12 @@ export function initDb(): void {
   } catch {
     // 列已存在
   }
+  // 迁移（Case 8 会话选用工具）：本会话选用的 MCP 服务 id 清单（JSON 数组；NULL/空 = 未选用任何服务）
+  try {
+    db.exec('ALTER TABLE conversation ADD COLUMN mcp_selection TEXT')
+  } catch {
+    // 列已存在
+  }
 }
 
 // engine/store 是消息的唯一写者，经此拿库连接
@@ -492,4 +498,22 @@ export function setConversationKb(id: string, enabled: boolean): void {
 export function getConversationKb(id: string): boolean {
   const row = db.prepare('SELECT kb_enabled AS k FROM conversation WHERE id = ?').get(id) as { k: number } | undefined
   return !!row?.k
+}
+
+// 会话选用的 MCP 服务（Case 8）：NULL/解析失败按未选用处理
+export function setConversationMcpSelection(id: string, serviceIds: number[]): void {
+  db.prepare('UPDATE conversation SET mcp_selection = ? WHERE id = ?').run(JSON.stringify(serviceIds), id)
+}
+
+export function getConversationMcpSelection(id: string): number[] {
+  const row = db.prepare('SELECT mcp_selection AS s FROM conversation WHERE id = ?').get(id) as
+    | { s: string | null }
+    | undefined
+  if (!row?.s) return []
+  try {
+    const v = JSON.parse(row.s)
+    return Array.isArray(v) ? v.filter((n) => Number.isInteger(n)) : []
+  } catch {
+    return []
+  }
 }

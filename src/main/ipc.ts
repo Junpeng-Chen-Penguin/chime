@@ -16,7 +16,7 @@ import { detect, listModels, generateTitle } from './ai'
 import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
 import { respondCard, respondAskCard, type AskOutcome } from './engine/cards'
 import { lastUserText, deleteLastAssistant, repairConversation } from './engine/store'
-import { getKb, kbStats, setConversationKb, setKbMeta, resetKb } from './db'
+import { getKb, kbStats, setConversationKb, setConversationMcpSelection, getConversationMcpSelection, setKbMeta, resetKb } from './db'
 import { listMcpServices, getMcpService, saveMcpService, deleteMcpService, getArtifact } from './db'
 import { TABLE_RENDER_CAP } from './engine/artifact'
 import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
@@ -159,6 +159,12 @@ export function registerIpc(): void {
   ipcMain.handle('conv:setKb', (_e, input: { id: string; enabled: boolean }) =>
     setConversationKb(input.id, input.enabled)
   )
+
+  // Case 8 会话选用工具：读写本会话选用的 MCP 服务清单
+  ipcMain.handle('conv:setMcpSel', (_e, input: { id: string; serviceIds: number[] }) =>
+    setConversationMcpSelection(input.id, input.serviceIds)
+  )
+  ipcMain.handle('conv:getMcpSel', (_e, id: string) => getConversationMcpSelection(id))
 
   // ── MCP 服务 ──────────────────────────────────────
   // 重试连接（输入框状态标识的入口）：重连全部已启用服务，完成后 mcp:status 事件自会刷新界面

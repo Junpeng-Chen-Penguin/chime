@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUp, ChevronDown, Check, BookOpen, X, TriangleAlert } from 'lucide-react'
+import { ArrowUp, ChevronDown, Check, BookOpen, X, TriangleAlert, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// 服务状态标识（方案 A）：全部正常时不渲染；有不可用服务时输入框左下出安静标识，点开看明细
+// 工具菜单（Case 8）：勾选 = 本会话选用该 MCP 服务；连接状态就地显示（选用与状态一个载体）
 export interface ServiceStatus {
+  id: number
   name: string
   status: 'connected' | 'auth' | 'error'
 }
@@ -38,6 +39,8 @@ interface Props {
   kbLocked: boolean // 会话已定性（发过首条消息）
   onToggleKb: () => void
   services?: ServiceStatus[] // 已启用的外部服务及连接状态
+  selectedServiceIds?: number[] // 本会话选用的服务（Case 8）
+  onToggleService?: (id: number) => void
   onRetryServices?: () => void
   onOpenSettings?: () => void
 }
@@ -59,6 +62,8 @@ export default function Composer({
   kbLocked,
   onToggleKb,
   services,
+  selectedServiceIds,
+  onToggleService,
   onRetryServices,
   onOpenSettings
 }: Props): React.JSX.Element {
@@ -66,7 +71,10 @@ export default function Composer({
   const [kbMenuOpen, setKbMenuOpen] = useState(false)
   const [svcMenuOpen, setSvcMenuOpen] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
-  const downCount = (services ?? []).filter((s) => s.status !== 'connected').length
+  const svcList = services ?? []
+  const selectedIds = selectedServiceIds ?? []
+  const selectedDown = svcList.filter((s) => selectedIds.includes(s.id) && s.status !== 'connected').length
+  const anyDown = svcList.some((s) => s.status !== 'connected')
 
   useEffect(() => {
     const ta = taRef.current
@@ -162,43 +170,79 @@ export default function Composer({
               </div>
             )}
 
-            {downCount > 0 && (
+            {svcList.length > 0 && (
               <div className="relative">
                 <button
                   onClick={() => setSvcMenuOpen((v) => !v)}
                   onBlur={() => setTimeout(() => setSvcMenuOpen(false), 120)}
-                  className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
+                  title="本会话选用的 MCP 服务"
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted',
+                    selectedDown === 0 && selectedIds.length === 0 && 'px-1.5'
+                  )}
                 >
-                  <TriangleAlert className="size-3.5" />
-                  {downCount} 个服务不可用
+                  {selectedDown > 0 ? (
+                    <>
+                      <TriangleAlert className="size-3.5" />
+                      {selectedDown} 个服务不可用
+                    </>
+                  ) : (
+                    <>
+                      <Wrench className="size-4" />
+                      {selectedIds.length > 0 && selectedIds.length}
+                    </>
+                  )}
                 </button>
                 {svcMenuOpen && (
-                  <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 min-w-[260px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-                    <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-medium text-muted-foreground">服务状态</div>
-                    {(services ?? []).map((s) => (
-                      <div key={s.name} className="flex items-center gap-2 px-2.5 py-2 text-[13px]">
-                        <span
-                          className={cn(
-                            'size-1.5 flex-none rounded-full',
-                            s.status === 'connected' ? 'bg-emerald-600' : 'bg-destructive'
-                          )}
-                        />
-                        <span className="min-w-0 flex-1 truncate">{s.name}</span>
-                        <span className="flex-none text-[12px] text-muted-foreground">
-                          {s.status === 'connected' ? '已连接' : s.status === 'auth' ? '认证失效' : '连接失败'}
-                        </span>
-                      </div>
-                    ))}
+                  <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 min-w-[280px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                    <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-medium text-muted-foreground">
+                      本会话选用的 MCP 服务
+                    </div>
+                    {svcList.map((s) => {
+                      const picked = selectedIds.includes(s.id)
+                      return (
+                        <button
+                          key={s.id}
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            onToggleService?.(s.id)
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted"
+                        >
+                          {/* 方形勾选框 = 多选（与提问卡多选同款；圆形留给单选） */}
+                          <span
+                            className={cn(
+                              'grid size-5 flex-none place-items-center rounded-md border',
+                              picked ? 'border-primary bg-primary text-primary-foreground' : 'border-border'
+                            )}
+                          >
+                            {picked && <Check className="size-3.5" strokeWidth={3} />}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                          <span
+                            className={cn(
+                              'size-1.5 flex-none rounded-full',
+                              s.status === 'connected' ? 'bg-emerald-600' : 'bg-destructive'
+                            )}
+                          />
+                          <span className="flex-none text-[12px] text-muted-foreground">
+                            {s.status === 'connected' ? '已连接' : s.status === 'auth' ? '认证失效' : '连接失败'}
+                          </span>
+                        </button>
+                      )
+                    })}
                     <div className="mt-1 flex gap-1 border-t border-border px-1 pt-1.5">
-                      <button
-                        onMouseDown={(e) => {
-                          e.preventDefault()
-                          onRetryServices?.()
-                        }}
-                        className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
-                      >
-                        重试连接
-                      </button>
+                      {anyDown && (
+                        <button
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            onRetryServices?.()
+                          }}
+                          className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
+                        >
+                          重试连接
+                        </button>
+                      )}
                       <button
                         onMouseDown={(e) => {
                           e.preventDefault()
