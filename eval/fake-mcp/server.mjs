@@ -61,9 +61,42 @@ function bigExport(scope) {
   return `数据导出（范围：${scope}）\n${rows.join('\n')}`
 }
 
-// ── 六工具注册 ──────────────────────────────────────
+// 分页工单记录（用例 15 分页完整性；业务域与账单导出错开，避免工具撞名干扰选择）：共 260 条、每页最大 100 → 3 页；
+// 「周天成」负责的 3 条散在第 1、3 页（只查第一页会漏），每条带备注填充体积使单页超限落库
+const PAGED_TOTAL = 260
+function pagedRecords(page, pageSize) {
+  const size = Math.min(100, Math.max(1, pageSize || 20))
+  const start = (Math.max(1, page || 1) - 1) * size
+  const list = []
+  for (let i = start; i < Math.min(PAGED_TOTAL, start + size); i++) {
+    list.push({
+      编号: `WO-${String(i + 1).padStart(5, '0')}`,
+      标题: `${['系统巡检', '配置变更', '数据修复', '权限调整'][i % 4]}工单 ${i + 1}`,
+      负责人: i === 5 || i === 40 || i === 250 ? '周天成' : ['吴启', '郑蓝', '许芳'][i % 3],
+      状态: ['已完成', '处理中', '待派单'][i % 3],
+      日期: `2026-${String((i % 12) + 1).padStart(2, '0')}-15`,
+      备注: `测试环境自动生成的工单记录，用于联调与评估场景的数据体积填充，无业务含义。记录序号 ${i + 1}，生成批次 fixture-2026，本字段内容固定不参与任何断言，仅保证单页数据量达到超限存储的触发线。补充填充段：该记录关联的处理日志、审批链、附件清单均为占位数据，请勿用于任何业务推断或统计口径核对。`
+    })
+  }
+  return JSON.stringify({ data: { list, total: PAGED_TOTAL, page: page || 1, page_size: size } }, null, 2)
+}
+
+// ── 工具注册 ──────────────────────────────────────
 function buildServer() {
   const server = new McpServer({ name: 'fake-bill-system', version: '0.5.0' })
+
+  server.registerTool(
+    'list_work_orders',
+    {
+      description:
+        '分页查询运维工单记录。返回信息含编号、标题、负责人、状态、日期。返回体中的 total 为记录总数。每页数量最大 100。只读。',
+      inputSchema: {
+        page: z.number().describe('页码，从 1 起').optional(),
+        page_size: z.number().describe('每页数量，默认 20，最大 100').optional()
+      }
+    },
+    async ({ page, page_size }) => text(pagedRecords(page, page_size))
+  )
 
   server.registerTool(
     'query_tenant_auth',

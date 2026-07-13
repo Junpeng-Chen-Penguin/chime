@@ -1,0 +1,19 @@
+{
+  "mcp": true,
+  "messages": ["工单记录里由周天成负责的一共有几笔？分别是哪几笔？"],
+  "cardResponses": [
+    { "action": "approve" },
+    { "action": "approve" },
+    { "action": "approve" },
+    { "action": "approve" },
+    { "action": "approve" },
+    { "action": "approve" }
+  ],
+  "expect": [
+    {
+      "mcpCalled": "list_work_orders",
+      "noInternalRefs": true,
+      "judge": "回答给出 3 笔且编号包含 WO-00006、WO-00041、WO-00251（表述形式不限）——数据共 260 条分 3 页，第 3 页有 1 笔，只查第一页或前两页会漏"
+    }
+  ]
+}

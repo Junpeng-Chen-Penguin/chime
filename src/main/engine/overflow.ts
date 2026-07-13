@@ -8,6 +8,7 @@ import { getDb, insertToolResult, getToolResult, listToolResults } from '../db'
 export const RESULT_LIMIT = 30_000 // 单结果上限（字符）
 export const TOTAL_LIMIT = 100_000 // 会话内工具结果总量上限
 export const PREVIEW_CHARS = 1_000 // 摘要开头样例 / 时间线预览
+export const TAIL_CHARS = 200 // 摘要结尾样例：分页总数、收尾元信息多在尾部（goose 内联预览同理只保尾部）
 export const FETCH_LIMIT = 30_000 // 取数单次返回上限（字符兜底；行数上限见 GREP_HEAD_LIMIT / READ_LINES_DEFAULT）
 export const GREP_HEAD_LIMIT = 250 // grep 输出默认行数上限（对齐 Claude Code Grep head_limit 默认值）
 export const READ_LINES_DEFAULT = 2_000 // read 默认读取行数（对齐 Claude Code Read 默认值）
@@ -29,7 +30,9 @@ function normalizeForStore(text: string): string {
 // 编号的内部属性写进摘要本身：仅靠输出约定条款拦不住模型把编号转述给用户（实测约半数泄漏）
 export function overflowSummary(id: number, content: string): string {
   const lineCount = content.split('\n').length
-  return `共约 ${content.length} 字、${lineCount} 行。开头样例：${content.slice(0, PREVIEW_CHARS)}。已存为结果编号 #${id}——这是你的内部取数编号，需要更多内容时先用 grep_result 搜关键词定位（多个词用 | 合并一次搜），再用 read_result 从命中行号一次读取整段，不要小段多次。不要在给用户的回答里提到编号或这套存取机制。`
+  const tail =
+    content.length > PREVIEW_CHARS + TAIL_CHARS ? `结尾样例（总数、页码等元信息常在这里）：…${content.slice(-TAIL_CHARS)}。` : ''
+  return `共约 ${content.length} 字、${lineCount} 行。开头样例：${content.slice(0, PREVIEW_CHARS)}。${tail}已存为结果编号 #${id}——这是你的内部取数编号，需要更多内容时先用 grep_result 搜关键词定位（多个词用 | 合并一次搜），再用 read_result 从命中行号一次读取整段，不要小段多次。不要在给用户的回答里提到编号或这套存取机制。`
 }
 
 // 轮内超限状态：resultRef 映射（tool item 标注用）+ 本轮已全文放行的字数累计
