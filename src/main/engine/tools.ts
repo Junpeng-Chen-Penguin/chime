@@ -71,6 +71,7 @@ export const READ_TOOL_DISPLAY = '读结果集'
 
 const GREP_TOOL_DESCRIPTION = `在已存的超限结果里逐行正则搜索，相当于对结果内容执行 grep -n。用于结果超限被存库（摘要里有「结果编号 #N」）、需要定位具体内容时；结果编号在本会话内一直有效。
 
+- 不传 resultId 时搜索本会话全部已存结果（相当于 grep 整个目录），命中带来源前缀「#编号:行号:内容」——同一份数据分了多个结果存（如分页拉取）时用这个，一次搜完，不要逐个结果分别搜
 - 支持完整正则语法（如 "账单.*超额"）；要查一批关键词时用 | 合并一次搜完（如 "词A|词B|词C"），不要逐词多次调用
 - context：命中行前后各带几行上下文（相当于 grep -C N），默认不带
 - head_limit：输出最多多少行（相当于 | head -N），默认 ${GREP_HEAD_LIMIT}；offset：跳过前 N 行输出（翻页用）
@@ -90,7 +91,7 @@ export function makeGrepResultTool(convId: string) {
   return tool({
     description: GREP_TOOL_DESCRIPTION,
     inputSchema: jsonSchema<{
-      resultId: number
+      resultId?: number
       pattern: string
       '-i'?: boolean
       context?: number
@@ -99,14 +100,14 @@ export function makeGrepResultTool(convId: string) {
     }>({
       type: 'object',
       properties: {
-        resultId: { type: 'number', description: '结果编号（摘要里的 #N，传数字 N）' },
+        resultId: { type: 'number', description: '结果编号（摘要里的 #N，传数字 N）。不传则搜本会话全部已存结果' },
         pattern: { type: 'string', description: '正则表达式，逐行匹配；多个关键词用 | 合并' },
         '-i': { type: 'boolean', description: '忽略大小写（默认区分）' },
         context: { type: 'number', description: '命中行前后各带几行上下文（相当于 grep -C N）' },
         head_limit: { type: 'number', description: `输出最多多少行（相当于 | head -N），默认 ${GREP_HEAD_LIMIT}` },
         offset: { type: 'number', description: '跳过前 N 行输出再取 head_limit 行（翻页用）' }
       },
-      required: ['resultId', 'pattern']
+      required: ['pattern']
     }),
     execute: async (args) => grepResult(convId, args ?? ({} as never))
   })

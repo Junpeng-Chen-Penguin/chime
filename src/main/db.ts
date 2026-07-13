@@ -264,6 +264,13 @@ export function getToolResult(
   return row ?? null
 }
 
+// 跨结果搜索用：本会话全部已存结果（按编号升序）
+export function listToolResults(conversationId: string): { id: number; content: string }[] {
+  return db
+    .prepare('SELECT id, content FROM tool_result WHERE conversation_id = ? ORDER BY id')
+    .all(conversationId) as { id: number; content: string }[]
+}
+
 export function getMessages(conversationId: string): MessageRow[] {
   return db
     .prepare(

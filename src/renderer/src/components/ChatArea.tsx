@@ -623,7 +623,7 @@ function GenericToolRow({
           startLine?: number
           offset?: number
         }
-        if (item.name === 'grep_result') return `#${a.resultId} 搜"${a.pattern ?? ''}"`
+        if (item.name === 'grep_result') return `${a.resultId != null ? `#${a.resultId}` : '全部结果'} 搜"${a.pattern ?? ''}"`
         if (item.name === 'read_result') return `#${a.resultId} 读第 ${a.offset ?? 1} 行起`
         if (a.mode === 'search') return `#${a.resultId} 搜"${a.pattern ?? a.keyword ?? ''}"`
         if (a.startLine !== undefined || a.mode === 'read') return `#${a.resultId} 读第 ${a.startLine ?? 1} 行起`

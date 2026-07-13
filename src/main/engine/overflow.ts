@@ -2,7 +2,7 @@
 // 两道闸：单结果闸在 execute 返回时判定；总量闸在「本步结果集齐、交给模型之前」（prepareStep）批量判定。
 // 「查结果集」的取数实现是纯字符串操作，不绑定数据来源（将来读本地文件复用，研发约束）。
 
-import { getDb, insertToolResult, getToolResult } from '../db'
+import { getDb, insertToolResult, getToolResult, listToolResults } from '../db'
 
 // 数值初值（技术方案初值表，实测调优的起点；07-13 修订：取数按行、单次上限调大）
 export const RESULT_LIMIT = 30_000 // 单结果上限（字符）
@@ -117,14 +117,37 @@ function loadResult(convId: string, resultId: unknown): { all: string[]; id: num
   return { all: row.content.split('\n'), id }
 }
 
-// grep_result：逐行正则匹配，输出仿 rg -n（命中行「N:内容」、上下文行「N-内容」、不连续块间 --）
+// 单个结果内的匹配：输出仿 rg -n（命中行「N:内容」、上下文行「N-内容」、不连续块间 --）。
+// prefix 用于跨结果搜索时标明来源（「#id:」，对齐 grep 多文件输出的「文件名:行号:内容」）
+function matchInContent(
+  all: string[],
+  re: RegExp,
+  ctx: number,
+  prefix: string
+): { hits: number; outLines: string[] } {
+  const matched = new Set<number>()
+  for (let i = 0; i < all.length; i++) if (re.test(all[i])) matched.add(i)
+  if (!matched.size) return { hits: 0, outLines: [] }
+  const show = new Set<number>()
+  for (const i of matched) {
+    for (let k = Math.max(0, i - ctx); k <= Math.min(all.length - 1, i + ctx); k++) show.add(k)
+  }
+  const ordered = [...show].sort((a, b) => a - b)
+  const outLines: string[] = []
+  let prev = -2
+  for (const i of ordered) {
+    if (i !== prev + 1 && prev >= 0) outLines.push('--')
+    outLines.push(`${prefix}${i + 1}${matched.has(i) ? ':' : '-'}${all[i]}`)
+    prev = i
+  }
+  return { hits: matched.size, outLines }
+}
+
+// grep_result：逐行正则匹配。resultId 缺省时搜本会话全部已存结果（等价 grep 整个目录，命中带 #编号 前缀）
 export function grepResult(
   convId: string,
   args: { resultId?: number; pattern?: string; '-i'?: boolean; context?: number; head_limit?: number; offset?: number }
 ): string | { error: string } {
-  const r = loadResult(convId, args.resultId)
-  if ('error' in r) return r
-  const { all, id } = r
   const raw = String(args.pattern ?? '').trim()
   if (!raw) return { error: '缺少 pattern 参数' }
   const flags = args['-i'] ? 'i' : ''
@@ -135,26 +158,36 @@ export function grepResult(
     re = new RegExp(raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags) // 非法正则退回普通文本匹配
   }
   const ctx = Math.max(0, Number(args.context ?? 0) || 0)
-  const matched = new Set<number>()
-  for (let i = 0; i < all.length; i++) if (re.test(all[i])) matched.add(i)
-  if (!matched.size) return `结果 #${id}（共 ${all.length} 行）中未匹配到「${raw}」`
-  // 汇总要输出的行（命中 ± 上下文），按行序生成，间断处插 --
-  const show = new Set<number>()
-  for (const i of matched) {
-    for (let k = Math.max(0, i - ctx); k <= Math.min(all.length - 1, i + ctx); k++) show.add(k)
+
+  let hits = 0
+  let outLines: string[] = []
+  let header: string
+  if (args.resultId === undefined || args.resultId === null) {
+    const rows = listToolResults(convId)
+    if (!rows.length) return { error: '本会话没有已存结果' }
+    for (const row of rows) {
+      const m = matchInContent(row.content.split('\n'), re, ctx, `#${row.id}:`)
+      if (!m.hits) continue
+      if (outLines.length) outLines.push('--')
+      hits += m.hits
+      outLines = outLines.concat(m.outLines)
+    }
+    if (!hits) return `全部已存结果（${rows.length} 个）中未匹配到「${raw}」`
+    header = `全部已存结果（${rows.length} 个）中「${raw}」命中 ${hits} 处（#编号:行号:内容）：`
+  } else {
+    const r = loadResult(convId, args.resultId)
+    if ('error' in r) return r
+    const m = matchInContent(r.all, re, ctx, '')
+    if (!m.hits) return `结果 #${r.id}（共 ${r.all.length} 行）中未匹配到「${raw}」`
+    hits = m.hits
+    outLines = m.outLines
+    header = `结果 #${r.id}（共 ${r.all.length} 行）「${raw}」命中 ${hits} 处：`
   }
-  const ordered = [...show].sort((a, b) => a - b)
-  const outLines: string[] = []
-  let prev = -2
-  for (const i of ordered) {
-    if (i !== prev + 1 && prev >= 0) outLines.push('--')
-    outLines.push(`${i + 1}${matched.has(i) ? ':' : '-'}${all[i]}`)
-    prev = i
-  }
+
   const skip = Math.max(0, Number(args.offset ?? 0) || 0)
   const head = Math.max(1, Number(args.head_limit ?? GREP_HEAD_LIMIT) || GREP_HEAD_LIMIT)
   const page = outLines.slice(skip, skip + head)
-  let text = `结果 #${id}（共 ${all.length} 行）「${raw}」命中 ${matched.size} 处：\n${page.join('\n')}`
+  let text = `${header}\n${page.join('\n')}`
   if (text.length > FETCH_LIMIT) text = `${text.slice(0, FETCH_LIMIT)}\n[超过单次 ${FETCH_LIMIT} 字上限截断，可缩小 context 或用 offset 翻页]`
   else if (outLines.length > skip + page.length) {
     text += `\n[输出共 ${outLines.length} 行，已显示第 ${skip + 1}-${skip + page.length} 行；继续用 offset=${skip + page.length}]`

@@ -273,6 +273,17 @@ app.whenReady().then(() => {
         )
         const paged = ov.grepResult(conv, { resultId: jid, pattern: '别人', head_limit: 5, offset: 5 })
         assert(typeof paged === 'string' && paged.includes('offset='), '搜结果集：head_limit/offset 翻页提示')
+        // 跨结果搜索：不传 resultId 搜全部已存结果，命中带 #编号 前缀（等价 grep 整个目录）
+        const mini2 = JSON.stringify(
+          Array.from({ length: 1500 }, (_, i) => ({ 租户: `u${i}`, 负责人: i === 300 ? '陈某' : '旁人' }))
+        )
+        ov.guardSingle(ctx, 'c4', 'tool_a', mini2)
+        const jid2 = ctx.refs.get('c4')!
+        const across = ov.grepResult(conv, { pattern: '陈某' })
+        assert(
+          typeof across === 'string' && across.includes(`#${jid}:`) && across.includes(`#${jid2}:`) && across.includes('全部已存结果'),
+          '搜结果集：跨结果搜索带编号前缀'
+        )
         assert(typeof ov.readResult(conv, { resultId: 9999 }) === 'object', '读结果集：无效编号报错')
         assert(typeof ov.readResult('other-conv', { resultId: bigId }) === 'object', '读结果集：跨会话不可用')
         // 制品解析三层
