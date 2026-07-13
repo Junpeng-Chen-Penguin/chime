@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
-import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plug, Plus, MoreHorizontal, ChevronDown } from 'lucide-react'
+import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, ChevronDown, Wrench, Search, MessageCircleQuestion, Table2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ConfirmDialog from './ConfirmDialog'
 import { cn } from '@/lib/utils'
@@ -10,7 +10,7 @@ type Tab = 'provider' | 'kb' | 'mcp'
 const TABS: { key: Tab; label: string; icon: typeof Boxes }[] = [
   { key: 'provider', label: '模型服务', icon: Boxes },
   { key: 'kb', label: '知识库', icon: BookOpen },
-  { key: 'mcp', label: 'MCP 服务', icon: Plug }
+  { key: 'mcp', label: '工具', icon: Wrench }
 ]
 
 interface Props {
@@ -139,7 +139,7 @@ export default function SettingsDialog({ open, onClose, onSaved, initialTab }: P
             {tab === 'kb' ? (
               <KbPanel />
             ) : tab === 'mcp' ? (
-              <McpPanel />
+              <ToolsPanel initialSub={initialTab === 'mcp' ? 'mcp' : 'builtin'} />
             ) : (
               <>
                 <div className="flex-1 overflow-y-auto px-6 py-6">
@@ -615,6 +615,60 @@ function KbPanel(): React.JSX.Element {
 const INPUT_CLS =
   'h-10 w-full rounded-lg border border-input bg-background px-3 text-[14px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50'
 
+// 工具分区：顶部子页签（内置工具 / MCP 服务）——内置再多也不挤压 MCP 的直达入口（Cherry Studio 同构）。
+// 「前往设置」深链时落 MCP 页签，正常导航默认落内置工具
+function ToolsPanel({ initialSub }: { initialSub: 'builtin' | 'mcp' }): React.JSX.Element {
+  const [sub, setSub] = useState<'builtin' | 'mcp'>(initialSub)
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-none gap-1 px-6 pt-5">
+        {(['builtin', 'mcp'] as const).map((k) => (
+          <button
+            key={k}
+            onClick={() => setSub(k)}
+            className={cn(
+              'rounded-lg px-3 py-1.5 text-[14px] transition-colors',
+              sub === k ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted'
+            )}
+          >
+            {k === 'builtin' ? '内置工具' : 'MCP 服务'}
+          </button>
+        ))}
+      </div>
+      {sub === 'builtin' ? <BuiltinToolsPane /> : <McpPanel />}
+    </div>
+  )
+}
+
+// 内置工具：只展示（图标 + 名称 + 一句话用途），无开关无配置——核心体验不属于「可要可不要」；
+// 取数等内部支撑工具不进列表（用户无感知也无需决策）
+const BUILTIN_TOOLS = [
+  { icon: Search, name: '知识库检索', desc: '在你选用的知识库中查找业务资料' },
+  { icon: MessageCircleQuestion, name: '向你提问', desc: '缺少关键信息时弹出选择卡片让你定夺' },
+  { icon: Table2, name: '生成表格', desc: '成批数据整理成表格，在侧板查看全貌' }
+]
+
+function BuiltinToolsPane(): React.JSX.Element {
+  return (
+    <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="rounded-lg border border-border">
+        {BUILTIN_TOOLS.map((t, i) => (
+          <div key={t.name} className={cn('flex items-center gap-3 px-4 py-3', i > 0 && 'border-t border-border')}>
+            <span className="grid size-8 flex-none place-items-center rounded-lg bg-muted">
+              <t.icon className="size-4 text-muted-foreground" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[14px] font-medium">{t.name}</div>
+              <div className="mt-0.5 text-[13px] text-muted-foreground">{t.desc}</div>
+            </div>
+            <span className="flex-none text-[12px] text-muted-foreground">默认开启</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function McpPanel(): React.JSX.Element {
   type McpServiceInfo = import('../../../preload/index.d').McpServiceInfo
   type McpTestResult = import('../../../preload/index.d').McpTestResult
@@ -783,8 +837,8 @@ function McpPanel(): React.JSX.Element {
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="text-[15px] font-semibold">MCP 服务</div>
+      {/* 分区名由子页签承担，此处只留操作（同一信息只出现一次） */}
+      <div className="mb-4 flex items-center justify-end">
         <Button variant="outline" onClick={() => openForm(null)} className="h-8 gap-1 px-3 text-[13px]">
           <Plus className="size-3.5" />
           添加服务
