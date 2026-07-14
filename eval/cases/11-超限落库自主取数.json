@@ -1,6 +1,6 @@
 {
   "mcp": true,
-  "messages": ["导出全部账单数据，然后告诉我一共有多少条、编号范围是什么"],
+  "messages": ["导出全部账单数据，然后告诉我编号 004567 这条账单的租户、金额和状态"],
   "cardResponses": [{ "action": "approve" }],
   "expect": [
     {
@@ -8,7 +8,7 @@
       "overflowStored": true,
       "fetched": true,
       "noInternalRefs": true,
-      "judge": "回答给出了总条数（8000 条）和编号范围（000001 到 008000，表述形式不限）"
+      "judge": "回答给出了账单 004567 的租户（A公司）、金额（5542.00 元，表述形式不限）和状态（已结清）"
     }
   ]
 }

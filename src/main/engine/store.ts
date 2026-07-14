@@ -94,8 +94,13 @@ export function deleteLastAssistant(convId: string): void {
     .run(convId)
 }
 
-// 历史 → 模型上下文映射：user 原文；assistant 取最终回答 + 检索概要（结果全文不进上下文）。
+// 历史 → 模型上下文映射：user 原文；assistant 取最终回答 + 工具概要。
+// 未超限的工具返回在预算内跨轮保留原文（07-14 修订：原先一律降级成"返回约 N 字"——
+// 模型决策要的是数据本身而不是调用状态，丢原文导致每轮重调接口拉同一份数据；
+// Claude Code 同构：原文留在对话里，上下文吃紧只清最老的、保留最近的）。
 // stopped 轮照常进（停止是正常收场）；error 轮跳过（无有效回应）。
+const HISTORY_VERBATIM_BUDGET = 30_000 // 跨轮保留原文的总字数预算，用完后更老的轮退回一行规模概要
+
 export function loadHistoryMessages(convId: string): ModelMessage[] {
   const db = getDb()
   const rows = db
@@ -104,15 +109,25 @@ export function loadHistoryMessages(convId: string): ModelMessage[] {
     )
     .all(convId) as { role: string; content: string; items: string | null; status: string }[]
 
+  // 原文预算按新→旧分配（最近的数据最可能被下一轮用到），组装仍按时间序
+  const budget = { remaining: HISTORY_VERBATIM_BUDGET }
+  const summaries = new Map<number, string>()
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]
+    if (r.role !== 'assistant' || r.status === 'error' || r.status === 'waiting' || !r.items) continue
+    summaries.set(i, summarizeToolCalls(JSON.parse(r.items) as TurnItem[], budget))
+  }
+
   const out: ModelMessage[] = []
-  for (const r of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
     if (r.role === 'user') {
       out.push({ role: 'user', content: r.content })
       continue
     }
     if (r.status === 'error') continue
     if (r.status === 'waiting') continue // 等卡中的轮不进历史概要：续跑时由 buildTurnMessages 原样重建
-    const summary = r.items ? summarizeToolCalls(JSON.parse(r.items) as TurnItem[]) : ''
+    const summary = summaries.get(i) ?? ''
     const content = summary ? `${r.content}\n\n${summary}` : r.content
     if (content.trim()) out.push({ role: 'assistant', content })
   }
@@ -168,7 +183,7 @@ export function repairConversation(
 // 概要一行一条，让模型记得本轮做过什么：
 // 检索：「query」命中《文章》《文章》；其他工具（MCP 等）：展示名(参数) → 结果规模或失败原因。
 // 结果编号、三级中断文案的完整历史映射随卡片机制一起做（技术方案 6.3）。
-function summarizeToolCalls(items: TurnItem[]): string {
+function summarizeToolCalls(items: TurnItem[], budget: { remaining: number }): string {
   const lines: string[] = []
   for (const it of items) {
     if (it.t === 'artifact') {
@@ -205,7 +220,13 @@ function summarizeToolCalls(items: TurnItem[]): string {
         `本轮调用：${label}(${argsShort}) → ${r.split('。')[0]}，已存为结果编号 #${it.resultRef}（你的内部取数编号，可用 grep_result 搜索、read_result 按行读取；任何给用户看的文字都不要提编号或存取机制）`
       )
     } else if (typeof r === 'string') {
-      lines.push(`本轮调用：${label}(${argsShort}) → 返回约 ${r.length} 字`)
+      // 预算内保留返回原文（新轮优先分配）：跨轮决策要的是数据本身；预算用完的老轮退回规模一行
+      if (r.length <= budget.remaining) {
+        budget.remaining -= r.length
+        lines.push(`本轮调用：${label}(${argsShort}) → 返回：\n${r}`)
+      } else {
+        lines.push(`本轮调用：${label}(${argsShort}) → 返回约 ${r.length} 字（原文已不在上下文，需要时重新调用）`)
+      }
     } else if (r?.denied || r?.interrupted) {
       // 拒绝与三级中断文案原样保留：模型下一轮据此判断能否重试
       lines.push(`本轮调用：${label}(${argsShort}) → ${r.denied ?? r.interrupted}`)
