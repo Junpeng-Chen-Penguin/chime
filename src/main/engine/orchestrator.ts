@@ -351,7 +351,9 @@ async function streamCore(core: {
               role: 'user' as const,
               content: hardLimit
                 ? `${BUDGET_NOTE_PREFIX}工具调用轮次已达上限，本轮不能再调用任何工具。请立即基于已获得的信息回答用户；信息不足则说明还缺什么，然后停止。）`
-                : `${BUDGET_NOTE_PREFIX}工具调用额度已用 ${rounds}/${TOOL_ROUND_HARD_LIMIT} 轮。请减少探索、合并必要的调用、尽快基于已有信息收尾作答。）`
+                : // 07-14 修订：原文案「尽快基于已有信息收尾作答」会压过分页工作流条款——模型把取剩余分页也当探索砍掉，
+                  // 只答第一页就收场。预警只砍试探性调用，作答必需的取数（剩余分页、制品生成）明确豁免
+                  `${BUDGET_NOTE_PREFIX}工具调用额度已用 ${rounds}/${TOOL_ROUND_HARD_LIMIT} 轮。请把剩余额度用在回答必需的调用上：停止试探性的搜索和阅读；已知总页数的剩余分页在同一轮一次取完，不可只答部分页；该生成制品的照常生成；必需数据齐了立即作答。）`
             }
           ]
         }

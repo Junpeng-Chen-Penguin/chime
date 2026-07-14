@@ -409,9 +409,10 @@ function AssistantMsg({
       {!streaming && sources && sources.list.length > 0 && (
         <SourcesFooter list={sources.list} onOpen={onOpenSource} />
       )}
-      {finished && answer && (
+      {/* 无正文的收场（如刚开始就停止）末轮也给重试入口；复制按钮由 MessageActions 按内容有无自行隐藏 */}
+      {finished && (answer || isLast) && (
         <MessageActions
-          content={stripCitations(answer, false)}
+          content={answer ? stripCitations(answer, false) : ''}
           onRetry={isLast ? onRetry : undefined}
         />
       )}
