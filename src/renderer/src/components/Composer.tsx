@@ -81,6 +81,8 @@ export default function Composer({
     if (!ta) return
     ta.style.height = 'auto'
     ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`
+    // 未到最大高度时隐藏滚动条：自动变高下 scrollHeight 与设定高度存在亚像素差，默认 auto 会画出空滚动条
+    ta.style.overflowY = ta.scrollHeight > 160 ? 'auto' : 'hidden'
   }, [value])
 
   // 提问卡等待中输入框开放：有内容时可发送（中断提问、开新一轮），空时右下仍是停止
