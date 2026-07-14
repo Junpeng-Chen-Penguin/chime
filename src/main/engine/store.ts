@@ -94,14 +94,28 @@ export function deleteLastAssistant(convId: string): void {
     .run(convId)
 }
 
-// 历史 → 模型上下文映射：user 原文；assistant 取最终回答 + 工具概要。
-// 未超限的工具返回在预算内跨轮保留原文（07-14 修订：原先一律降级成"返回约 N 字"——
-// 模型决策要的是数据本身而不是调用状态，丢原文导致每轮重调接口拉同一份数据；
-// Claude Code 同构：原文留在对话里，上下文吃紧只清最老的、保留最近的）。
-// stopped 轮照常进（停止是正常收场）；error 轮跳过（无有效回应）。
-const HISTORY_VERBATIM_BUDGET = 30_000 // 跨轮保留原文的总字数预算，用完后更老的轮退回一行规模概要
+// ── 历史 → 模型上下文（07-14 核心改造：原生消息形态）──────────────────
+// 按模型语料里的多轮形态重建：当时的调用块、返回块原样保留在消息结构里，
+// 不再压成自造句式（自造形态不如语料形态——取数工具重构已验证过一次；三家主流历史全部原生）。
+// 压缩不在这里发生：轮结束不再无条件降级，上下文有压力时由 orchestrator 按压力分级清最老的返回。
+// 定点转换一处：知识库检索结果只留命中文档名——「追问本轮重查」规则的配套，原文留存诱导吃老本。
+// stopped/interrupted 轮照常进（正常收场）；error 轮跳过；暂停等卡的轮由续跑单独重建。
 
-export function loadHistoryMessages(convId: string): ModelMessage[] {
+export interface HistoryToolOutput {
+  msgIdx: number // 所在 tool 消息在 messages 中的下标
+  partIdx: number // 在该消息 content 数组中的下标
+  toolCallId: string
+  toolName: string
+  resultRef?: number // 已有结果编号（超限摘要），降级时直接指向它
+  chars: number
+}
+
+export interface HistoryBundle {
+  messages: ModelMessage[]
+  toolOutputs: HistoryToolOutput[] // 全部工具返回的位置索引（旧→新），压力降级按此定位
+}
+
+export function loadHistoryMessages(convId: string): HistoryBundle {
   const db = getDb()
   const rows = db
     .prepare(
@@ -109,29 +123,73 @@ export function loadHistoryMessages(convId: string): ModelMessage[] {
     )
     .all(convId) as { role: string; content: string; items: string | null; status: string }[]
 
-  // 原文预算按新→旧分配（最近的数据最可能被下一轮用到），组装仍按时间序
-  const budget = { remaining: HISTORY_VERBATIM_BUDGET }
-  const summaries = new Map<number, string>()
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const r = rows[i]
-    if (r.role !== 'assistant' || r.status === 'error' || r.status === 'waiting' || !r.items) continue
-    summaries.set(i, summarizeToolCalls(JSON.parse(r.items) as TurnItem[], budget))
-  }
+  const messages: ModelMessage[] = []
+  const toolOutputs: HistoryToolOutput[] = []
+  let fallbackId = 0 // 旧数据缺 toolCallId 时的稳定补位
 
-  const out: ModelMessage[] = []
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i]
+  for (const r of rows) {
     if (r.role === 'user') {
-      out.push({ role: 'user', content: r.content })
+      messages.push({ role: 'user', content: r.content })
       continue
     }
-    if (r.status === 'error') continue
-    if (r.status === 'waiting') continue // 等卡中的轮不进历史概要：续跑时由 buildTurnMessages 原样重建
-    const summary = summaries.get(i) ?? ''
-    const content = summary ? `${r.content}\n\n${summary}` : r.content
-    if (content.trim()) out.push({ role: 'assistant', content })
+    if (r.status === 'error' || r.status === 'waiting') continue
+    const items = r.items ? (JSON.parse(r.items) as TurnItem[]) : []
+    if (!items.length) {
+      if (r.content.trim()) messages.push({ role: 'assistant', content: r.content })
+      continue
+    }
+
+    // 一轮内按发生顺序重建：文本与调用块进 assistant 消息，紧随的 tool 消息带全部返回。
+    // 中途文本会切开批次（保持 调用→结果→后续文本 的时序），并行调用天然落在同一批。
+    let asst: Array<Record<string, unknown>> = []
+    let results: Array<{ part: Record<string, unknown>; meta: Omit<HistoryToolOutput, 'msgIdx' | 'partIdx'> }> = []
+    const flush = (): void => {
+      if (asst.length) messages.push({ role: 'assistant', content: asst } as unknown as ModelMessage)
+      if (results.length) {
+        const msgIdx = messages.length
+        messages.push({ role: 'tool', content: results.map((x) => x.part) } as unknown as ModelMessage)
+        results.forEach((x, i) => toolOutputs.push({ msgIdx, partIdx: i, ...x.meta }))
+      }
+      asst = []
+      results = []
+    }
+    for (const it of items) {
+      if (it.t === 'text') {
+        if (!it.text.trim()) continue
+        if (results.length) flush()
+        asst.push({ type: 'text', text: it.text })
+      } else if (it.t === 'artifact') {
+        if (results.length) flush()
+        asst.push({ type: 'text', text: `已生成表格制品《${it.title}》（${it.rowCount} 行），用户可随时点开查看` })
+      } else if (it.t === 'tool') {
+        const callId = it.id ?? `hist_${++fallbackId}`
+        const value = historyToolOutput(it)
+        asst.push({ type: 'tool-call', toolCallId: callId, toolName: it.name, input: it.args ?? {} })
+        results.push({
+          part: { type: 'tool-result', toolCallId: callId, toolName: it.name, output: { type: 'text', value } },
+          meta: { toolCallId: callId, toolName: it.name, resultRef: it.resultRef, chars: value.length }
+        })
+      }
+      // reasoning / sources / boundary 不进历史
+    }
+    flush()
   }
-  return out
+  return { messages, toolOutputs }
+}
+
+// 工具返回进历史的文本形态：字符串原样（含超限摘要）；对象结构原样序列化（当轮模型看到的就是它）；
+// 知识库检索定点转换为命中文档名
+function historyToolOutput(it: Extract<TurnItem, { t: 'tool' }>): string {
+  const r = it.result
+  if (it.name === 'search_knowledge_base' && r && typeof r === 'object' && 'results' in r) {
+    const files = [...new Set(((r as { results?: { file: string }[] }).results ?? []).map((s) => s.file))]
+    return files.length
+      ? `检索命中${files.map((f) => `《${f}》`).join('')}。片段原文不跨轮保留（资料会更新），追问业务问题时本轮重新检索后作答`
+      : '未命中'
+  }
+  if (typeof r === 'string') return r
+  if (r === undefined) return '（本次调用未产生结果）'
+  return JSON.stringify(r)
 }
 
 // ── 等待与启动修复（弹卡即落库的配套）────────────────────────
@@ -180,59 +238,3 @@ export function repairConversation(
   saveAssistantTurn(convId, w.msgId, { content, items: w.items, status: 'interrupted' })
 }
 
-// 概要一行一条，让模型记得本轮做过什么：
-// 检索：「query」命中《文章》《文章》；其他工具（MCP 等）：展示名(参数) → 结果规模或失败原因。
-// 结果编号、三级中断文案的完整历史映射随卡片机制一起做（技术方案 6.3）。
-function summarizeToolCalls(items: TurnItem[], budget: { remaining: number }): string {
-  const lines: string[] = []
-  for (const it of items) {
-    if (it.t === 'artifact') {
-      lines.push(`本轮已为用户生成表格制品《${it.title}》（${it.rowCount} 行），用户可随时点开查看`)
-      continue
-    }
-    if (it.t !== 'tool') continue
-    if (it.name === 'search_knowledge_base') {
-      const result = it.result as { results?: { file: string }[]; denied?: string; interrupted?: string } | undefined
-      if (!result || result.denied || result.interrupted) continue // 被闸门拒绝/中断的请求不是一次检索
-      const query = String((it.args as { query?: unknown }).query ?? '')
-      const files = [...new Set((result.results ?? []).map((r) => r.file))].map((f) => `《${f}》`).join('')
-      lines.push(files ? `本轮检索：「${query}」命中${files}` : `本轮检索：「${query}」未命中`)
-      continue
-    }
-    const label = it.display ?? it.name
-    const argsShort = JSON.stringify(it.args ?? {}).slice(0, 100)
-    const r = it.result as { error?: unknown; denied?: string; interrupted?: string } | string | undefined
-    if (it.ask) {
-      // 提问结果原样保留：问答是下一轮的关键上下文，不做规模摘要。
-      // 问题清单一并带上——用户中断提问后直接打字时，模型靠它把回复对应到当时的问题
-      const qs = ((it.args as { questions?: { question: string }[] }).questions ?? [])
-        .map((q) => q.question)
-        .join('；')
-      const prefix = qs ? `本轮向用户提问（${qs}）` : '本轮向用户提问'
-      if (typeof r === 'string') lines.push(`${prefix} → ${r}`)
-      else if (r?.interrupted) lines.push(`${prefix} → ${r.interrupted}`)
-      continue
-    }
-    if (it.resultRef && typeof r === 'string') {
-      // 超限结果：跨轮只带规模 + 结果编号（预览是当轮决策用的，后续轮凭编号随时取，不占历史）。
-      // 内部属性随行标注——历史概要是模型跨轮唯一的编号来源，不标注就会把编号说给用户听
-      lines.push(
-        `本轮调用：${label}(${argsShort}) → ${r.split('。')[0]}，已存为结果编号 #${it.resultRef}（你的内部取数编号，可用 grep_result 搜索、read_result 按行读取；任何给用户看的文字都不要提编号或存取机制）`
-      )
-    } else if (typeof r === 'string') {
-      // 预算内保留返回原文（新轮优先分配）：跨轮决策要的是数据本身；预算用完的老轮退回规模一行
-      if (r.length <= budget.remaining) {
-        budget.remaining -= r.length
-        lines.push(`本轮调用：${label}(${argsShort}) → 返回：\n${r}`)
-      } else {
-        lines.push(`本轮调用：${label}(${argsShort}) → 返回约 ${r.length} 字（原文已不在上下文，需要时重新调用）`)
-      }
-    } else if (r?.denied || r?.interrupted) {
-      // 拒绝与三级中断文案原样保留：模型下一轮据此判断能否重试
-      lines.push(`本轮调用：${label}(${argsShort}) → ${r.denied ?? r.interrupted}`)
-    } else if (r && typeof r === 'object' && 'error' in r) {
-      lines.push(`本轮调用：${label}(${argsShort}) → 失败：${String(r.error).slice(0, 100)}`)
-    }
-  }
-  return lines.join('\n')
-}

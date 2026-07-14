@@ -30,8 +30,12 @@ function normalizeForStore(text: string): string {
 // 编号的内部属性写进摘要本身：仅靠输出约定条款拦不住模型把编号转述给用户（实测约半数泄漏）
 export function overflowSummary(id: number, content: string): string {
   const lineCount = content.split('\n').length
+  // 标明未展示的规模：防止模型把头尾样例当全量下结论（07-14 修订，评估曾现直接凭样例作答的案例）
+  const midChars = content.length - PREVIEW_CHARS - TAIL_CHARS
   const tail =
-    content.length > PREVIEW_CHARS + TAIL_CHARS ? `结尾样例（总数、页码等元信息常在这里）：…${content.slice(-TAIL_CHARS)}。` : ''
+    content.length > PREVIEW_CHARS + TAIL_CHARS
+      ? `以上仅是开头样例，中间约 ${midChars} 字未展示。结尾样例（总数、页码等元信息常在这里）：…${content.slice(-TAIL_CHARS)}。`
+      : ''
   return `共约 ${content.length} 字、${lineCount} 行。开头样例：${content.slice(0, PREVIEW_CHARS)}。${tail}已存为结果编号 #${id}——这是你的内部取数编号，需要更多内容时先用 grep_result 搜关键词定位（多个词用 | 合并一次搜），再用 read_result 从命中行号一次读取整段，不要小段多次。不要在给用户的回答里提到编号或这套存取机制。`
 }
 

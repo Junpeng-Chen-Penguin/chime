@@ -202,8 +202,9 @@ export default function ChatArea({
           {/* 提问卡：悬浮于输入框上方，不占对话流位置（key 随卡切换重置内部作答状态） */}
           {askItem?.id && <AskCard key={askItem.id} item={askItem} onRespond={onRespondAsk} />}
 
-          {/* 输入框上方轻提示：过长消息就地拦下；对话较长建议新开（均不阻断界面其他操作） */}
-          {(overLimit || contextRatio > 0.7) && (
+          {/* 输入框上方轻提示：过长消息就地拦下；压力高（L2，90%）才建议新开——
+              70%~90% 由引擎清老工具返回静默缓解，无需打扰用户 */}
+          {(overLimit || contextRatio > 0.9) && (
             <div className="mx-auto w-full max-w-[800px] px-8 pb-1">
               {overLimit ? (
                 <div className="text-[12px] text-destructive">

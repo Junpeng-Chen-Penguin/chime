@@ -1,0 +1,15 @@
+{
+  "mcp": true,
+  "messages": ["A公司的授权是什么状态？", "它的席位数是多少？"],
+  "cardResponses": [{ "action": "approve" }, { "action": "approve" }],
+  "expect": [
+    {
+      "mcpCalled": "query_tenant_auth",
+      "judge": "回答明确给出了 A公司 授权状态为生效中（表述形式不限）"
+    },
+    {
+      "mcpNotCalled": "mcp__",
+      "judge": "回答直接给出了席位数 120（表述形式不限），没有重新查询"
+    }
+  ]
+}

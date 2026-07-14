@@ -7,7 +7,15 @@ import { streamText, isStepCount } from 'ai'
 import type { ModelMessage, Tool } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { randomUUID } from 'crypto'
-import { getProvider, getConversationKb, getConversationMcpSelection, getKb, kbStats } from '../db'
+import {
+  getProvider,
+  getConversationKb,
+  getConversationMcpSelection,
+  getKb,
+  kbStats,
+  findToolResultIdByCallId,
+  insertToolResult
+} from '../db'
 import { EMBED_MODEL_ID } from '../model'
 import { humanize } from '../ai'
 import { buildSystemPrompt, type KbEnv } from './prompts'
@@ -43,7 +51,14 @@ import {
   type CardDecision,
   type AskOutcome
 } from './cards'
-import { saveUserMessage, saveAssistantTurn, loadHistoryMessages, type TurnItem, type TurnStatus } from './store'
+import {
+  saveUserMessage,
+  saveAssistantTurn,
+  loadHistoryMessages,
+  type HistoryBundle,
+  type TurnItem,
+  type TurnStatus
+} from './store'
 
 export type ChatEvent =
   | { type: 'turn-start'; streamId: string }
@@ -157,7 +172,7 @@ async function streamCore(core: {
   emit: Emit
   msgId: string
   items: TurnItem[]
-  history: ModelMessage[]
+  history: HistoryBundle
   kbEnv: KbEnv | null
 }): Promise<void> {
   const { streamId, convId, model, emit, msgId, items, kbEnv } = core
@@ -258,12 +273,50 @@ async function streamCore(core: {
   // 组装：系统提示词（固定主干 +（带工具）输出约定 +（挂库）条件段 + 环境信息）+ 消息序列
   const system = buildSystemPrompt(kbEnv, Object.keys(turnTools).length > 0)
   const budget = budgetFor(model)
-  let history = core.history
+  const bundle = core.history
+  let history = bundle.messages
   const sizeOf = (m: ModelMessage): number =>
     estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
   const estimate = (): number => estimateTokens(system) + history.reduce((s, m) => s + sizeOf(m), 0)
-  // 规则 3：超预算从最旧成对丢弃，静默；始终保留本条用户消息
-  while (history.length > 2 && estimate() > budget) history = history.slice(2)
+
+  // 压力分级（07-14 核心改造，Claude Code 微压缩同构）：
+  // L0 压力低不动；L1 超 70% 从最老的工具返回清起、换原地指针——只清数据不动对话主干，
+  // 保最近 5 条；可省不足 2 万 token 不动手（清除打破服务端缓存，要么省一大笔要么不折腾）；
+  // 检索返回不清（已定点转换成文档名）、提问卡问答不清（体积小且是关键上下文）。
+  // 被清内容幂等入库（同一调用复用编号），模型凭编号随时查回，不必重调外部接口。
+  const L1_PRESSURE = 0.7
+  const RELIEF_KEEP_RECENT = 5
+  const RELIEF_MIN_SAVE_TOKENS = 20_000
+  const RELIEF_SKIP = new Set(['search_knowledge_base', ASK_TOOL_NAME])
+  if (estimate() > budget * L1_PRESSURE) {
+    const candidates = bundle.toolOutputs.filter((c) => !RELIEF_SKIP.has(c.toolName))
+    const clearable = candidates.slice(0, Math.max(0, candidates.length - RELIEF_KEEP_RECENT))
+    const partOf = (c: (typeof clearable)[number]): { output: { value: string } } | null => {
+      const msg = history[c.msgIdx] as unknown as { content?: { output?: { value?: unknown } }[] }
+      const part = msg?.content?.[c.partIdx]
+      return part?.output && typeof part.output.value === 'string' ? (part as { output: { value: string } }) : null
+    }
+    const savable = clearable.reduce((s, c) => s + estimateTokens(partOf(c)?.output.value ?? ''), 0)
+    if (savable >= RELIEF_MIN_SAVE_TOKENS) {
+      for (const c of clearable) {
+        if (estimate() <= budget * L1_PRESSURE) break
+        const p = partOf(c)
+        if (!p || p.output.value.length < 500) continue // 太小的不清：指针比内容还长
+        const id =
+          c.resultRef ??
+          findToolResultIdByCallId(c.toolCallId) ??
+          insertToolResult({ conversationId: convId, toolCallId: c.toolCallId, toolName: c.toolName, content: p.output.value })
+        p.output.value = `（这段返回已移出对话释放空间，完整内容在结果编号 #${id}——用 grep_result 搜关键词、read_result 按行读取；任何给用户看的文字不要提编号或存取机制）`
+      }
+    }
+  }
+  // L2 最后防线：清完仍超预算才丢最旧消息对，且不再静默——丢的可能是任务开头的指令，用户须知情
+  let droppedOldest = false
+  while (history.length > 2 && estimate() > budget) {
+    history = history.slice(2)
+    droppedOldest = true
+  }
+  if (droppedOldest) emit({ type: 'notice', streamId, text: '对话过长，最早的内容已让位；建议新开会话继续这个话题' })
   const estimatedInput = estimate()
   const contextRatio = Math.min(1, estimatedInput / budget)
 

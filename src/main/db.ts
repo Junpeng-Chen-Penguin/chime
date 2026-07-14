@@ -270,6 +270,14 @@ export function getToolResult(
   return row ?? null
 }
 
+// 压力降级补存小结果时的幂等查找：同一调用清除过一次就复用编号，不重复插行
+export function findToolResultIdByCallId(toolCallId: string): number | null {
+  const row = db.prepare('SELECT id FROM tool_result WHERE tool_call_id = ? LIMIT 1').get(toolCallId) as
+    | { id: number }
+    | undefined
+  return row?.id ?? null
+}
+
 // 跨结果搜索用：本会话全部已存结果（按编号升序）
 export function listToolResults(conversationId: string): { id: number; content: string }[] {
   return db

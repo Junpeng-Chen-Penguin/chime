@@ -201,7 +201,8 @@ app.whenReady().then(() => {
             return { kind: 'declined' }
           })
         }
-        const convId = spec.conv ?? `eval-${process.pid}`
+        // 进程号会循环复用，数据目录跨多次评估累积后会撞 id——带上时间戳保唯一
+        const convId = spec.conv ?? `eval-${process.pid}-${Date.now()}`
         if (!spec.conv) {
           createConversation(convId, model, Date.now())
           setConversationKb(convId, !!spec.kb)

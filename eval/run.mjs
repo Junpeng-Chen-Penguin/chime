@@ -25,7 +25,11 @@ if (!KEY) {
   process.exit(1)
 }
 
-// ── 环境预置：隔离目录 + 模型缓存复制 + 测试知识库（git 仓库） ────────────
+// ── 环境预置：先构建产物（electron 跑的是 out/ 里的构建结果，不建就是在测旧代码）──
+console.log('构建产物…')
+execFileSync(join(ROOT, 'node_modules/.bin/electron-vite'), ['build'], { cwd: ROOT, stdio: 'ignore' })
+
+// ── 隔离目录 + 模型缓存复制 + 测试知识库（git 仓库） ────────────
 mkdirSync(DATA_DIR, { recursive: true })
 if (!existsSync(join(DATA_DIR, 'models')) && existsSync(join(REAL_USERDATA, 'models'))) {
   console.log('预置：复制本地模型缓存…')
