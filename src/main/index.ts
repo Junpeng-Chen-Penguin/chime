@@ -100,8 +100,12 @@ if (process.env.CHIME_TOOL_TEST) {
 }
 
 // 单实例：重复启动时退出新实例、聚焦已有窗口（避免 dock 里出现多个）。
-// 无界面评估入口不占锁：隔离数据目录、随起随退；且强杀测试会留下残锁，占锁会被静默挡掉
-if (!process.argv.includes('--eval') && !app.requestSingleInstanceLock()) {
+// 无界面评估/查询入口不占锁：隔离数据目录、随起随退；且强杀测试会留下残锁，占锁会被静默挡掉
+if (
+  !process.argv.includes('--eval') &&
+  !process.argv.includes('--report') &&
+  !app.requestSingleInstanceLock()
+) {
   app.exit(0)
 }
 
@@ -120,6 +124,66 @@ const evalCasePath = ((): string | null => {
 })()
 
 app.whenReady().then(() => {
+  // 可测性查询入口：--report，自报版本、代码版本与模型服务配置（供 tuner 等外部工具使用）。
+  // 只读打开数据库（不走建表迁移，避免对运行中的主实例写打开），输出一段 JSON 后退出
+  if (process.argv.includes('--report')) {
+    void (async () => {
+      try {
+        const { default: Database } = await import('better-sqlite3')
+        let row: { api_key: string | null; base_url: string; default_model: string | null } | undefined
+        try {
+          const rdb = new Database(join(app.getPath('userData'), 'chime.db'), {
+            readonly: true,
+            fileMustExist: true
+          })
+          row = rdb
+            .prepare('SELECT api_key, base_url, default_model FROM provider WHERE id = 1')
+            .get() as typeof row
+          rdb.close()
+        } catch {
+          // 库不存在或无 provider 行：按未配置处理
+        }
+        const { execFileSync } = await import('child_process')
+        const git = (args: string[]): string | null => {
+          try {
+            return execFileSync('git', args, { cwd: app.getAppPath(), encoding: 'utf8' }).trim()
+          } catch {
+            return null // 非 git 环境（如打包分发形态）拿不到就置空
+          }
+        }
+        const baseUrl = row?.base_url || 'https://api.deepseek.com'
+        const apiKey = row?.api_key ?? null
+        let models: string[] = []
+        let modelsError: string | null = null
+        if (apiKey) {
+          try {
+            const { listModels } = await import('./ai')
+            models = await listModels(baseUrl, apiKey)
+          } catch (e) {
+            modelsError = String(e)
+          }
+        }
+        process.stdout.write(
+          JSON.stringify({
+            appVersion: app.getVersion(),
+            gitCommit: git(['rev-parse', 'HEAD']),
+            dirty: (git(['status', '--porcelain']) ?? '') !== '',
+            baseUrl,
+            apiKey,
+            defaultModel: row?.default_model ?? null,
+            models,
+            modelsError
+          }) + '\n'
+        )
+        app.exit(0)
+      } catch (e) {
+        process.stderr.write(`[report] ERROR ${String(e)}\n`)
+        app.exit(1)
+      }
+    })()
+    return
+  }
+
   if (evalCasePath) {
     void (async () => {
       try {
