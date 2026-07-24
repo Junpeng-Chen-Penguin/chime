@@ -131,6 +131,8 @@ app.whenReady().then(() => {
       try {
         const { default: Database } = await import('better-sqlite3')
         let row: { api_key: string | null; base_url: string; default_model: string | null } | undefined
+        let kbReady = false
+        let mcpEnabledCount = 0
         try {
           const rdb = new Database(join(app.getPath('userData'), 'chime.db'), {
             readonly: true,
@@ -139,6 +141,21 @@ app.whenReady().then(() => {
           row = rdb
             .prepare('SELECT api_key, base_url, default_model FROM provider WHERE id = 1')
             .get() as typeof row
+          // 环境快照预检（tuner 用，见《Tuner-技术方案》第七章）：同一只读连接裸查，旧库无表按未配置处理
+          try {
+            const k = rdb.prepare('SELECT root_path, indexed_at FROM kb WHERE id = 1').get() as
+              | { root_path: string | null; indexed_at: number | null }
+              | undefined
+            kbReady = !!(k?.root_path && k?.indexed_at)
+          } catch {
+            // 旧库无 kb 表
+          }
+          try {
+            const m = rdb.prepare('SELECT COUNT(*) AS n FROM mcp_service WHERE enabled = 1').get() as { n: number }
+            mcpEnabledCount = m.n
+          } catch {
+            // 旧库无 mcp_service 表
+          }
           rdb.close()
         } catch {
           // 库不存在或无 provider 行：按未配置处理
@@ -172,7 +189,9 @@ app.whenReady().then(() => {
             apiKey,
             defaultModel: row?.default_model ?? null,
             models,
-            modelsError
+            modelsError,
+            kbReady,
+            mcpEnabledCount
           }) + '\n'
         )
         app.exit(0)
@@ -197,8 +216,8 @@ app.whenReady().then(() => {
         }
         const { readFileSync } = await import('fs')
         const spec = JSON.parse(readFileSync(resolve(evalCasePath), 'utf8')) as {
-          kb?: { repo: string; name: string; intro: string }
-          mcp?: { name: string; url: string; headers?: Record<string, string> }[]
+          kb?: { repo: string; name: string; intro: string } | true // true = 使用库内现成配置（环境快照）
+          mcp?: { name: string; url: string; headers?: Record<string, string> }[] | true // 同上
           model?: string
           messages: string[]
           conv?: string // 往既有会话续发（跨重启多轮自测）；缺省新建会话
@@ -212,7 +231,9 @@ app.whenReady().then(() => {
         // 评估共用数据目录，前一用例注册的服务不能泄漏进「无手段」类用例
         {
           const existing = listMcpServices()
-          if (spec.mcp) {
+          if (spec.mcp === true) {
+            // 环境快照：库内已启用的服务原样使用，不增改、不停用
+          } else if (spec.mcp) {
             for (const s of spec.mcp) {
               const found = existing.find((e) => e.name === s.name)
               if (!found) {
@@ -228,8 +249,23 @@ app.whenReady().then(() => {
           }
         }
         await syncMcpServices()
-        // 带库用例：库未就绪或路径不同才构建（预置过则秒过）
-        if (spec.kb) {
+        // 带库用例。kb === true（环境快照）：库内配置须已完成索引且 embed 模型匹配，
+        // 否则报错退出——绝不触发重建（重建路径会对用户真实文档仓库执行 git pull）
+        if (spec.kb === true) {
+          const cur = getKb()
+          if (!cur.rootPath || !cur.indexedAt) {
+            process.stderr.write('[eval] ERROR 知识库未配置或未完成索引\n')
+            app.exit(1)
+            return
+          }
+          const { EMBED_MODEL_ID } = await import('./model')
+          if (cur.embedModel && cur.embedModel !== EMBED_MODEL_ID) {
+            process.stderr.write('[eval] ERROR 知识库索引与当前 embed 模型不匹配，请在正式 Chime 重建索引\n')
+            app.exit(1)
+            return
+          }
+        } else if (spec.kb) {
+          // 对象形式（Chime 自测夹具）：库未就绪或路径不同才构建（预置过则秒过）
           const cur = getKb()
           if (cur.rootPath !== resolve(spec.kb.repo) || !cur.indexedAt) {
             const kb = await import('./kb')
