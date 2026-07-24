@@ -189,7 +189,12 @@ async function streamCore(core: {
     emit({ type: 'item-delta', streamId, index: cur, text: delta })
   }
   const endItem = (): void => {
-    emit({ type: 'item-done', streamId, index: cur, item: items[cur] })
+    // 上游 SDK（@ai-sdk/openai-compatible）在 tool_calls 到达时不关闭文本块，text-end 拖到
+    // 整条流末尾才发；此时 cur 已被 tool-call 移到工具 item，直接收尾会给同一次工具调用
+    // 发出第二条 item-done（事件流消费方会看到假的重复调用）。只有 cur 仍指向文本类 item 才收尾
+    const it = items[cur]
+    if (!it || (it.t !== 'text' && it.t !== 'reasoning')) return
+    emit({ type: 'item-done', streamId, index: cur, item: it })
   }
   const finish = (status: TurnStatus, error?: string, usage?: { inputTokens: number; outputTokens: number }, contextRatio = 0): void => {
     // 模型可能发出空的 text/reasoning 段（如开了个头就转去调工具），不落库
