@@ -30,7 +30,49 @@ export function estimateTokens(text: string): number {
 interface Block {
   lines: string[]
   startLine: number
+  endLine?: number // 缺省按 lines 长度推算；切分表格的片带重复表头（不占物理行），须显式给出
   atomic: boolean // 表格 / 围栏代码：不可从中间切
+}
+
+// 表格片预算比 MAX_TOKENS 更紧：表格行彼此独立，重排窗口（320，含 query、文件路径、特殊符号）
+// 截掉的尾行等于直接丢失，所以整片必须装进重排窗口；散文片开头能代表整篇，截尾无碍，不受此限
+const TABLE_PIECE_TOKENS = 240
+
+// 超预算的表格按数据行切分，每片重复表头——原子性保留的是「不从行中间切、表头始终在场」，
+// 去掉的只是「无上限」；围栏代码不切（从中间切会失去语法完整性）
+function splitOversizedTable(b: Block): Block[] {
+  const isTable = b.atomic && /^\s*\|/.test(b.lines[0] ?? '')
+  if (!isTable || estimateTokens(b.lines.join('\n')) <= TABLE_PIECE_TOKENS) return [b]
+  // 表头 = 列名行 + 分隔行；没有分隔行的非标准表格不重复表头，只按行切
+  const header = /^\|[\s:|-]+$/.test((b.lines[1] ?? '').trim()) ? b.lines.slice(0, 2) : []
+  const headerTokens = estimateTokens(header.join('\n'))
+  const out: Block[] = []
+  let rows: string[] = []
+  let rowStart = header.length
+  const flush = (endIdx: number): void => {
+    if (rows.length === 0) return
+    out.push({
+      lines: [...header, ...rows],
+      // 首片的表头是物理存在的，坐标从表头起；后续片的表头是重复出来的，坐标只算数据行
+      startLine: b.startLine + (out.length === 0 ? 0 : rowStart),
+      endLine: b.startLine + endIdx,
+      atomic: true
+    })
+    rows = []
+  }
+  let tokens = headerTokens
+  for (let i = header.length; i < b.lines.length; i++) {
+    const rowTokens = estimateTokens(b.lines[i])
+    if (rows.length > 0 && tokens + rowTokens > TABLE_PIECE_TOKENS) {
+      flush(i - 1)
+      tokens = headerTokens
+    }
+    if (rows.length === 0) rowStart = i
+    rows.push(b.lines[i])
+    tokens += rowTokens
+  }
+  flush(b.lines.length - 1)
+  return out
 }
 
 interface Section {
@@ -129,14 +171,16 @@ export function chunkMarkdown(text: string): Chunk[] {
         chunks.push({
           headingPath: path,
           startLine: acc[0].startLine,
-          endLine: acc[acc.length - 1].startLine + acc[acc.length - 1].lines.length - 1,
+          endLine:
+            acc[acc.length - 1].endLine ??
+            acc[acc.length - 1].startLine + acc[acc.length - 1].lines.length - 1,
           content
         })
       }
       acc = []
     }
 
-    for (const b of sec.blocks) {
+    for (const b of sec.blocks.flatMap(splitOversizedTable)) {
       const accTokens = estimateTokens(acc.map((x) => x.lines.join('\n')).join('\n'))
       const bTokens = estimateTokens(b.lines.join('\n'))
       if (acc.length > 0 && accTokens + bTokens > MAX_TOKENS) emit()
