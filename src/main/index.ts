@@ -123,6 +123,9 @@ const evalCasePath = ((): string | null => {
   return i >= 0 ? (process.argv[i + 1] ?? null) : null
 })()
 
+// 无界面模式不占 Dock：tuner 并发驱动时会同时跑多个评估进程，逐个冒图标很扰人
+if (evalCasePath || process.argv.includes('--report')) app.dock?.hide()
+
 app.whenReady().then(() => {
   // 可测性查询入口：--report，自报版本、代码版本与模型服务配置（供 tuner 等外部工具使用）。
   // 只读打开数据库（不走建表迁移，避免对运行中的主实例写打开），输出一段 JSON 后退出
