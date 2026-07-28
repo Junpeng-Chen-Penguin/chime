@@ -439,8 +439,9 @@ export interface KbRow {
   rootPath: string
   name: string
   intro: string
-  lastCommit: string | null
+  lastCommit: string | null // 弃用恒 null（去 git 化）；模块 2b 移除
   embedModel: string
+  chunkerVersion: number
   indexedAt: number | null
 }
 
@@ -463,33 +464,46 @@ function firstKbId(): number | null {
 export function getKb(): KbRow {
   const row = db
     .prepare(
-      'SELECT root_path AS rootPath, name, intro, embed_model AS embedModel, indexed_at AS indexedAt FROM kb ORDER BY id LIMIT 1'
+      'SELECT root_path AS rootPath, name, intro, embed_model AS embedModel, chunker_version AS chunkerVersion, indexed_at AS indexedAt FROM kb ORDER BY id LIMIT 1'
     )
     .get() as Omit<KbRow, 'lastCommit'> | undefined
-  if (!row) return { rootPath: '', name: '业务知识库', intro: '', lastCommit: null, embedModel: '', indexedAt: null }
-  return { ...row, lastCommit: null } // git 基准弃用：无基准时同步走全量枚举 + 哈希跳过，结果等价
+  if (!row)
+    return { rootPath: '', name: '业务知识库', intro: '', lastCommit: null, embedModel: '', chunkerVersion: 0, indexedAt: null }
+  return { ...row, lastCommit: null }
 }
 
 export function setKbMeta(
-  meta: Partial<{ rootPath: string; name: string; intro: string; lastCommit: string | null; embedModel: string; indexedAt: number }>
+  meta: Partial<{
+    rootPath: string
+    name: string
+    intro: string
+    lastCommit: string | null
+    embedModel: string
+    chunkerVersion: number
+    indexedAt: number
+  }>
 ): void {
   const id = firstKbId()
   if (id === null) {
-    db.prepare('INSERT INTO kb (name, intro, root_path, embed_model, indexed_at) VALUES (?, ?, ?, ?, ?)').run(
+    db.prepare('INSERT INTO kb (name, intro, root_path, embed_model, chunker_version, indexed_at) VALUES (?, ?, ?, ?, ?, ?)').run(
       meta.name ?? '业务知识库',
       meta.intro ?? '',
       meta.rootPath ?? '',
       meta.embedModel ?? '',
+      meta.chunkerVersion ?? 0,
       meta.indexedAt ?? null
     )
     return
   }
   const cur = getKb()
-  db.prepare('UPDATE kb SET root_path = ?, name = ?, intro = ?, embed_model = ?, indexed_at = ? WHERE id = ?').run(
+  db.prepare(
+    'UPDATE kb SET root_path = ?, name = ?, intro = ?, embed_model = ?, chunker_version = ?, indexed_at = ? WHERE id = ?'
+  ).run(
     meta.rootPath ?? cur.rootPath,
     meta.name ?? cur.name,
     meta.intro ?? cur.intro,
     meta.embedModel ?? cur.embedModel,
+    meta.chunkerVersion ?? cur.chunkerVersion,
     meta.indexedAt ?? cur.indexedAt,
     id
   )

@@ -1,17 +1,18 @@
-// 知识库：git 拉取与变更识别 + 索引构建 job(解析→切块→向量化→入库)+ 进度推送
-import { execFile } from 'child_process'
-import { promisify } from 'util'
+// 知识库：本地文件夹变更识别 + 索引构建 job(解析→切块→向量化→入库)+ 进度推送。
+// 文档更新由使用者在本地完成（Obsidian 编辑、内网拉取等），Chime 不参与获取（v1.0.0 去 git 化）
 import { createHash } from 'crypto'
-import { existsSync, readFileSync, statSync } from 'fs'
+import { existsSync, readFileSync, statSync, readdirSync } from 'fs'
 import { join } from 'path'
 import type { WebContents } from 'electron'
 import { chunkMarkdown } from '../shared/chunker'
 import { embed, loadModels, EMBED_MODEL_ID, type ModelProgress } from './model'
 import * as db from './db'
 
-const exec = promisify(execFile)
 const MAX_FILE_BYTES = 1024 * 1024 // 超 1MB 的 md 跳过
 const EMBED_BATCH = 16
+
+// 切块器版本：切块规则升级时 +1，构建时写进库；版本不等 → 该库需全量重建（PRD Case 2 Feature 3）
+export const CHUNKER_VERSION = 1
 
 export type KbPhase = 'pulling' | 'scanning' | 'downloading-model' | 'embedding' | 'done' | 'error'
 export interface KbSummary {
@@ -36,10 +37,6 @@ export const kbBusy = (): boolean => running
 let lastSummary: KbSummary | null = null
 export const getLastSummary = (): KbSummary | null => lastSummary
 
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await exec('git', args, { cwd, maxBuffer: 64 * 1024 * 1024 })
-  return stdout
-}
 
 // 中文分词供 FTS 入库/查询共用；token 加引号转义,不让内容进入 FTS 查询语法
 const seg = new Intl.Segmenter('zh', { granularity: 'word' })
@@ -56,23 +53,26 @@ export function toMatchQuery(text: string): string {
     .join(' OR ')
 }
 
+// 路径校验放宽：文件夹存在即可（空文件夹允许建库，构建后 0 篇）
 export async function validateRepoPath(root: string): Promise<string | null> {
   if (!root.trim() || !existsSync(root)) return '文件夹不存在'
-  try {
-    const out = await git(root, 'rev-parse', '--is-inside-work-tree')
-    if (out.trim() !== 'true') return '不是 git 仓库'
-  } catch {
-    return '不是 git 仓库'
-  }
-  const files = await listRepoMd(root)
-  if (files.length === 0) return '未找到 Markdown 文件'
+  if (!statSync(root).isDirectory()) return '不是文件夹'
   return null
 }
 
-async function listRepoMd(root: string): Promise<string[]> {
-  const tracked = await git(root, 'ls-files', '-z', '--', '*.md')
-  const untracked = await git(root, 'ls-files', '--others', '--exclude-standard', '-z', '--', '*.md')
-  return [...new Set([...tracked.split('\0'), ...untracked.split('\0')].filter(Boolean))]
+// fs 递归枚举 md：跳过点开头的目录与文件（.git/.obsidian 等），返回相对路径
+function listMdFiles(root: string): string[] {
+  const out: string[] = []
+  const walk = (rel: string): void => {
+    for (const ent of readdirSync(join(root, rel), { withFileTypes: true })) {
+      if (ent.name.startsWith('.')) continue
+      const p = rel ? `${rel}/${ent.name}` : ent.name
+      if (ent.isDirectory()) walk(p)
+      else if (ent.isFile() && ent.name.toLowerCase().endsWith('.md')) out.push(p)
+    }
+  }
+  walk('')
+  return out
 }
 
 interface ChangeSet {
@@ -80,37 +80,47 @@ interface ChangeSet {
   deletes: string[]
 }
 
-// 变更识别:有基准走 diff(到工作区,含未提交修改),基准失效或缺失降级全量
-async function detectChanges(root: string, lastCommit: string | null): Promise<ChangeSet> {
-  if (lastCommit) {
-    try {
-      await git(root, 'cat-file', '-e', lastCommit)
-      const out = await git(root, 'diff', '--name-status', '-z', lastCommit, '--', '*.md')
-      const parts = out.split('\0').filter(Boolean)
-      const upserts: string[] = []
-      const deletes: string[] = []
-      for (let i = 0; i < parts.length; ) {
-        const status = parts[i][0]
-        if (status === 'R' || status === 'C') {
-          deletes.push(parts[i + 1])
-          upserts.push(parts[i + 2])
-          i += 3
-        } else {
-          if (status === 'D') deletes.push(parts[i + 1])
-          else upserts.push(parts[i + 1])
-          i += 2
-        }
-      }
-      const untracked = await git(root, 'ls-files', '--others', '--exclude-standard', '-z', '--', '*.md')
-      upserts.push(...untracked.split('\0').filter(Boolean))
-      return { upserts: [...new Set(upserts)], deletes: [...new Set(deletes)] }
-    } catch {
-      // 基准 commit 不存在(rebase / reset / 重 clone)→ 降级全量
-    }
-  }
-  const current = await listRepoMd(root)
+// 变更识别：枚举文件夹与已索引清单比对。upserts 含未变更文件，构建循环里按内容哈希跳过
+function detectChanges(root: string): ChangeSet {
+  const current = listMdFiles(root)
   const known = db.listKbFiles().map((f) => f.path)
   return { upserts: current, deletes: known.filter((p) => !current.includes(p)) }
+}
+
+export interface KbChanges {
+  added: number
+  changed: number
+  deleted: number
+  needsFullRebuild: boolean // 切块规则升级
+  folderMissing: boolean
+}
+
+// 变更检查（PRD Case 2 Feature 1）：只读文件算哈希，秒级，不动索引。
+// 触发点：应用启动、进入知识库设置（IPC 通道在设置界面模块接线）
+export function checkChanges(): KbChanges {
+  const kb = db.getKb()
+  const none = { added: 0, changed: 0, deleted: 0, needsFullRebuild: false, folderMissing: false }
+  if (!kb.rootPath) return none
+  if (!existsSync(kb.rootPath)) return { ...none, folderMissing: true }
+  if (kb.indexedAt && (kb.chunkerVersion ?? 0) !== CHUNKER_VERSION) {
+    const files = listMdFiles(kb.rootPath).length
+    return { added: 0, changed: files, deleted: 0, needsFullRebuild: true, folderMissing: false }
+  }
+  const known = new Map(db.listKbFiles().map((f) => [f.path, f.hash]))
+  let added = 0
+  let changed = 0
+  const seen = new Set<string>()
+  for (const path of listMdFiles(kb.rootPath)) {
+    seen.add(path)
+    const abs = join(kb.rootPath, path)
+    if (statSync(abs).size > MAX_FILE_BYTES) continue
+    const hash = createHash('sha1').update(readFileSync(abs, 'utf8')).digest('hex')
+    const old = known.get(path)
+    if (old === undefined) added++
+    else if (old !== hash) changed++
+  }
+  const deleted = [...known.keys()].filter((p) => !seen.has(p)).length
+  return { added, changed, deleted, needsFullRebuild: false, folderMissing: false }
 }
 
 // 构建 / 刷新 job。rebuild = 换路径或点「构建」:先清库再全量
@@ -128,22 +138,17 @@ export async function runIndexJob(wc: WebContents | null, root: string, rebuild:
       send({ phase: 'error', message: invalid })
       return
     }
+    // 切块规则升级：该库的旧片段按旧规则切的，整库重来（PRD Case 2 Feature 3）
+    const cur = db.getKb()
+    if (!rebuild && cur.indexedAt && (cur.chunkerVersion ?? 0) !== CHUNKER_VERSION) rebuild = true
     if (rebuild) {
       db.clearKbData()
       db.setKbMeta({ rootPath: root, name })
     }
 
-    let warning: string | undefined
-    send({ phase: 'pulling' })
-    try {
-      await git(root, 'pull', '--ff-only')
-    } catch (e) {
-      // 拉取失败不中断:本地内容照常增量(无远程 / 无网络 / 冲突均落此)
-      warning = `未能获取远程更新,已基于本地内容更新:${(e as Error).message.split('\n')[0].slice(0, 120)}`
-    }
-
+    const warning: string | undefined = undefined
     send({ phase: 'scanning' })
-    const changes = await detectChanges(root, rebuild ? null : db.getKb().lastCommit)
+    const changes = detectChanges(root)
 
     send({ phase: 'downloading-model' })
     await loadModels((p: ModelProgress) => {
@@ -193,8 +198,7 @@ export async function runIndexJob(wc: WebContents | null, root: string, rebuild:
       await new Promise((r) => setImmediate(r)) // 让出事件循环
     }
 
-    const head = (await git(root, 'rev-parse', 'HEAD')).trim()
-    db.setKbMeta({ rootPath: root, lastCommit: head, embedModel: EMBED_MODEL_ID, indexedAt: Date.now() })
+    db.setKbMeta({ rootPath: root, embedModel: EMBED_MODEL_ID, chunkerVersion: CHUNKER_VERSION, indexedAt: Date.now() })
     const summary: KbSummary = { updated, deleted, skipped: skipped.length }
     lastSummary = rebuild ? null : summary // 「上次刷新」摘要只对刷新有意义
     send({ phase: 'done', warning, stats: { ...db.kbStats(), summary } })
