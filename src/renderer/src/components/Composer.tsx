@@ -386,7 +386,7 @@ export default function Composer({
                   title="发送"
                   className={cn(
                     'grid size-8 place-items-center rounded-lg text-primary-foreground transition-colors',
-                    canSend ? 'bg-primary hover:bg-primary/90' : 'cursor-default bg-primary/35'
+                    canSend ? 'bg-primary hover:bg-primary/90' : 'cursor-default bg-primary/50'
                   )}
                 >
                   <ArrowUp className="size-4" strokeWidth={2.2} />
