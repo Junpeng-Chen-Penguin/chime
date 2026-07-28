@@ -370,9 +370,6 @@ function VendorPane({
             </Button>
           )}
         </div>
-        <div className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-          对话接口：{baseUrl.replace(/\/+$/, '')}/chat/completions
-        </div>
       </Section>
 
       <Section title="模型">
@@ -546,13 +543,13 @@ function KbPanel(): React.JSX.Element {
         <Section title="名称 *">
           <input value={formName} onChange={(e) => setFormName(e.target.value)} disabled={formBusy} className={INPUT_CLS} />
         </Section>
-        <Section title="简介 *" hint="模型据此判断问题该不该查这个库">
+        <Section title="简介 *">
           <textarea
             value={formIntro}
             onChange={(e) => setFormIntro(e.target.value)}
             disabled={formBusy}
             rows={3}
-            placeholder="例：本库收录计费、授权、开通等业务规则与流程，覆盖 A / B 项目"
+            placeholder="这个库收录哪些内容、覆盖什么范围"
             className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2.5 text-[14px] leading-[1.6] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50"
           />
         </Section>
@@ -675,7 +672,7 @@ function KbPanel(): React.JSX.Element {
       line: (
         <StatusLine className="mt-0 text-emerald-600">
           <Check className="size-3.5" />
-          {c.files} 篇文档 · 最近构建 {time} · 已是最新
+          {c.files} 篇文档 · 最近构建 {time}
         </StatusLine>
       ),
       btn: { label: '构建变更', onClick: () => {}, disabled: true }
@@ -842,7 +839,7 @@ function BuiltinToolsPane(): React.JSX.Element {
                 <Icon className="size-4 text-muted-foreground" />
               </span>
               <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2">
+                <div className="flex items-center gap-2">
                   <span className="text-[14px] font-medium">{t.display}</span>
                   <span className="font-mono text-[11px] text-muted-foreground">{t.name}</span>
                 </div>
@@ -959,7 +956,7 @@ function McpPanel(): React.JSX.Element {
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="mb-5 text-[15px] font-semibold">{editing ? '编辑服务' : '新建服务'}</div>
         <Section title="名称 *">
-          <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="例：计费系统" className={INPUT_CLS} />
+          <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="服务名称" className={INPUT_CLS} />
         </Section>
         <Section title="服务地址 *">
           <input
@@ -971,7 +968,7 @@ function McpPanel(): React.JSX.Element {
         </Section>
         <Section
           title="认证请求头"
-          hint={editing ? '值已打码；没改动就沿用已保存的，改动则值需全部重填' : '服务方要求的请求头，一行一条'}
+          hint={editing ? '值已打码；没改动就沿用已保存的，改动则值需全部重填' : '一行一条'}
         >
           <textarea
             value={headersText}
@@ -981,7 +978,7 @@ function McpPanel(): React.JSX.Element {
             className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-[13px] leading-[1.6] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
           />
         </Section>
-        <Section title="启用" hint="保存即生效；想先配置后启用，关掉再保存">
+        <Section title="启用">
           <SwitchBtn on={formEnabled} onToggle={() => setFormEnabled((v) => !v)} />
         </Section>
 
@@ -1045,9 +1042,6 @@ function McpPanel(): React.JSX.Element {
               <div className="flex items-center justify-between">
                 <div className="flex min-w-0 items-center gap-2">
                   <span className="truncate text-[14px] font-semibold">{svc.name}</span>
-                  <span className="flex-none rounded border border-border bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                    MCP
-                  </span>
                 </div>
                 <div className="flex flex-none items-center gap-1.5">
                   <SwitchBtn
@@ -1166,10 +1160,15 @@ function Section({
   hint?: string
   children: ReactNode
 }): React.JSX.Element {
+  const required = title.endsWith('*')
+  const label = required ? title.slice(0, -1).trim() : title
   return (
     <div className="mb-7 last:mb-0">
       <div className="mb-2.5 flex items-baseline gap-2">
-        <div className="flex-none whitespace-nowrap text-[13px] font-semibold">{title}</div>
+        <div className="flex-none whitespace-nowrap text-[13px] font-semibold">
+          {label}
+          {required && <span className="ml-0.5 text-destructive">*</span>}
+        </div>
         {hint && <div className="text-[12px] text-muted-foreground">{hint}</div>}
       </div>
       {children}
