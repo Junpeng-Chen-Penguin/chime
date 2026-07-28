@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { join } from 'path'
 import Database from 'better-sqlite3'
+import { VENDORS, WINDOW_FALLBACK, vendorFromBaseUrl } from './vendors'
 
 export interface ProviderRow {
   apiKey: string
@@ -21,21 +22,27 @@ export function initDb(): void {
   }
   db.exec(`
     CREATE TABLE IF NOT EXISTS provider (
-      id            INTEGER PRIMARY KEY CHECK (id = 1),
-      api_key       TEXT NOT NULL DEFAULT '',
-      base_url      TEXT NOT NULL DEFAULT 'https://api.deepseek.com',
-      default_model TEXT NOT NULL DEFAULT ''
+      vendor       TEXT PRIMARY KEY,
+      api_key      TEXT NOT NULL DEFAULT '',
+      base_url     TEXT NOT NULL,
+      enabled      INTEGER NOT NULL DEFAULT 0,
+      models       TEXT NOT NULL DEFAULT '[]',
+      extra_params TEXT NOT NULL DEFAULT '{}'
     );
-    INSERT OR IGNORE INTO provider (id) VALUES (1);
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
 
     CREATE TABLE IF NOT EXISTS conversation (
-      id         TEXT PRIMARY KEY,
-      title      TEXT NOT NULL DEFAULT '新对话',
-      model      TEXT NOT NULL DEFAULT '',
-      kb_enabled INTEGER NOT NULL DEFAULT 0,
-      title_auto INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      id           TEXT PRIMARY KEY,
+      title        TEXT NOT NULL DEFAULT '新对话',
+      model        TEXT NOT NULL DEFAULT '',
+      kb_selection TEXT,
+      title_auto   INTEGER NOT NULL DEFAULT 1,
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS message (
@@ -44,27 +51,32 @@ export function initDb(): void {
       role            TEXT NOT NULL,
       content         TEXT NOT NULL DEFAULT '',
       items           TEXT,
+      usage           TEXT,
       status          TEXT NOT NULL DEFAULT 'done',
       created_at      INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_message_conv ON message (conversation_id, created_at);
 
     CREATE TABLE IF NOT EXISTS kb (
-      id          INTEGER PRIMARY KEY CHECK (id = 1),
-      root_path   TEXT NOT NULL DEFAULT '',
-      last_commit TEXT,
-      embed_model TEXT NOT NULL DEFAULT '',
-      indexed_at  INTEGER
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      name            TEXT NOT NULL,
+      intro           TEXT NOT NULL DEFAULT '',
+      root_path       TEXT NOT NULL,
+      embed_model     TEXT NOT NULL DEFAULT '',
+      chunker_version INTEGER NOT NULL DEFAULT 0,
+      indexed_at      INTEGER
     );
-    INSERT OR IGNORE INTO kb (id) VALUES (1);
 
     CREATE TABLE IF NOT EXISTS kb_file (
-      path         TEXT PRIMARY KEY,
-      content_hash TEXT NOT NULL
+      kb_id        INTEGER NOT NULL,
+      path         TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      PRIMARY KEY (kb_id, path)
     );
 
     CREATE TABLE IF NOT EXISTS chunk (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      kb_id        INTEGER NOT NULL DEFAULT 0,
       file_path    TEXT NOT NULL,
       heading_path TEXT NOT NULL,
       start_line   INTEGER NOT NULL,
@@ -103,43 +115,149 @@ export function initDb(): void {
       created_at      INTEGER NOT NULL
     );
   `)
-  // 迁移：知识库名称（录入时可自定义）
-  try {
-    db.exec("ALTER TABLE kb ADD COLUMN name TEXT NOT NULL DEFAULT '业务知识库'")
-  } catch {
-    // 列已存在
-  }
-  // 迁移：默认上下文窗口（OpenAI 兼容接口无法自动检测窗口大小，设置页可改）
-  try {
-    db.exec('ALTER TABLE provider ADD COLUMN default_window INTEGER NOT NULL DEFAULT 65536')
-  } catch {
-    // 列已存在
-  }
-  // 迁移：知识库简介（人工必填，注入环境信息供模型判断该不该查）
-  try {
-    db.exec("ALTER TABLE kb ADD COLUMN intro TEXT NOT NULL DEFAULT ''")
-  } catch {
-    // 列已存在
-  }
   // 迁移（Case 8 会话选用工具）：本会话选用的 MCP 服务 id 清单（JSON 数组；NULL/空 = 未选用任何服务）
   try {
     db.exec('ALTER TABLE conversation ADD COLUMN mcp_selection TEXT')
   } catch {
     // 列已存在
   }
+  migrateV1()
+  // chunk.kb_id 索引：旧库要等迁移加上列才能建，故放建表段之后
+  db.exec('CREATE INDEX IF NOT EXISTS idx_chunk_kb ON chunk (kb_id)')
+  // 预置服务商行就位（迁移后/新装均补齐缺的行）
+  const insVendor = db.prepare('INSERT OR IGNORE INTO provider (vendor, base_url) VALUES (?, ?)')
+  for (const v of VENDORS) insVendor.run(v.vendor, v.baseUrl)
 }
+
+// v1.0.0 迁移：知识库单库 → 多库、模型服务单套 → 按服务商分行、用量落库。
+// 判据：旧 kb 表带 last_commit 列（单库 git 时代的遗留）。整体一个事务，中途失败原样回滚。
+function migrateV1(): void {
+  const kbCols = db.prepare('PRAGMA table_info(kb)').all() as { name: string }[]
+  const oldKb = kbCols.some((c) => c.name === 'last_commit')
+  const provCols = db.prepare('PRAGMA table_info(provider)').all() as { name: string }[]
+  const oldProv = provCols.some((c) => c.name === 'default_model')
+  if (!oldKb && !oldProv) return
+
+  db.transaction(() => {
+    if (oldKb) {
+      // kb 单行 CHECK(id=1) → 多行；原库（root_path 非空）迁为第一行，索引与文件哈希整体挂到它名下
+      db.exec(`CREATE TABLE kb_v1 (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT NOT NULL,
+        intro           TEXT NOT NULL DEFAULT '',
+        root_path       TEXT NOT NULL,
+        embed_model     TEXT NOT NULL DEFAULT '',
+        chunker_version INTEGER NOT NULL DEFAULT 0,
+        indexed_at      INTEGER
+      )`)
+      const old = db
+        .prepare('SELECT root_path AS rootPath, name, intro, embed_model AS embedModel, indexed_at AS indexedAt FROM kb WHERE id = 1')
+        .get() as { rootPath: string; name: string; intro: string; embedModel: string; indexedAt: number | null } | undefined
+      let firstId = 0
+      if (old?.rootPath) {
+        // chunker_version 置当前值：索引是现行切块器建的，不触发全量重建
+        const r = db
+          .prepare('INSERT INTO kb_v1 (name, intro, root_path, embed_model, chunker_version, indexed_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(old.name, old.intro, old.rootPath, old.embedModel, CHUNKER_VERSION_AT_MIGRATION, old.indexedAt)
+        firstId = Number(r.lastInsertRowid)
+      }
+      db.exec('DROP TABLE kb')
+      db.exec('ALTER TABLE kb_v1 RENAME TO kb')
+
+      db.exec('ALTER TABLE chunk ADD COLUMN kb_id INTEGER NOT NULL DEFAULT 0')
+      db.exec('CREATE INDEX IF NOT EXISTS idx_chunk_kb ON chunk (kb_id)')
+      db.exec(`CREATE TABLE kb_file_v1 (
+        kb_id        INTEGER NOT NULL,
+        path         TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        PRIMARY KEY (kb_id, path)
+      )`)
+      if (firstId) {
+        db.prepare('UPDATE chunk SET kb_id = ?').run(firstId)
+        db.prepare('INSERT INTO kb_file_v1 (kb_id, path, content_hash) SELECT ?, path, content_hash FROM kb_file').run(firstId)
+      }
+      db.exec('DROP TABLE kb_file')
+      db.exec('ALTER TABLE kb_file_v1 RENAME TO kb_file')
+
+      // 会话选库：kb_enabled=1 的历史会话 → kb_selection（含库名快照）
+      db.exec('ALTER TABLE conversation ADD COLUMN kb_selection TEXT')
+      if (firstId && old) {
+        db.prepare('UPDATE conversation SET kb_selection = ? WHERE kb_enabled = 1').run(
+          JSON.stringify([{ id: firstId, name: old.name }])
+        )
+      }
+      // 用量落库（Case 5）
+      db.exec('ALTER TABLE message ADD COLUMN usage TEXT')
+    }
+
+    if (oldProv) {
+      // provider 单行 → 按 vendor 分行；按 base_url 判归属，匹配不上归 deepseek 并保留原地址
+      const old = db
+        .prepare('SELECT api_key AS apiKey, base_url AS baseUrl, default_model AS defaultModel FROM provider WHERE id = 1')
+        .get() as { apiKey: string; baseUrl: string; defaultModel: string } | undefined
+      db.exec(`CREATE TABLE provider_v1 (
+        vendor       TEXT PRIMARY KEY,
+        api_key      TEXT NOT NULL DEFAULT '',
+        base_url     TEXT NOT NULL,
+        enabled      INTEGER NOT NULL DEFAULT 0,
+        models       TEXT NOT NULL DEFAULT '[]',
+        extra_params TEXT NOT NULL DEFAULT '{}'
+      )`)
+      db.exec('DROP TABLE provider')
+      db.exec('ALTER TABLE provider_v1 RENAME TO provider')
+      db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+      if (old?.apiKey) {
+        const vendor = vendorFromBaseUrl(old.baseUrl)
+        const models = old.defaultModel ? JSON.stringify([{ id: old.defaultModel, picked: true }]) : '[]'
+        db.prepare('INSERT INTO provider (vendor, api_key, base_url, enabled, models) VALUES (?, ?, ?, 1, ?)').run(
+          vendor,
+          old.apiKey,
+          old.baseUrl,
+          models
+        )
+        if (old.defaultModel) {
+          db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(
+            'default_model',
+            `${vendor}:${old.defaultModel}`
+          )
+        }
+      }
+    }
+  })()
+}
+
+// 迁移时写入的切块器版本：与 shared/chunker 的现行版本一致（模块 2 起从 chunker 导出，此处先落常量）
+const CHUNKER_VERSION_AT_MIGRATION = 1
 
 // engine/store 是消息的唯一写者，经此拿库连接
 export function getDb(): Database.Database {
   return db
 }
 
+export function getSetting(key: string): string | null {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
+  return row?.value ?? null
+}
+
+export function setSetting(key: string, value: string): void {
+  db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value)
+}
+
+// ── 兼容壳（模块 4 多服务商界面就位后移除）：以「默认模型所属服务商」拼出旧的单套配置形状 ──
 export function getProvider(): ProviderRow {
-  return db
-    .prepare(
-      'SELECT api_key AS apiKey, base_url AS baseUrl, default_model AS defaultModel, default_window AS defaultWindow FROM provider WHERE id = 1'
-    )
-    .get() as ProviderRow
+  const ref = getSetting('default_model') ?? ''
+  const i = ref.indexOf(':')
+  const vendor = i < 0 ? 'deepseek' : ref.slice(0, i)
+  const model = i < 0 ? ref : ref.slice(i + 1)
+  const row = db.prepare('SELECT api_key AS apiKey, base_url AS baseUrl FROM provider WHERE vendor = ?').get(vendor) as
+    | { apiKey: string; baseUrl: string }
+    | undefined
+  return {
+    apiKey: row?.apiKey ?? '',
+    baseUrl: row?.baseUrl ?? VENDORS[0].baseUrl,
+    defaultModel: model,
+    defaultWindow: WINDOW_FALLBACK
+  }
 }
 
 export function saveProvider(input: {
@@ -148,12 +266,17 @@ export function saveProvider(input: {
   defaultModel: string
   defaultWindow?: number
 }): void {
-  // apiKey 为 null 表示沿用已存的密钥（界面未改动）
-  const cur = getProvider()
-  const apiKey = input.apiKey === null ? cur.apiKey : input.apiKey
+  // 兼容壳：按 base_url 判服务商写入对应行；defaultWindow 弃用（窗口随模型走）
+  const vendor = vendorFromBaseUrl(input.baseUrl)
+  const cur = db.prepare('SELECT api_key AS apiKey FROM provider WHERE vendor = ?').get(vendor) as
+    | { apiKey: string }
+    | undefined
+  const apiKey = input.apiKey === null ? (cur?.apiKey ?? '') : input.apiKey
+  const models = input.defaultModel ? JSON.stringify([{ id: input.defaultModel, picked: true }]) : '[]'
   db.prepare(
-    'UPDATE provider SET api_key = ?, base_url = ?, default_model = ?, default_window = ? WHERE id = 1'
-  ).run(apiKey, input.baseUrl, input.defaultModel, input.defaultWindow ?? cur.defaultWindow)
+    'INSERT INTO provider (vendor, api_key, base_url, enabled, models) VALUES (?, ?, ?, 1, ?) ON CONFLICT(vendor) DO UPDATE SET api_key = ?, base_url = ?, enabled = 1, models = ?'
+  ).run(vendor, apiKey, input.baseUrl, models, apiKey, input.baseUrl, models)
+  if (input.defaultModel) setSetting('default_model', `${vendor}:${input.defaultModel}`)
 }
 
 // 仅用于界面展示，明文密钥不离开主进程
@@ -183,11 +306,13 @@ export interface MessageRow {
 }
 
 export function listConversations(): ConversationRow[] {
-  return db
+  const rows = db
     .prepare(
-      'SELECT id, title, model, updated_at AS updatedAt, kb_enabled AS kbEnabled FROM conversation ORDER BY updated_at DESC'
+      'SELECT id, title, model, updated_at AS updatedAt, kb_selection AS kbSelection FROM conversation ORDER BY updated_at DESC'
     )
-    .all() as ConversationRow[]
+    .all() as (ConversationRow & { kbSelection: string | null })[]
+  // kbEnabled 兼容形状（模块 3 会话选库界面就位后改为直接透出 kbSelection）
+  return rows.map(({ kbSelection, ...r }) => ({ ...r, kbEnabled: kbSelection ? 1 : 0 }))
 }
 
 export function createConversation(id: string, model: string, now: number): ConversationRow {
@@ -328,88 +453,122 @@ export interface ChunkInput {
   segText: string // 分词后的检索文本
 }
 
+// 第一个库的 id（兼容壳期内全部 kb 操作落在它身上；无库返回 null）
+function firstKbId(): number | null {
+  const row = db.prepare('SELECT id FROM kb ORDER BY id LIMIT 1').get() as { id: number } | undefined
+  return row?.id ?? null
+}
+
+// ── 兼容壳（模块 2 多库构建就位后改为按 id 的多库函数）：一切按第一个库 ──
 export function getKb(): KbRow {
-  return db
+  const row = db
     .prepare(
-      'SELECT root_path AS rootPath, name, intro, last_commit AS lastCommit, embed_model AS embedModel, indexed_at AS indexedAt FROM kb WHERE id = 1'
+      'SELECT root_path AS rootPath, name, intro, embed_model AS embedModel, indexed_at AS indexedAt FROM kb ORDER BY id LIMIT 1'
     )
-    .get() as KbRow
+    .get() as Omit<KbRow, 'lastCommit'> | undefined
+  if (!row) return { rootPath: '', name: '业务知识库', intro: '', lastCommit: null, embedModel: '', indexedAt: null }
+  return { ...row, lastCommit: null } // git 基准弃用：无基准时同步走全量枚举 + 哈希跳过，结果等价
 }
 
 export function setKbMeta(
   meta: Partial<{ rootPath: string; name: string; intro: string; lastCommit: string | null; embedModel: string; indexedAt: number }>
 ): void {
+  const id = firstKbId()
+  if (id === null) {
+    db.prepare('INSERT INTO kb (name, intro, root_path, embed_model, indexed_at) VALUES (?, ?, ?, ?, ?)').run(
+      meta.name ?? '业务知识库',
+      meta.intro ?? '',
+      meta.rootPath ?? '',
+      meta.embedModel ?? '',
+      meta.indexedAt ?? null
+    )
+    return
+  }
   const cur = getKb()
-  db.prepare('UPDATE kb SET root_path = ?, name = ?, intro = ?, last_commit = ?, embed_model = ?, indexed_at = ? WHERE id = 1').run(
+  db.prepare('UPDATE kb SET root_path = ?, name = ?, intro = ?, embed_model = ?, indexed_at = ? WHERE id = ?').run(
     meta.rootPath ?? cur.rootPath,
     meta.name ?? cur.name,
     meta.intro ?? cur.intro,
-    meta.lastCommit === undefined ? cur.lastCommit : meta.lastCommit,
     meta.embedModel ?? cur.embedModel,
-    meta.indexedAt ?? cur.indexedAt
+    meta.indexedAt ?? cur.indexedAt,
+    id
   )
 }
 
 export function kbStats(): { files: number; chunks: number } {
-  const files = (db.prepare('SELECT COUNT(*) AS n FROM kb_file').get() as { n: number }).n
-  const chunks = (db.prepare('SELECT COUNT(*) AS n FROM chunk').get() as { n: number }).n
+  const id = firstKbId()
+  if (id === null) return { files: 0, chunks: 0 }
+  const files = (db.prepare('SELECT COUNT(*) AS n FROM kb_file WHERE kb_id = ?').get(id) as { n: number }).n
+  const chunks = (db.prepare('SELECT COUNT(*) AS n FROM chunk WHERE kb_id = ?').get(id) as { n: number }).n
   return { files, chunks }
 }
 
 export function listKbFiles(): { path: string; hash: string }[] {
-  return db.prepare('SELECT path, content_hash AS hash FROM kb_file').all() as { path: string; hash: string }[]
+  const id = firstKbId()
+  if (id === null) return []
+  return db.prepare('SELECT path, content_hash AS hash FROM kb_file WHERE kb_id = ?').all(id) as {
+    path: string
+    hash: string
+  }[]
 }
 
-// 移除知识库：清空索引数据并复位配置（回到空态）
+// 移除知识库：清数据并删库行（多库表里空态 = 无行）
 export function resetKb(): void {
   clearKbData()
-  db.prepare("UPDATE kb SET root_path = '', name = '业务知识库', embed_model = '' WHERE id = 1").run()
+  const id = firstKbId()
+  if (id !== null) db.prepare('DELETE FROM kb WHERE id = ?').run(id)
 }
 
-// 换路径 / 重新构建：整库清空
+// 换路径 / 重新构建：清第一个库的全部数据
 export const clearKbData = (): void => {
+  const id = firstKbId()
+  if (id === null) return
   db.transaction(() => {
-    db.prepare('DELETE FROM chunk_fts').run()
-    db.prepare('DELETE FROM chunk').run()
-    db.prepare('DELETE FROM kb_file').run()
-    db.prepare('UPDATE kb SET last_commit = NULL, indexed_at = NULL WHERE id = 1').run()
+    const ids = db.prepare('SELECT id FROM chunk WHERE kb_id = ?').all(id) as { id: number }[]
+    const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
+    for (const { id: cid } of ids) delFts.run(cid)
+    db.prepare('DELETE FROM chunk WHERE kb_id = ?').run(id)
+    db.prepare('DELETE FROM kb_file WHERE kb_id = ?').run(id)
+    db.prepare('UPDATE kb SET indexed_at = NULL WHERE id = ?').run(id)
   })()
 }
 
 // 删除一个文件的全部数据（chunk 与 FTS 同事务，防幽灵命中）
 export function deleteKbFile(path: string): void {
+  const kbId = firstKbId()
+  if (kbId === null) return
   db.transaction(() => {
-    const ids = db.prepare('SELECT id FROM chunk WHERE file_path = ?').all(path) as { id: number }[]
+    const ids = db.prepare('SELECT id FROM chunk WHERE kb_id = ? AND file_path = ?').all(kbId, path) as { id: number }[]
     const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
     for (const { id } of ids) delFts.run(id)
-    db.prepare('DELETE FROM chunk WHERE file_path = ?').run(path)
-    db.prepare('DELETE FROM kb_file WHERE path = ?').run(path)
+    db.prepare('DELETE FROM chunk WHERE kb_id = ? AND file_path = ?').run(kbId, path)
+    db.prepare('DELETE FROM kb_file WHERE kb_id = ? AND path = ?').run(kbId, path)
   })()
 }
 
 // 写入一个文件的全部片段（先清旧数据 = 修改文件的替换语义）
 export function replaceKbFile(path: string, hash: string, chunks: ChunkInput[]): void {
+  const kbId = firstKbId()
+  if (kbId === null) return // 库行由 setKbMeta 先建，此处兜底
   db.transaction(() => {
-    const ids = db.prepare('SELECT id FROM chunk WHERE file_path = ?').all(path) as { id: number }[]
+    const ids = db.prepare('SELECT id FROM chunk WHERE kb_id = ? AND file_path = ?').all(kbId, path) as { id: number }[]
     const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
     for (const { id } of ids) delFts.run(id)
-    db.prepare('DELETE FROM chunk WHERE file_path = ?').run(path)
+    db.prepare('DELETE FROM chunk WHERE kb_id = ? AND file_path = ?').run(kbId, path)
 
     const insChunk = db.prepare(
-      'INSERT INTO chunk (file_path, heading_path, start_line, end_line, content, embedding) VALUES (?, ?, ?, ?, ?, ?)'
+      'INSERT INTO chunk (kb_id, file_path, heading_path, start_line, end_line, content, embedding) VALUES (?, ?, ?, ?, ?, ?, ?)'
     )
     // FTS rowid 显式对齐 chunk.id（自动分配在删除后必然错位）
     const insFts = db.prepare('INSERT INTO chunk_fts (rowid, seg_text) VALUES (?, ?)')
     for (const c of chunks) {
-      const rowid = insChunk.run(path, c.headingPath, c.startLine, c.endLine, c.content, c.embedding)
+      const rowid = insChunk.run(kbId, path, c.headingPath, c.startLine, c.endLine, c.content, c.embedding)
         .lastInsertRowid as number
       insFts.run(rowid, c.segText)
     }
-    db.prepare('INSERT INTO kb_file (path, content_hash) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET content_hash = ?').run(
-      path,
-      hash,
-      hash
-    )
+    db.prepare(
+      'INSERT INTO kb_file (kb_id, path, content_hash) VALUES (?, ?, ?) ON CONFLICT(kb_id, path) DO UPDATE SET content_hash = ?'
+    ).run(kbId, path, hash, hash)
   })()
 }
 
@@ -499,13 +658,23 @@ export function deleteMcpService(id: number): void {
   db.prepare('DELETE FROM mcp_service WHERE id = ?').run(id)
 }
 
+// ── 兼容壳（模块 3 会话多选库就位后改为 selection 版）：单开关映射为「第一个库」的选择 ──
 export function setConversationKb(id: string, enabled: boolean): void {
-  db.prepare('UPDATE conversation SET kb_enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id)
+  if (!enabled) {
+    db.prepare('UPDATE conversation SET kb_selection = NULL WHERE id = ?').run(id)
+    return
+  }
+  const kbId = firstKbId()
+  const kb = getKb()
+  const sel = kbId !== null ? JSON.stringify([{ id: kbId, name: kb.name }]) : null
+  db.prepare('UPDATE conversation SET kb_selection = ? WHERE id = ?').run(sel, id)
 }
 
 export function getConversationKb(id: string): boolean {
-  const row = db.prepare('SELECT kb_enabled AS k FROM conversation WHERE id = ?').get(id) as { k: number } | undefined
-  return !!row?.k
+  const row = db.prepare('SELECT kb_selection AS s FROM conversation WHERE id = ?').get(id) as
+    | { s: string | null }
+    | undefined
+  return !!row?.s
 }
 
 // 会话选用的 MCP 服务（Case 8）：NULL/解析失败按未选用处理
