@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, protocol, net } from 'electron'
+import { app, shell, BrowserWindow, Menu, protocol, net } from 'electron'
 import { join, dirname, resolve } from 'path'
 import { appendFileSync } from 'fs'
 import { pathToFileURL } from 'url'
@@ -42,6 +42,10 @@ function createWindow(): BrowserWindow {
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
   })
+
+  // 页面缩放锁死 100%：Electron 会按站点持久化用户缩放（Cmd+= 一次就长期偏大），
+  // 与 Tuner 的界面一致性依赖两边都不缩放
+  mainWindow.webContents.on('did-finish-load', () => mainWindow.webContents.setZoomLevel(0))
 
   // 全屏时红绿灯隐藏，通知界面调整左上角内边距（收起态不再为红绿灯留空）
   const sendFs = (v: boolean): void => mainWindow.webContents.send('window:fullscreen', v)
@@ -717,6 +721,13 @@ app.whenReady().then(() => {
       return new Response('error', { status: 500 })
     }
   })
+
+  // 正式版菜单去掉「显示」栏（内含缩放快捷键）；开发态保留完整菜单（刷新/DevTools）
+  if (!is.dev) {
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])
+    )
+  }
 
   const win = createWindow()
 
