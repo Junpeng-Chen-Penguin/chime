@@ -102,6 +102,25 @@ function MermaidBlock({ code, onSettled }: { code: string; onSettled: () => void
   return <div className="my-3 flex justify-center overflow-x-auto" dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
+// 源文件读不到（被删 / 库已移除）但消息里存有片段快照：降级显示片段，说明缘由。
+// 快照随消息落库，不依赖知识库当前状态——历史回答的依据永远可查（PRD Case 3 Feature 4）
+export function FallbackChunks({ doc }: { doc: DocPanelData }): React.JSX.Element {
+  const withContent = doc.sources.filter((s) => s.content)
+  return (
+    <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="mb-4 rounded-lg border border-border bg-muted/40 px-3.5 py-2.5 text-[12px] leading-[1.7] text-muted-foreground">
+        {doc.error === 'no-kb' ? '该来源所属的知识库已移除' : '源文件已不在原位置'}，以下是回答当时引用的片段原文。
+      </div>
+      {withContent.map((s) => (
+        <div key={s.chunkId} className="mb-4 rounded-lg border border-border p-3.5">
+          <div className="mb-2 text-[11px] text-muted-foreground">{s.headingPath || doc.file}</div>
+          <pre className="text-[13px] leading-[1.7] whitespace-pre-wrap">{s.content}</pre>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // 来源文档阅读内容（v0.3.0 既有逻辑原样迁入）
 export function DocContent({ doc }: { doc: DocPanelData }): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -159,7 +178,10 @@ export function DocContent({ doc }: { doc: DocPanelData }): React.JSX.Element {
       return <T ref={ref} className={cn(hit && 'doc-hl')} {...(rest as object)} />
     }
 
-  if (doc.error) return <PanelEmpty error={doc.error} />
+  if (doc.error) {
+    if (doc.error !== 'busy' && doc.sources.some((x) => x.content)) return <FallbackChunks doc={doc} />
+    return <PanelEmpty error={doc.error} />
+  }
   return (
     <div ref={scrollRef} className="doc-md flex-1 overflow-y-auto px-6 py-5">
       <ReactMarkdown
@@ -209,7 +231,7 @@ export function DocContent({ doc }: { doc: DocPanelData }): React.JSX.Element {
             const isAbs = /^(https?:|data:|file:|chime-doc:)/.test(src)
             const url = isAbs
               ? src
-              : `chime-doc://img/?doc=${encodeURIComponent(doc.file)}&src=${encodeURIComponent(src)}`
+              : `chime-doc://img/?kb=${doc.sources[0]?.kbId ?? 0}&doc=${encodeURIComponent(doc.file)}&src=${encodeURIComponent(src)}`
             return <img src={url} alt={String(props.alt ?? '')} loading="lazy" onLoad={settle} />
           },
           a: (props) => (

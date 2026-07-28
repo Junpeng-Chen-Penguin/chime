@@ -21,6 +21,7 @@ export interface KbSummary {
   skipped: number
 }
 export interface KbProgress {
+  kbId?: number // 哪个库在构建（多库后进度按库归属）
   phase: KbPhase
   current?: number
   total?: number
@@ -31,7 +32,9 @@ export interface KbProgress {
 }
 
 let running = false
+let runningKbId: number | null = null
 export const kbBusy = (): boolean => running
+export const busyKbId = (): number | null => runningKbId
 
 // 上次刷新的变动摘要（内存态，重启后不保留）
 let lastSummary: KbSummary | null = null
@@ -81,9 +84,9 @@ interface ChangeSet {
 }
 
 // 变更识别：枚举文件夹与已索引清单比对。upserts 含未变更文件，构建循环里按内容哈希跳过
-function detectChanges(root: string): ChangeSet {
+function detectChanges(kbId: number, root: string): ChangeSet {
   const current = listMdFiles(root)
-  const known = db.listKbFiles().map((f) => f.path)
+  const known = db.listKbFilesFor(kbId).map((f) => f.path)
   return { upserts: current, deletes: known.filter((p) => !current.includes(p)) }
 }
 
@@ -95,18 +98,17 @@ export interface KbChanges {
   folderMissing: boolean
 }
 
-// 变更检查（PRD Case 2 Feature 1）：只读文件算哈希，秒级，不动索引。
-// 触发点：应用启动、进入知识库设置（IPC 通道在设置界面模块接线）
-export function checkChanges(): KbChanges {
-  const kb = db.getKb()
+// 变更检查（PRD Case 2 Feature 1）：只读文件算哈希，秒级，不动索引
+export function checkChanges(kbId: number): KbChanges {
+  const kb = db.getKbById(kbId)
   const none = { added: 0, changed: 0, deleted: 0, needsFullRebuild: false, folderMissing: false }
-  if (!kb.rootPath) return none
+  if (!kb || !kb.rootPath) return none
   if (!existsSync(kb.rootPath)) return { ...none, folderMissing: true }
-  if (kb.indexedAt && (kb.chunkerVersion ?? 0) !== CHUNKER_VERSION) {
+  if (kb.indexedAt && kb.chunkerVersion !== CHUNKER_VERSION) {
     const files = listMdFiles(kb.rootPath).length
     return { added: 0, changed: files, deleted: 0, needsFullRebuild: true, folderMissing: false }
   }
-  const known = new Map(db.listKbFiles().map((f) => [f.path, f.hash]))
+  const known = new Map(db.listKbFilesFor(kbId).map((f) => [f.path, f.hash]))
   let added = 0
   let changed = 0
   const seen = new Set<string>()
@@ -123,32 +125,35 @@ export function checkChanges(): KbChanges {
   return { added, changed, deleted, needsFullRebuild: false, folderMissing: false }
 }
 
-// 构建 / 刷新 job。rebuild = 换路径或点「构建」:先清库再全量
+// 构建 job（按库）。rebuild = 换路径 / 切块升级 / 首次：先清该库再全量；构建全局互斥（嵌入模型单份）
 // wc 传 null = 无界面运行（测试 / 评估通道），进度不推送
-export async function runIndexJob(wc: WebContents | null, root: string, rebuild: boolean, name?: string): Promise<void> {
+export async function runIndexJob(wc: WebContents | null, kbId: number, rebuild: boolean): Promise<void> {
   if (running) return
   running = true
+  runningKbId = kbId
   const send = (p: KbProgress): void => {
     if (process.env.CHIME_KB_TEST) console.log('[kb]', JSON.stringify(p))
-    if (wc && !wc.isDestroyed()) wc.send('kb:progress', p)
+    if (wc && !wc.isDestroyed()) wc.send('kb:progress', { kbId, ...p })
   }
   try {
+    const kb = db.getKbById(kbId)
+    if (!kb) {
+      send({ phase: 'error', message: '知识库不存在' })
+      return
+    }
+    const root = kb.rootPath
     const invalid = await validateRepoPath(root)
     if (invalid) {
       send({ phase: 'error', message: invalid })
       return
     }
     // 切块规则升级：该库的旧片段按旧规则切的，整库重来（PRD Case 2 Feature 3）
-    const cur = db.getKb()
-    if (!rebuild && cur.indexedAt && (cur.chunkerVersion ?? 0) !== CHUNKER_VERSION) rebuild = true
-    if (rebuild) {
-      db.clearKbData()
-      db.setKbMeta({ rootPath: root, name })
-    }
+    if (!rebuild && kb.indexedAt && kb.chunkerVersion !== CHUNKER_VERSION) rebuild = true
+    if (rebuild) db.clearKbDataFor(kbId)
 
     const warning: string | undefined = undefined
     send({ phase: 'scanning' })
-    const changes = detectChanges(root)
+    const changes = detectChanges(kbId, root)
 
     send({ phase: 'downloading-model' })
     await loadModels((p: ModelProgress) => {
@@ -159,8 +164,8 @@ export async function runIndexJob(wc: WebContents | null, root: string, rebuild:
 
     const skipped: string[] = []
     let updated = 0
-    const deleted = changes.deletes.filter((p) => db.listKbFiles().some((f) => f.path === p)).length
-    for (const path of changes.deletes) db.deleteKbFile(path)
+    const deleted = changes.deletes.length
+    for (const path of changes.deletes) db.deleteKbFileFor(kbId, path)
 
     const total = changes.upserts.length
     let current = 0
@@ -175,7 +180,7 @@ export async function runIndexJob(wc: WebContents | null, root: string, rebuild:
       }
       const text = readFileSync(abs, 'utf8')
       const hash = createHash('sha1').update(text).digest('hex')
-      if (db.listKbFiles().find((f) => f.path === path)?.hash === hash) continue
+      if (db.listKbFilesFor(kbId).find((f) => f.path === path)?.hash === hash) continue
       updated++
 
       const chunks = chunkMarkdown(text)
@@ -194,17 +199,18 @@ export async function runIndexJob(wc: WebContents | null, root: string, rebuild:
           })
         )
       }
-      db.replaceKbFile(path, hash, inputs)
+      db.replaceKbFileFor(kbId, path, hash, inputs)
       await new Promise((r) => setImmediate(r)) // 让出事件循环
     }
 
-    db.setKbMeta({ rootPath: root, embedModel: EMBED_MODEL_ID, chunkerVersion: CHUNKER_VERSION, indexedAt: Date.now() })
+    db.updateKb(kbId, { embedModel: EMBED_MODEL_ID, chunkerVersion: CHUNKER_VERSION, indexedAt: Date.now() })
     const summary: KbSummary = { updated, deleted, skipped: skipped.length }
     lastSummary = rebuild ? null : summary // 「上次刷新」摘要只对刷新有意义
-    send({ phase: 'done', warning, stats: { ...db.kbStats(), summary } })
+    send({ phase: 'done', warning, stats: { ...db.kbStatsFor(kbId), summary } })
   } catch (e) {
     send({ phase: 'error', message: (e as Error).message.split('\n')[0].slice(0, 200) })
   } finally {
     running = false
+    runningKbId = null
   }
 }

@@ -292,7 +292,7 @@ export interface ConversationRow {
   title: string
   model: string
   updatedAt: number
-  kbEnabled?: number
+  kbSelection?: KbSelEntry[]
 }
 
 export interface MessageRow {
@@ -310,9 +310,16 @@ export function listConversations(): ConversationRow[] {
     .prepare(
       'SELECT id, title, model, updated_at AS updatedAt, kb_selection AS kbSelection FROM conversation ORDER BY updated_at DESC'
     )
-    .all() as (ConversationRow & { kbSelection: string | null })[]
-  // kbEnabled 兼容形状（模块 3 会话选库界面就位后改为直接透出 kbSelection）
-  return rows.map(({ kbSelection, ...r }) => ({ ...r, kbEnabled: kbSelection ? 1 : 0 }))
+    .all() as unknown as { id: string; title: string; model: string; updatedAt: number; kbSelection: string | null }[]
+  return rows.map((r) => {
+    let sel: KbSelEntry[] = []
+    try {
+      if (r.kbSelection) sel = JSON.parse(r.kbSelection)
+    } catch {
+      // 坏数据按未选处理
+    }
+    return { ...r, kbSelection: sel }
+  })
 }
 
 export function createConversation(id: string, model: string, now: number): ConversationRow {
@@ -454,6 +461,125 @@ export interface ChunkInput {
   segText: string // 分词后的检索文本
 }
 
+// ── 多库正式接口（PRD Case 1/2）──────────────────────
+
+export interface KbListRow {
+  id: number
+  name: string
+  intro: string
+  rootPath: string
+  embedModel: string
+  chunkerVersion: number
+  indexedAt: number | null
+}
+
+export function listKbs(): KbListRow[] {
+  return db
+    .prepare(
+      'SELECT id, name, intro, root_path AS rootPath, embed_model AS embedModel, chunker_version AS chunkerVersion, indexed_at AS indexedAt FROM kb ORDER BY id'
+    )
+    .all() as KbListRow[]
+}
+
+export function getKbById(id: number): KbListRow | null {
+  return (listKbs().find((k) => k.id === id) ?? null) as KbListRow | null
+}
+
+// 建库：重名拒绝（Tuner 用例与会话快照都按库名定位）
+export function createKb(name: string, intro: string, rootPath: string): { ok: true; id: number } | { ok: false; error: string } {
+  const dup = db.prepare('SELECT id FROM kb WHERE name = ?').get(name)
+  if (dup) return { ok: false, error: '已存在同名知识库，请换一个名称' }
+  const r = db.prepare('INSERT INTO kb (name, intro, root_path) VALUES (?, ?, ?)').run(name, intro, rootPath)
+  return { ok: true, id: Number(r.lastInsertRowid) }
+}
+
+export function updateKb(
+  id: number,
+  meta: Partial<{ name: string; intro: string; rootPath: string; embedModel: string; chunkerVersion: number; indexedAt: number | null }>
+): { ok: true } | { ok: false; error: string } {
+  const cur = getKbById(id)
+  if (!cur) return { ok: false, error: '知识库不存在' }
+  if (meta.name && meta.name !== cur.name) {
+    const dup = db.prepare('SELECT id FROM kb WHERE name = ? AND id != ?').get(meta.name, id)
+    if (dup) return { ok: false, error: '已存在同名知识库，请换一个名称' }
+  }
+  db.prepare(
+    'UPDATE kb SET name = ?, intro = ?, root_path = ?, embed_model = ?, chunker_version = ?, indexed_at = ? WHERE id = ?'
+  ).run(
+    meta.name ?? cur.name,
+    meta.intro ?? cur.intro,
+    meta.rootPath ?? cur.rootPath,
+    meta.embedModel ?? cur.embedModel,
+    meta.chunkerVersion ?? cur.chunkerVersion,
+    meta.indexedAt === undefined ? cur.indexedAt : meta.indexedAt,
+    id
+  )
+  return { ok: true }
+}
+
+// 移除库：索引数据一并清除，源文件夹不受影响；历史会话的引用靠 kb_selection 快照与消息内来源快照存续
+export function deleteKb(id: number): void {
+  clearKbDataFor(id)
+  db.prepare('DELETE FROM kb WHERE id = ?').run(id)
+}
+
+export function kbStatsFor(id: number): { files: number; chunks: number } {
+  const files = (db.prepare('SELECT COUNT(*) AS n FROM kb_file WHERE kb_id = ?').get(id) as { n: number }).n
+  const chunks = (db.prepare('SELECT COUNT(*) AS n FROM chunk WHERE kb_id = ?').get(id) as { n: number }).n
+  return { files, chunks }
+}
+
+export function listKbFilesFor(id: number): { path: string; hash: string }[] {
+  return db.prepare('SELECT path, content_hash AS hash FROM kb_file WHERE kb_id = ?').all(id) as {
+    path: string
+    hash: string
+  }[]
+}
+
+export function clearKbDataFor(id: number): void {
+  db.transaction(() => {
+    const ids = db.prepare('SELECT id FROM chunk WHERE kb_id = ?').all(id) as { id: number }[]
+    const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
+    for (const { id: cid } of ids) delFts.run(cid)
+    db.prepare('DELETE FROM chunk WHERE kb_id = ?').run(id)
+    db.prepare('DELETE FROM kb_file WHERE kb_id = ?').run(id)
+    db.prepare('UPDATE kb SET indexed_at = NULL WHERE id = ?').run(id)
+  })()
+}
+
+export function deleteKbFileFor(kbId: number, path: string): void {
+  db.transaction(() => {
+    const ids = db.prepare('SELECT id FROM chunk WHERE kb_id = ? AND file_path = ?').all(kbId, path) as { id: number }[]
+    const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
+    for (const { id } of ids) delFts.run(id)
+    db.prepare('DELETE FROM chunk WHERE kb_id = ? AND file_path = ?').run(kbId, path)
+    db.prepare('DELETE FROM kb_file WHERE kb_id = ? AND path = ?').run(kbId, path)
+  })()
+}
+
+export function replaceKbFileFor(kbId: number, path: string, hash: string, chunks: ChunkInput[]): void {
+  db.transaction(() => {
+    const ids = db.prepare('SELECT id FROM chunk WHERE kb_id = ? AND file_path = ?').all(kbId, path) as { id: number }[]
+    const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
+    for (const { id } of ids) delFts.run(id)
+    db.prepare('DELETE FROM chunk WHERE kb_id = ? AND file_path = ?').run(kbId, path)
+
+    const insChunk = db.prepare(
+      'INSERT INTO chunk (kb_id, file_path, heading_path, start_line, end_line, content, embedding) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    )
+    // FTS rowid 显式对齐 chunk.id（自动分配在删除后必然错位）
+    const insFts = db.prepare('INSERT INTO chunk_fts (rowid, seg_text) VALUES (?, ?)')
+    for (const c of chunks) {
+      const rowid = insChunk.run(kbId, path, c.headingPath, c.startLine, c.endLine, c.content, c.embedding)
+        .lastInsertRowid as number
+      insFts.run(rowid, c.segText)
+    }
+    db.prepare(
+      'INSERT INTO kb_file (kb_id, path, content_hash) VALUES (?, ?, ?) ON CONFLICT(kb_id, path) DO UPDATE SET content_hash = ?'
+    ).run(kbId, path, hash, hash)
+  })()
+}
+
 // 第一个库的 id（兼容壳期内全部 kb 操作落在它身上；无库返回 null）
 function firstKbId(): number | null {
   const row = db.prepare('SELECT id FROM kb ORDER BY id LIMIT 1').get() as { id: number } | undefined
@@ -533,65 +659,41 @@ export function resetKb(): void {
   if (id !== null) db.prepare('DELETE FROM kb WHERE id = ?').run(id)
 }
 
-// 换路径 / 重新构建：清第一个库的全部数据
+// 换路径 / 重新构建：清第一个库的全部数据（兼容壳）
 export const clearKbData = (): void => {
   const id = firstKbId()
-  if (id === null) return
-  db.transaction(() => {
-    const ids = db.prepare('SELECT id FROM chunk WHERE kb_id = ?').all(id) as { id: number }[]
-    const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
-    for (const { id: cid } of ids) delFts.run(cid)
-    db.prepare('DELETE FROM chunk WHERE kb_id = ?').run(id)
-    db.prepare('DELETE FROM kb_file WHERE kb_id = ?').run(id)
-    db.prepare('UPDATE kb SET indexed_at = NULL WHERE id = ?').run(id)
-  })()
+  if (id !== null) clearKbDataFor(id)
 }
 
-// 删除一个文件的全部数据（chunk 与 FTS 同事务，防幽灵命中）
+// 兼容壳
 export function deleteKbFile(path: string): void {
-  const kbId = firstKbId()
-  if (kbId === null) return
-  db.transaction(() => {
-    const ids = db.prepare('SELECT id FROM chunk WHERE kb_id = ? AND file_path = ?').all(kbId, path) as { id: number }[]
-    const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
-    for (const { id } of ids) delFts.run(id)
-    db.prepare('DELETE FROM chunk WHERE kb_id = ? AND file_path = ?').run(kbId, path)
-    db.prepare('DELETE FROM kb_file WHERE kb_id = ? AND path = ?').run(kbId, path)
-  })()
+  const id = firstKbId()
+  if (id !== null) deleteKbFileFor(id, path)
 }
 
-// 写入一个文件的全部片段（先清旧数据 = 修改文件的替换语义）
+// 兼容壳
 export function replaceKbFile(path: string, hash: string, chunks: ChunkInput[]): void {
-  const kbId = firstKbId()
-  if (kbId === null) return // 库行由 setKbMeta 先建，此处兜底
-  db.transaction(() => {
-    const ids = db.prepare('SELECT id FROM chunk WHERE kb_id = ? AND file_path = ?').all(kbId, path) as { id: number }[]
-    const delFts = db.prepare('DELETE FROM chunk_fts WHERE rowid = ?')
-    for (const { id } of ids) delFts.run(id)
-    db.prepare('DELETE FROM chunk WHERE kb_id = ? AND file_path = ?').run(kbId, path)
-
-    const insChunk = db.prepare(
-      'INSERT INTO chunk (kb_id, file_path, heading_path, start_line, end_line, content, embedding) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    )
-    // FTS rowid 显式对齐 chunk.id（自动分配在删除后必然错位）
-    const insFts = db.prepare('INSERT INTO chunk_fts (rowid, seg_text) VALUES (?, ?)')
-    for (const c of chunks) {
-      const rowid = insChunk.run(kbId, path, c.headingPath, c.startLine, c.endLine, c.content, c.embedding)
-        .lastInsertRowid as number
-      insFts.run(rowid, c.segText)
-    }
-    db.prepare(
-      'INSERT INTO kb_file (kb_id, path, content_hash) VALUES (?, ?, ?) ON CONFLICT(kb_id, path) DO UPDATE SET content_hash = ?'
-    ).run(kbId, path, hash, hash)
-  })()
+  const id = firstKbId()
+  if (id !== null) replaceKbFileFor(id, path, hash, chunks)
 }
 
-export function loadAllEmbeddings(): { id: number; embedding: Buffer }[] {
-  return db.prepare('SELECT id, embedding FROM chunk').all() as { id: number; embedding: Buffer }[]
+export function loadAllEmbeddings(): { id: number; kbId: number; embedding: Buffer }[] {
+  return db.prepare('SELECT id, kb_id AS kbId, embedding FROM chunk').all() as {
+    id: number
+    kbId: number
+    embedding: Buffer
+  }[]
+}
+
+// 向量缓存的失效键：任一库重建即变化，整体重载（几千片段全量重载毫秒级，不做按库分片）
+export function kbMaxIndexedAt(): number | null {
+  const row = db.prepare('SELECT MAX(indexed_at) AS m FROM kb').get() as { m: number | null }
+  return row.m
 }
 
 export interface ChunkRow {
   id: number
+  kbId: number
   filePath: string
   headingPath: string
   startLine: number
@@ -603,7 +705,7 @@ export function getChunksByIds(ids: number[]): ChunkRow[] {
   if (ids.length === 0) return []
   const rows = db
     .prepare(
-      `SELECT id, file_path AS filePath, heading_path AS headingPath, start_line AS startLine, end_line AS endLine, content
+      `SELECT id, kb_id AS kbId, file_path AS filePath, heading_path AS headingPath, start_line AS startLine, end_line AS endLine, content
        FROM chunk WHERE id IN (${ids.map(() => '?').join(',')})`
     )
     .all(...ids) as ChunkRow[]
@@ -611,12 +713,16 @@ export function getChunksByIds(ids: number[]): ChunkRow[] {
   return rows.sort((a, b) => order.get(a.id)! - order.get(b.id)!)
 }
 
-// BM25 检索：返回 chunk id（bm25 分数越小越相关，这里只用名次）
-export function ftsSearch(matchQuery: string, limit: number): number[] {
-  if (!matchQuery.trim()) return []
+// BM25 检索：返回 chunk id（bm25 分数越小越相关，这里只用名次）。
+// 库范围过滤走 JOIN（fts rowid 与 chunk.id 显式对齐），FTS 表自身不带库标识
+export function ftsSearch(matchQuery: string, limit: number, kbIds: number[]): number[] {
+  if (!matchQuery.trim() || kbIds.length === 0) return []
+  const ph = kbIds.map(() => '?').join(',')
   const rows = db
-    .prepare('SELECT rowid FROM chunk_fts WHERE chunk_fts MATCH ? ORDER BY bm25(chunk_fts) LIMIT ?')
-    .all(matchQuery, limit) as { rowid: number }[]
+    .prepare(
+      `SELECT f.rowid FROM chunk_fts f JOIN chunk c ON c.id = f.rowid WHERE chunk_fts MATCH ? AND c.kb_id IN (${ph}) ORDER BY bm25(chunk_fts) LIMIT ?`
+    )
+    .all(matchQuery, ...kbIds, limit) as { rowid: number }[]
   return rows.map((r) => r.rowid)
 }
 
@@ -685,10 +791,30 @@ export function setConversationKb(id: string, enabled: boolean): void {
 }
 
 export function getConversationKb(id: string): boolean {
+  return getConversationKbSelection(id).length > 0
+}
+
+// 会话选库列表（PRD Case 3）：[{id, name}]，name 为库名快照——库被移除后历史会话仍能显示原名
+export interface KbSelEntry {
+  id: number
+  name: string
+}
+
+export function setConversationKbSelection(id: string, sel: KbSelEntry[]): void {
+  db.prepare('UPDATE conversation SET kb_selection = ? WHERE id = ?').run(sel.length ? JSON.stringify(sel) : null, id)
+}
+
+export function getConversationKbSelection(id: string): KbSelEntry[] {
   const row = db.prepare('SELECT kb_selection AS s FROM conversation WHERE id = ?').get(id) as
     | { s: string | null }
     | undefined
-  return !!row?.s
+  if (!row?.s) return []
+  try {
+    const v = JSON.parse(row.s)
+    return Array.isArray(v) ? v.filter((e) => e && Number.isInteger(e.id)) : []
+  } catch {
+    return []
+  }
 }
 
 // 会话选用的 MCP 服务（Case 8）：NULL/解析失败按未选用处理

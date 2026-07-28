@@ -37,31 +37,27 @@ function App(): React.JSX.Element {
   const [convModel, setConvModel] = useState<Record<string, string>>({})
   // 每个会话各自的输入草稿
   const [inputs, setInputs] = useState<Record<string, string>>({})
-  // 知识库：全局状态 + 草稿会话的选用意向（发首条消息时定性）
-  const [kbState, setKbState] = useState<'none' | 'busy' | 'ready'>('none')
+  // 知识库：可选库清单 + 草稿会话的勾选意向（发首条消息时定性）
+  const [kbOptions, setKbOptions] = useState<{ id: number; name: string; ready: boolean; building: boolean; folderMissing: boolean }[]>([])
   // 侧板：一个容器、单一内容位（来源文档阅读 / 制品表格查看，结构上互斥）
   const [panel, setPanel] = useState<
     { kind: 'doc'; doc: DocPanelData } | { kind: 'artifact'; artifact: ArtifactView } | null
   >(null)
-  const [kbName, setKbName] = useState('业务知识库')
-  const [kbDraftSel, setKbDraftSel] = useState<Record<string, boolean>>({})
+  const [kbDraftSel, setKbDraftSel] = useState<Record<string, { id: number; name: string }[]>>({})
   // 服务连接状态（输入框工具菜单用）：启动加载 + mcp:status 事件刷新
   const [services, setServices] = useState<{ id: number; name: string; status: 'connected' | 'auth' | 'error' }[]>([])
   // 会话选用的 MCP 服务（Case 8）：按会话缓存，真实会话首次激活时从库读，草稿只在内存
   const [mcpSel, setMcpSel] = useState<Record<string, number[]>>({})
 
   const reloadKb = useCallback(() => {
-    window.api.getKb().then((k) => {
-      setKbState(k.busy ? 'busy' : k.indexedAt ? 'ready' : 'none')
-      setKbName(k.name)
-    })
+    window.api.kbOptions().then(setKbOptions)
   }, [])
 
   useEffect(() => {
     reloadKb()
     return window.api.onKbProgress((p) => {
       if (p.phase === 'done' || p.phase === 'error') reloadKb()
-      else setKbState('busy')
+      else reloadKb() // 构建开始也刷新（building 状态点）
     })
   }, [reloadKb])
 
@@ -104,7 +100,7 @@ function App(): React.JSX.Element {
         cur.sources.map((s) => s.chunkId).join() === sources.map((s) => s.chunkId).join()
       )
         return
-      const r = await window.api.openDoc(file)
+      const r = await window.api.openDoc({ kbId: sources[0]?.kbId ?? 0, filePath: file })
       // 点来源永远打开侧板；异常时由侧板内容区呈现空态（不再用 toast 原地拦截）
       setPanel({
         kind: 'doc',
@@ -172,7 +168,7 @@ function App(): React.JSX.Element {
   const askActive = activeCard?.ask?.state === 'pending' ? activeCard : undefined
   // 会话定性：草稿（未发首条消息）可切换挂库，已发消息后不可更改
   const kbLocked = draftId !== activeId
-  const kbSelected = kbLocked ? !!active?.kbEnabled : !!kbDraftSel[activeId]
+  const kbSel = kbLocked ? (active?.kbSelection ?? []) : (kbDraftSel[activeId] ?? [])
 
   const submit = async (): Promise<void> => {
     const text = input.trim()
@@ -187,12 +183,12 @@ function App(): React.JSX.Element {
     // 草稿会话发出第一条时才真正建库、进列表；此刻定性是否挂知识库
     if (draftId === activeId) {
       const c = await window.api.createConversation({ id: activeId, model: activeModel })
-      const kb = !!kbDraftSel[activeId]
-      if (kb) await window.api.setConversationKb({ id: activeId, enabled: true })
+      const kbChosen = kbDraftSel[activeId] ?? []
+      if (kbChosen.length) await window.api.setConversationKbSel({ id: activeId, sel: kbChosen })
       // 草稿期勾选的服务随会话落库（Case 8）
       const sel = mcpSel[activeId]
       if (sel?.length) await window.api.setConversationMcpSelection({ id: activeId, serviceIds: sel })
-      setConversations((cs) => [{ ...c, kbEnabled: kb ? 1 : 0 }, ...cs])
+      setConversations((cs) => [{ ...c, kbSelection: kbChosen }, ...cs])
       setDraftId(null)
     }
     setInputs((m) => ({ ...m, [activeId]: '' }))
@@ -245,13 +241,16 @@ function App(): React.JSX.Element {
         onSubmit={submit}
         onStop={chat.stop}
         onRetry={() => chat.retry(activeId, activeModel)}
-        kbState={kbState}
-        kbName={kbName}
-        kbSelected={kbSelected}
+        kbOptions={kbOptions}
+        kbSel={kbSel}
         kbLocked={kbLocked}
-        onToggleKb={() => {
+        onToggleKb={(id, name) => {
           if (kbLocked) return
-          setKbDraftSel((m) => ({ ...m, [activeId]: !m[activeId] }))
+          setKbDraftSel((m) => {
+            const cur = m[activeId] ?? []
+            const next = cur.some((e) => e.id === id) ? cur.filter((e) => e.id !== id) : [...cur, { id, name }]
+            return { ...m, [activeId]: next }
+          })
         }}
         services={services}
         selectedServiceIds={mcpSel[activeId] ?? []}
@@ -299,7 +298,10 @@ function App(): React.JSX.Element {
       <SettingsDialog
         open={settingsOpen}
         initialTab={settingsTab}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => {
+          setSettingsOpen(false)
+          reloadKb() // 设置里增删改了库，回到会话即反映（移除后标已移除）
+        }}
         onSaved={(m) => {
           if (m) setDefaultModel(m)
           window.api.getModels().then(setModels)

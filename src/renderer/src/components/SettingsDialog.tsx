@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
-import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, ChevronDown, Wrench, Search, MessageCircleQuestion, Table2 } from 'lucide-react'
+import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import ConfirmDialog from './ConfirmDialog'
 import { cn } from '@/lib/utils'
@@ -269,20 +269,21 @@ const KB_PHASE_TEXT: Record<string, string> = {
 }
 
 function KbPanel(): React.JSX.Element {
-  type KbInfo = import('../../../preload/index.d').KbInfo
+  type KbCard = import('../../../preload/index.d').KbCard
   type KbProgress = import('../../../preload/index.d').KbProgress
-  const [info, setInfo] = useState<KbInfo | null>(null)
+  const [cards, setCards] = useState<KbCard[]>([])
   const [showForm, setShowForm] = useState(false)
-  const [formMode, setFormMode] = useState<'add' | 'edit'>('add')
-  const [formName, setFormName] = useState('业务知识库')
+  const [editingId, setEditingId] = useState<number | null>(null) // null = 新建
+  const [formName, setFormName] = useState('')
   const [formIntro, setFormIntro] = useState('')
   const [formPath, setFormPath] = useState('')
-  const [formDone, setFormDone] = useState<number | null>(null) // 完成后的文档数提示
-  const [progress, setProgress] = useState<KbProgress | null>(null)
-  const [error, setError] = useState('')
-  const [warning, setWarning] = useState('')
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [formError, setFormError] = useState('')
+  const [formDone, setFormDone] = useState<number | null>(null)
+  const [progress, setProgress] = useState<KbProgress | null>(null) // 当前构建进度（全局互斥，同时只有一个）
+  const [errors, setErrors] = useState<Record<number, string>>({}) // 库 id → 上次构建失败原因（内存态）
+  const [menuFor, setMenuFor] = useState<number | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<KbCard | null>(null)
+  const [confirmBuild, setConfirmBuild] = useState<{ card: KbCard; deleted: number; kept: number } | null>(null)
   const showFormRef = useRef(false)
 
   useEffect(() => {
@@ -290,7 +291,7 @@ function KbPanel(): React.JSX.Element {
   }, [showForm])
 
   const reload = useCallback(() => {
-    window.api.getKb().then(setInfo)
+    window.api.kbList().then(setCards)
   }, [])
 
   useEffect(() => {
@@ -298,14 +299,17 @@ function KbPanel(): React.JSX.Element {
     return window.api.onKbProgress((p) => {
       if (p.phase === 'error') {
         setProgress(null)
-        setError(p.message || '处理失败')
+        if (p.kbId !== undefined) setErrors((m) => ({ ...m, [p.kbId!]: p.message || '构建失败' }))
+        if (showFormRef.current) setFormError(p.message || '构建失败')
         reload()
       } else if (p.phase === 'done') {
         setProgress(null)
-        setError('')
-        setWarning(p.warning || '')
+        if (p.kbId !== undefined)
+          setErrors((m) => {
+            const { [p.kbId!]: _drop, ...rest } = m
+            return rest
+          })
         reload()
-        // 表单内提交的：先显示成功，再回到列表
         if (showFormRef.current) {
           setFormDone(p.stats?.files ?? 0)
           setTimeout(() => {
@@ -314,71 +318,71 @@ function KbPanel(): React.JSX.Element {
           }, 1400)
         }
       } else {
-        setError('')
         setProgress(p)
       }
     })
   }, [reload])
 
-  const hasKb = !!info?.rootPath
-  const busy = !!progress || !!info?.busy
-  const ready = !!info?.indexedAt
+  const anyBuilding = !!progress || cards.some((c) => c.building)
 
-  const openForm = (mode: 'add' | 'edit'): void => {
-    setFormMode(mode)
-    setFormName(mode === 'edit' ? (info?.name ?? '') : '业务知识库')
-    setFormIntro(mode === 'edit' ? (info?.intro ?? '') : '')
-    setFormPath(mode === 'edit' ? (info?.rootPath ?? '') : '')
-    setError('')
-    setWarning('')
+  const openForm = (card: KbCard | null): void => {
+    setEditingId(card?.id ?? null)
+    setFormName(card?.name ?? '')
+    setFormIntro(card?.intro ?? '')
+    setFormPath(card?.rootPath ?? '')
+    setFormError('')
     setFormDone(null)
     setShowForm(true)
   }
 
   const submitForm = async (): Promise<void> => {
-    setError('')
-    // 编辑且没改路径：只存名称与简介，不重新导入
-    if (formMode === 'edit' && formPath.trim() === info?.rootPath) {
-      await window.api.kbUpdate({ name: formName.trim(), intro: formIntro.trim() })
-      reload()
-      setShowForm(false)
+    setFormError('')
+    if (editingId !== null) {
+      const r = await window.api.kbUpdate({ id: editingId, name: formName.trim(), intro: formIntro.trim(), path: formPath.trim() })
+      if (!r.ok) {
+        setFormError(r.error || '保存失败')
+        return
+      }
+      if (!r.rebuilt) {
+        reload()
+        setShowForm(false)
+      }
+      // 路径改了：留在表单内看重建进度，done 后自动返回
       return
     }
-    const r = await window.api.kbBuild({
-      path: formPath.trim(),
-      name: formName.trim(),
-      intro: formIntro.trim()
-    })
-    if (!r.ok) setError(r.error || '路径无效')
-    // 成功则留在表单内展示进度，完成后自动返回
+    const r = await window.api.kbAdd({ name: formName.trim(), intro: formIntro.trim(), path: formPath.trim() })
+    if (!r.ok) setFormError(r.error || '创建失败')
+    // 成功则留在表单内展示首次构建进度，完成后自动返回
   }
 
-  const summaryText = ((): string | null => {
-    const su = info?.lastSummary
-    if (!su) return null
-    if (su.updated === 0 && su.deleted === 0) return '上次同步：已是最新'
-    const parts = [`更新 ${su.updated} 篇`, `删除 ${su.deleted} 篇`]
-    if (su.skipped > 0) parts.push(`跳过 ${su.skipped} 篇`)
-    return `上次同步：${parts.join(' · ')}`
-  })()
+  const pickFolder = async (): Promise<void> => {
+    const p = await window.api.kbPickFolder()
+    if (p) setFormPath(p)
+  }
 
-  // 添加 / 编辑表单：提交后原地显示进度，完成提示成功再返回列表
+  const startBuild = async (card: KbCard, force = false): Promise<void> => {
+    setErrors((m) => {
+      const { [card.id]: _drop, ...rest } = m
+      return rest
+    })
+    const r = await window.api.kbBuild({ id: card.id, force })
+    if (!r.ok && r.confirmRequired) {
+      setConfirmBuild({ card, ...r.confirmRequired })
+    } else if (!r.ok && r.error) {
+      setErrors((m) => ({ ...m, [card.id]: r.error! }))
+    }
+  }
+
+  // ── 表单（新建 / 编辑共用）──
   if (showForm) {
     const formBusy = !!progress || formDone !== null
     return (
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        <div className="mb-5 text-[15px] font-semibold">
-          {formMode === 'add' ? '新建知识库' : '编辑知识库'}
-        </div>
+        <div className="mb-5 text-[15px] font-semibold">{editingId === null ? '新建知识库' : '编辑知识库'}</div>
         <Section title="名称 *">
-          <input
-            value={formName}
-            onChange={(e) => setFormName(e.target.value)}
-            disabled={formBusy}
-            className="h-10 w-full rounded-lg border border-input bg-background px-3 text-[14px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50"
-          />
+          <input value={formName} onChange={(e) => setFormName(e.target.value)} disabled={formBusy} className={INPUT_CLS} />
         </Section>
-        <Section title="简介 *" hint="描述这个库讲什么，模型据此判断问题该不该查这个库">
+        <Section title="简介 *" hint="模型据此判断问题该不该查这个库">
           <textarea
             value={formIntro}
             onChange={(e) => setFormIntro(e.target.value)}
@@ -388,23 +392,19 @@ function KbPanel(): React.JSX.Element {
             className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2.5 text-[14px] leading-[1.6] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50"
           />
         </Section>
-        <Section title="来源" hint="本版支持 git 仓库，后续扩展更多来源">
-          <div className="flex h-10 w-full items-center justify-between rounded-lg border border-input bg-muted/40 px-3 text-[14px] text-muted-foreground">
-            git 仓库（本地路径）
-            <ChevronDown className="size-4 opacity-40" />
+        <Section title="文件夹 *" hint={editingId !== null ? '修改后将按新文件夹重新构建' : undefined}>
+          <div className="flex gap-2.5">
+            <input
+              value={formPath}
+              onChange={(e) => setFormPath(e.target.value)}
+              placeholder="/Users/you/docs"
+              disabled={formBusy}
+              className="h-10 w-full flex-1 rounded-lg border border-input bg-background px-3 font-mono text-[13px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50"
+            />
+            <Button variant="outline" onClick={pickFolder} disabled={formBusy} className="h-10 px-4">
+              选择
+            </Button>
           </div>
-        </Section>
-        <Section
-          title="仓库路径"
-          hint={formMode === 'edit' ? '修改路径后提交，将按新内容重新导入全部文档' : '已 clone 到本机、手动 pull 得通的 git 仓库'}
-        >
-          <input
-            value={formPath}
-            onChange={(e) => setFormPath(e.target.value)}
-            placeholder="/Users/you/docs-repo"
-            disabled={formBusy}
-            className="h-10 w-full rounded-lg border border-input bg-background px-3 font-mono text-[13px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50"
-          />
         </Section>
 
         {formDone !== null ? (
@@ -417,19 +417,15 @@ function KbPanel(): React.JSX.Element {
             <StatusLine>
               <Loader2 className="size-3.5 animate-spin" />
               {KB_PHASE_TEXT[progress.phase] || '处理中…'}
-              {progress.phase === 'embedding' && progress.total
-                ? `（${progress.current} / ${progress.total}）`
-                : ''}
+              {progress.phase === 'embedding' && progress.total ? `（${progress.current} / ${progress.total}）` : ''}
               {progress.phase === 'downloading-model' && progress.current ? `${progress.current}%` : ''}
             </StatusLine>
             {progress.file && (
-              <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
-                {progress.file}
-              </div>
+              <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">{progress.file}</div>
             )}
           </>
         ) : (
-          error && <StatusLine className="text-destructive">{error}</StatusLine>
+          formError && <StatusLine className="text-destructive">{formError}</StatusLine>
         )}
 
         {!formBusy && (
@@ -442,7 +438,7 @@ function KbPanel(): React.JSX.Element {
               disabled={!formPath.trim() || !formName.trim() || !formIntro.trim()}
               className="h-9 px-5"
             >
-              {formMode === 'add' ? '创建' : '保存'}
+              {editingId === null ? '创建' : '保存'}
             </Button>
           </div>
         )}
@@ -450,165 +446,185 @@ function KbPanel(): React.JSX.Element {
     )
   }
 
+  // ── 卡片状态机（PRD Case 1 功能点 5）──
+  const cardStatus = (
+    c: KbCard
+  ): { line: ReactNode; btn: { label: string; onClick: () => void; disabled?: boolean } | null } => {
+    if (c.building && progress) {
+      return {
+        line: (
+          <>
+            <StatusLine className="mt-0">
+              <Loader2 className="size-3.5 animate-spin" />
+              {KB_PHASE_TEXT[progress.phase] || '处理中…'}
+              {progress.phase === 'embedding' && progress.total ? `（${progress.current} / ${progress.total}）` : ''}
+            </StatusLine>
+            {progress.file && (
+              <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">{progress.file}</div>
+            )}
+          </>
+        ),
+        btn: null
+      }
+    }
+    const err = errors[c.id]
+    if (c.changes?.folderMissing) {
+      return {
+        line: (
+          <StatusLine className="mt-0 text-destructive">
+            文件夹不可用：<span className="font-mono text-[11px]">{c.rootPath}</span>
+          </StatusLine>
+        ),
+        btn: { label: '重新指定文件夹', onClick: () => openForm(c), disabled: anyBuilding }
+      }
+    }
+    if (err || !c.indexedAt) {
+      return {
+        line: <StatusLine className="mt-0 text-destructive">{err || '尚未完成构建，可重试'}</StatusLine>,
+        btn: { label: '重试', onClick: () => startBuild(c), disabled: anyBuilding }
+      }
+    }
+    if (c.changes?.needsFullRebuild) {
+      return {
+        line: <StatusLine className="mt-0 text-amber-600">切块规则已更新，需重建全部文档</StatusLine>,
+        btn: { label: '重建全部', onClick: () => startBuild(c), disabled: anyBuilding }
+      }
+    }
+    const pending = c.changes ? c.changes.added + c.changes.changed + c.changes.deleted : 0
+    const time = new Date(c.indexedAt).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+    if (pending > 0) {
+      return {
+        line: (
+          <StatusLine className="mt-0">
+            {c.files} 篇文档 · {pending} 个文件有改动，待构建
+          </StatusLine>
+        ),
+        btn: { label: '构建变更', onClick: () => startBuild(c), disabled: anyBuilding }
+      }
+    }
+    return {
+      line: (
+        <StatusLine className="mt-0 text-emerald-600">
+          <Check className="size-3.5" />
+          {c.files} 篇文档 · 最近构建 {time} · 已是最新
+        </StatusLine>
+      ),
+      btn: { label: '构建变更', onClick: () => {}, disabled: true }
+    }
+  }
+
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-[15px] font-semibold">知识库</div>
-        <Button
-          variant="outline"
-          onClick={() => openForm('add')}
-          disabled={hasKb}
-          title={hasKb ? '本版支持一个知识库' : undefined}
-          className="h-8 gap-1 px-3 text-[13px]"
-        >
+        <Button variant="outline" onClick={() => openForm(null)} className="h-8 gap-1 px-3 text-[13px]">
           <Plus className="size-3.5" />
           添加知识库
         </Button>
       </div>
 
-      {!hasKb ? (
+      {cards.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center">
           <div className="text-[14px] font-medium">还没有知识库</div>
-          <div className="mt-1 text-[12px] text-muted-foreground">
-            添加后可在对话中选用，基于其内容作答
-          </div>
+          <div className="mt-1 text-[12px] text-muted-foreground">添加后可在对话中选用，基于其内容作答</div>
         </div>
       ) : (
-        <div className="rounded-xl border border-border p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-[14px] font-semibold">{info!.name}</span>
-              <span className="flex-none rounded border border-border bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                git
-              </span>
-            </div>
-            <div className="relative">
-              <button
-                onClick={() => setMenuOpen((v) => !v)}
-                onBlur={() => setTimeout(() => setMenuOpen(false), 120)}
-                className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted"
-              >
-                <MoreHorizontal className="size-4" />
-              </button>
-              {menuOpen && (
-                <div className="absolute top-[calc(100%+4px)] right-0 z-20 min-w-[140px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-                  <button
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      setMenuOpen(false)
-                      openForm('edit')
-                    }}
-                    disabled={busy}
-                    className="w-full rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted disabled:opacity-40"
-                  >
-                    编辑
-                  </button>
-                  <button
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      setMenuOpen(false)
-                      setConfirmRemove(true)
-                    }}
-                    disabled={busy}
-                    className="w-full rounded-lg px-2.5 py-2 text-left text-[13px] text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
-                  >
-                    移除
-                  </button>
+        <div className="flex flex-col gap-3">
+          {cards.map((c) => {
+            const st = cardStatus(c)
+            return (
+              <div key={c.id} className="rounded-xl border border-border p-4">
+                <div className="flex items-center justify-between">
+                  <span className="truncate text-[14px] font-semibold">{c.name}</span>
+                  <div className="relative">
+                    <button
+                      onClick={() => setMenuFor(menuFor === c.id ? null : c.id)}
+                      onBlur={() => setTimeout(() => setMenuFor(null), 120)}
+                      className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted"
+                    >
+                      <MoreHorizontal className="size-4" />
+                    </button>
+                    {menuFor === c.id && (
+                      <div className="absolute top-[calc(100%+4px)] right-0 z-20 min-w-[140px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                        <button
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            setMenuFor(null)
+                            openForm(c)
+                          }}
+                          disabled={c.building}
+                          className="w-full rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted disabled:opacity-40"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            setMenuFor(null)
+                            setConfirmRemove(c)
+                          }}
+                          disabled={c.building}
+                          className="w-full rounded-lg px-2.5 py-2 text-left text-[13px] text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-40"
+                        >
+                          移除
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
-          {info!.intro && (
-            <div className="mt-1.5 text-[12px] leading-[1.7] text-muted-foreground">
-              {info!.intro}
-            </div>
-          )}
-
-          <div className="mt-3">
-            {busy && progress ? (
-              <>
-                <StatusLine className="mt-0">
-                  <Loader2 className="size-3.5 animate-spin" />
-                  {KB_PHASE_TEXT[progress.phase] || '处理中…'}
-                  {progress.phase === 'embedding' && progress.total
-                    ? `（${progress.current} / ${progress.total}）`
-                    : ''}
-                </StatusLine>
-                {progress.file && (
-                  <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
-                    {progress.file}
+                {c.intro && <div className="mt-1.5 text-[12px] leading-[1.7] text-muted-foreground">{c.intro}</div>}
+                <div className="mt-3">{st.line}</div>
+                {st.btn && (
+                  <div className="mt-3 flex justify-end">
+                    <Button
+                      variant="outline"
+                      onClick={st.btn.onClick}
+                      disabled={st.btn.disabled}
+                      title={st.btn.disabled && anyBuilding && !c.building ? '等待当前构建完成' : undefined}
+                      className="h-8 px-4 text-[13px]"
+                    >
+                      {st.btn.label}
+                    </Button>
                   </div>
                 )}
-              </>
-            ) : ready ? (
-              <>
-                <StatusLine className="mt-0 text-emerald-600">
-                  <Check className="size-3.5" />
-                  {info!.files} 篇文档 · 最近更新{' '}
-                  {new Date(info!.indexedAt!).toLocaleString('zh-CN', {
-                    month: '2-digit',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })}
-                </StatusLine>
-                {summaryText && (
-                  <div className="mt-1 text-[12px] text-muted-foreground">{summaryText}</div>
-                )}
-              </>
-            ) : (
-              <StatusLine className="mt-0 text-destructive">{error || '尚未完成导入，可重试'}</StatusLine>
-            )}
-            {error && ready && <StatusLine className="text-destructive">{error}</StatusLine>}
-            {warning && <StatusLine className="text-amber-600">{warning}</StatusLine>}
-          </div>
-
-          <div className="mt-3 flex justify-end">
-            {ready || busy ? (
-              <Button
-                variant="outline"
-                onClick={async () => {
-                  setWarning('')
-                  setError('')
-                  const r = await window.api.kbRefresh()
-                  if (!r.ok) setError(r.error || '同步失败')
-                }}
-                disabled={busy}
-                className="h-8 px-4 text-[13px]"
-              >
-                同步
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                onClick={() =>
-                  window.api.kbBuild({ path: info!.rootPath, name: info!.name, intro: info!.intro })
-                }
-                disabled={busy}
-                className="h-8 px-4 text-[13px]"
-              >
-                重试
-              </Button>
-            )}
-          </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
       <ConfirmDialog
-        open={confirmRemove}
+        open={!!confirmRemove}
         title="移除知识库"
-        body={`将移除「${info?.name ?? ''}」及其已导入的内容（不影响来源仓库本身）。确定移除？`}
+        body={`将移除「${confirmRemove?.name ?? ''}」及其已导入的内容（不影响文件夹内的文件）。确定移除？`}
         confirmText="移除"
         onConfirm={async () => {
-          setConfirmRemove(false)
-          await window.api.kbRemove()
+          if (confirmRemove) await window.api.kbRemove(confirmRemove.id)
+          setConfirmRemove(null)
           reload()
         }}
-        onCancel={() => setConfirmRemove(false)}
+        onCancel={() => setConfirmRemove(null)}
+      />
+      <ConfirmDialog
+        open={!!confirmBuild}
+        title="确认构建"
+        body={`本次构建将清除 ${confirmBuild?.deleted ?? 0} 篇文档、保留 ${confirmBuild?.kept ?? 0} 篇——文件夹里的大批文档已被删除。清除后不可恢复，确定继续？`}
+        confirmText="继续构建"
+        onConfirm={async () => {
+          if (confirmBuild) await startBuild(confirmBuild.card, true)
+          setConfirmBuild(null)
+        }}
+        onCancel={() => setConfirmBuild(null)}
       />
     </div>
   )
 }
+
 
 // ── MCP 服务分区：卡片只读展示，新建与编辑走同一套表单（延续知识库设置的交互）──────
 

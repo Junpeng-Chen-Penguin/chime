@@ -20,7 +20,7 @@ import type { Msg } from '@/hooks/useChat'
 import type { SourceRef, TurnItem, SearchToolResult, AskOutcomePayload, AskQuestionSpec } from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { Markdown } from './Markdown'
-import Composer, { type KbState, type ServiceStatus } from './Composer'
+import Composer, { type KbOption, type KbSelEntry, type ServiceStatus } from './Composer'
 
 // 规则 5：单条消息上限（字符），发送前就地拦下；与主进程常量同值（engine/budget SEND_CHAR_LIMIT）
 const SEND_CHAR_LIMIT = 30000
@@ -43,11 +43,10 @@ interface Props {
   model: string
   models: string[]
   onPickModel: (m: string) => void
-  kbState: KbState
-  kbName: string
-  kbSelected: boolean
+  kbOptions: KbOption[]
+  kbSel: KbSelEntry[]
   kbLocked: boolean
-  onToggleKb: () => void
+  onToggleKb: (id: number, name: string) => void
   services: ServiceStatus[]
   selectedServiceIds: number[]
   onToggleService: (id: number) => void
@@ -77,9 +76,8 @@ export default function ChatArea({
   model,
   models,
   onPickModel,
-  kbState,
-  kbName,
-  kbSelected,
+  kbOptions,
+  kbSel,
   kbLocked,
   onToggleKb,
   services,
@@ -121,9 +119,8 @@ export default function ChatArea({
         if (!overLimit) onSubmit()
       }}
       onStop={onStop}
-      kbState={kbState}
-      kbName={kbName}
-      kbSelected={kbSelected}
+      kbOptions={kbOptions}
+      kbSel={kbSel}
       kbLocked={kbLocked}
       onToggleKb={onToggleKb}
       services={services}
@@ -1083,12 +1080,14 @@ function SourcesFooter({
   onOpen: (file: string, sources: SourceRef[]) => void
 }): React.JSX.Element {
   const articles = useMemo(() => {
-    const byFile = new Map<string, { file: string; sources: SourceRef[] }>()
+    // 分组键带库：多库下不同库可能存在同名文档
+    const byFile = new Map<string, { file: string; kbName: string; sources: SourceRef[] }>()
     for (const s of list) {
-      let art = byFile.get(s.filePath)
+      const key = `${s.kbId}:${s.filePath}`
+      let art = byFile.get(key)
       if (!art) {
-        art = { file: s.filePath, sources: [] }
-        byFile.set(s.filePath, art)
+        art = { file: s.filePath, kbName: s.kbName ?? '', sources: [] }
+        byFile.set(key, art)
       }
       art.sources.push(s)
     }
@@ -1101,7 +1100,7 @@ function SourcesFooter({
       <div className="overflow-hidden rounded-lg border border-border bg-muted/30">
         {articles.map((a) => (
           <button
-            key={a.file}
+            key={`${a.kbName}:${a.file}`}
             onClick={() => onOpen(a.file, a.sources)}
             title={a.file}
             className="group flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted"
@@ -1110,6 +1109,11 @@ function SourcesFooter({
             <span className="truncate text-[13px] text-muted-foreground group-hover:text-foreground">
               {a.file.replace(/\.md$/, '')}
             </span>
+            {a.kbName && (
+              <span className="ml-auto flex-none rounded border border-border bg-muted/60 px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                {a.kbName}
+              </span>
+            )}
           </button>
         ))}
       </div>

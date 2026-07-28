@@ -7,13 +7,12 @@ import icon from '../../resources/icon.png?asset'
 import { tmpdir } from 'os'
 import {
   initDb,
-  getKb,
   getProvider,
   saveProvider,
   createConversation,
   getMessages,
-  setKbMeta,
-  setConversationKb,
+  setConversationKbSelection,
+  listKbs as listKbsDb,
   listMcpServices,
   saveMcpService
 } from './db'
@@ -255,26 +254,40 @@ app.whenReady().then(() => {
         // 带库用例。kb === true（环境快照）：库内配置须已完成索引且 embed 模型匹配，
         // 否则报错退出——绝不触发重建（重建路径会对用户真实文档仓库执行 git pull）
         if (spec.kb === true) {
-          const cur = getKb()
-          if (!cur.rootPath || !cur.indexedAt) {
-            process.stderr.write('[eval] ERROR 知识库未配置或未完成索引\n')
+          const ready = listKbsDb().filter((k) => k.indexedAt)
+          if (ready.length === 0) {
+            process.stderr.write('[eval] ERROR 没有已完成构建的知识库\n')
             app.exit(1)
             return
           }
           const { EMBED_MODEL_ID } = await import('./model')
-          if (cur.embedModel && cur.embedModel !== EMBED_MODEL_ID) {
+          if (ready.some((k) => k.embedModel && k.embedModel !== EMBED_MODEL_ID)) {
             process.stderr.write('[eval] ERROR 知识库索引与当前 embed 模型不匹配，请在正式 Chime 重建索引\n')
             app.exit(1)
             return
           }
         } else if (spec.kb) {
-          // 对象形式（Chime 自测夹具）：库未就绪或路径不同才构建（预置过则秒过）
-          const cur = getKb()
-          if (cur.rootPath !== resolve(spec.kb.repo) || !cur.indexedAt) {
-            const kb = await import('./kb')
-            await kb.runIndexJob(null, resolve(spec.kb.repo), true, spec.kb.name)
+          // 对象形式（Chime 自测夹具）：按名定位库行（无则建），未就绪或路径不同才构建（预置过则秒过）
+          const { listKbs, createKb, updateKb } = await import('./db')
+          const repo = resolve(spec.kb.repo)
+          const kbSpec = spec.kb
+          let row = listKbs().find((k) => k.name === kbSpec.name)
+          if (!row) {
+            const r = createKb(kbSpec.name, kbSpec.intro, repo)
+            if (!r.ok) {
+              process.stderr.write(`[eval] ERROR ${r.error}\n`)
+              app.exit(1)
+              return
+            }
+            row = listKbs().find((k) => k.id === r.id)!
           }
-          setKbMeta({ intro: spec.kb.intro })
+          if (row.rootPath !== repo || !row.indexedAt) {
+            updateKb(row.id, { rootPath: repo, intro: kbSpec.intro })
+            const kb = await import('./kb')
+            await kb.runIndexJob(null, row.id, true)
+          } else {
+            updateKb(row.id, { intro: kbSpec.intro })
+          }
         }
         const model = spec.model || process.env.CHIME_ENGINE_MODEL || getProvider().defaultModel
         const emit = (e: object): void => {
@@ -308,7 +321,15 @@ app.whenReady().then(() => {
         const convId = spec.conv ?? `eval-${process.pid}-${Date.now()}`
         if (!spec.conv) {
           createConversation(convId, model, Date.now())
-          setConversationKb(convId, !!spec.kb)
+          // 环境快照（kb === true）：选中全部已构建的库；对象形式按名选中该库
+          if (spec.kb === true) {
+            setConversationKbSelection(convId, listKbsDb().filter((k) => k.indexedAt).map((k) => ({ id: k.id, name: k.name })))
+          } else if (spec.kb) {
+            const named = listKbsDb().find((k) => k.name === (spec.kb as { name: string }).name)
+            setConversationKbSelection(convId, named ? [{ id: named.id, name: named.name }] : [])
+          } else {
+            setConversationKbSelection(convId, [])
+          }
         } else {
           const store = await import('./engine/store')
           store.repairConversation(convId, REPAIR_TEXTS) // 与界面打开会话同语义
@@ -505,12 +526,17 @@ app.whenReady().then(() => {
           defaultModel: model
         })
         console.log('[tool-test] build kb')
-        await kb.runIndexJob(null, process.env.CHIME_TOOL_TEST!, true, '计费系统')
-        setKbMeta({ intro: '本库收录计费、退款、发票等业务规则与流程说明' })
+        const { listKbs: lk, createKb: ck } = await import('./db')
+        let ttRow = lk().find((k) => k.name === '计费系统')
+        if (!ttRow) {
+          const r = ck('计费系统', '本库收录计费、退款、发票等业务规则与流程说明', process.env.CHIME_TOOL_TEST!)
+          if (r.ok) ttRow = lk().find((k) => k.id === r.id)
+        }
+        await kb.runIndexJob(null, ttRow!.id, true)
 
         const convId = `tool-test-${Date.now()}`
         createConversation(convId, model, Date.now())
-        setConversationKb(convId, true)
+        setConversationKbSelection(convId, listKbsDb().filter((k) => k.indexedAt).map((k) => ({ id: k.id, name: k.name })))
         const emit = (e: { type: string }): void => {
           console.log('[tool-test]', JSON.stringify(e).slice(0, 200))
         }
@@ -547,7 +573,7 @@ app.whenReady().then(() => {
         const stopKept = stopRow?.status === 'stopped' && Array.isArray(JSON.parse(stopRow?.items ?? ''))
 
         // 闸门（工具级计数）：第 4 次检索请求应被拒绝、不执行
-        const ctx = { pool: [], searches: 0 }
+        const ctx = { pool: [], searches: 0, kbIds: [1], kbNames: new Map([[1, '测试库']]) }
         const st = makeSearchTool(ctx)
         const call = st.execute as unknown as (
           i: { query: string },
@@ -592,7 +618,8 @@ app.whenReady().then(() => {
       const u = new URL(req.url)
       const doc = decodeURIComponent(u.searchParams.get('doc') ?? '')
       const src = decodeURIComponent(u.searchParams.get('src') ?? '')
-      const root = getKb().rootPath
+      const kbId = Number(u.searchParams.get('kb') ?? 0)
+      const root = listKbsDb().find((k) => k.id === kbId)?.rootPath ?? ''
       if (!root || !doc || !src) return new Response('bad request', { status: 400 })
       const abs = resolve(join(root, dirname(doc)), src)
       if (!abs.startsWith(resolve(root) + '/')) return new Response('forbidden', { status: 403 })
@@ -644,12 +671,18 @@ app.whenReady().then(() => {
       try {
         const kb = await import('./kb')
         const fs = await import('fs')
+        const { listKbs, createKb } = await import('./db')
+        let row = listKbs().find((k) => k.rootPath === repo)
+        if (!row) {
+          const r = createKb('测试库', '测试用', repo)
+          if (r.ok) row = listKbs().find((k) => k.id === r.id)
+        }
         console.log('[kb-test] build')
-        await kb.runIndexJob(win.webContents, repo, true)
+        await kb.runIndexJob(win.webContents, row!.id, true)
         fs.appendFileSync(join(repo, '退款流程.md'), '\n## 特殊情形\n预付订单退款需人工审核，三个工作日内处理。\n')
         fs.writeFileSync(join(repo, '新增文档.md'), '# 发票\n\n## 开具\n发票在订单完成后可在设置页自助开具，支持增值税普通发票。\n')
         console.log('[kb-test] refresh (1 modified + 1 untracked)')
-        await kb.runIndexJob(win.webContents, repo, false)
+        await kb.runIndexJob(win.webContents, row!.id, false)
         app.exit(0)
       } catch (e) {
         console.error('[kb-test] ERROR', e)

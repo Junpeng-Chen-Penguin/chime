@@ -9,10 +9,10 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { randomUUID } from 'crypto'
 import {
   getProvider,
-  getConversationKb,
+  getConversationKbSelection,
   getConversationMcpSelection,
-  getKb,
-  kbStats,
+  listKbs,
+  kbStatsFor,
   findToolResultIdByCallId,
   insertToolResult
 } from '../db'
@@ -108,15 +108,25 @@ function humanizeError(e: unknown): string {
 }
 
 // 挂库判定（组装时）：需重建（本地模型已更换）按无知识库组装并提示，「更新中」则正常挂、由工具返回 busy 语义
+// 会话选库 → 检索环境：逐库判定可用性。被移除的静默剔除（控件已展示），
+// embed 模型不匹配的剔除并提示（需重建才能检索）
 function deriveKbEnv(convId: string, notice?: (text: string) => void): KbEnv | null {
-  if (!getConversationKb(convId)) return null
-  const kb = getKb()
-  if (!kb.rootPath) return null // 库已被移除：按无知识库组装
-  if (kb.embedModel && kb.embedModel !== EMBED_MODEL_ID) {
-    notice?.('本地模型已更换，知识库需重建后才能检索；本轮按无知识库回答')
-    return null
+  const sel = getConversationKbSelection(convId)
+  if (sel.length === 0) return null
+  const all = new Map(listKbs().map((k) => [k.id, k]))
+  const libraries: KbEnv['libraries'] = []
+  const stale: string[] = []
+  for (const s of sel) {
+    const k = all.get(s.id)
+    if (!k || !k.indexedAt) continue // 已移除 / 从未构建成功：不检索（UI 侧标注）
+    if (k.embedModel && k.embedModel !== EMBED_MODEL_ID) {
+      stale.push(k.name)
+      continue
+    }
+    libraries.push({ id: k.id, name: k.name, intro: k.intro, docCount: kbStatsFor(k.id).files })
   }
-  return { name: kb.name, intro: kb.intro, docCount: kbStats().files }
+  if (stale.length) notice?.(`本地模型已更换，知识库「${stale.join('、')}」需重建后才能检索`)
+  return libraries.length ? { libraries } : null
 }
 
 export async function runTurn(opts: {
@@ -212,7 +222,12 @@ async function streamCore(core: {
   turns.set(streamId, controller)
 
   // 轮内状态：检索计数与来源池（连续编号）；limitHit = 触接口级禁止（触边界强制作答）
-  const toolCtx: TurnToolContext = { pool: [], searches: 0 }
+  const toolCtx: TurnToolContext = {
+    pool: [],
+    searches: 0,
+    kbIds: kbEnv?.libraries.map((l) => l.id) ?? [],
+    kbNames: new Map(kbEnv?.libraries.map((l) => [l.id, l.name]) ?? [])
+  }
   let limitHit = false
   const toolItemIndex = new Map<string, number>() // toolCallId → items 下标
   const toolStartAt = new Map<string, number>()

@@ -5,7 +5,7 @@ export interface Conversation {
   title: string
   model: string
   updatedAt: number
-  kbEnabled?: number
+  kbSelection?: { id: number; name: string }[]
 }
 
 export interface PersistedMessage {

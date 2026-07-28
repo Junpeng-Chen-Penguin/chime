@@ -16,11 +16,11 @@ import { detect, listModels, generateTitle } from './ai'
 import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
 import { respondCard, respondAskCard, type AskOutcome } from './engine/cards'
 import { lastUserText, deleteLastAssistant, repairConversation } from './engine/store'
-import { getKb, kbStats, setConversationKb, setConversationMcpSelection, getConversationMcpSelection, setKbMeta, resetKb } from './db'
+import { getKb, kbStats, setConversationKbSelection, getConversationKbSelection, setConversationMcpSelection, getConversationMcpSelection, listKbs, createKb, updateKb, deleteKb, kbStatsFor, type KbSelEntry } from './db'
 import { listMcpServices, getMcpService, saveMcpService, deleteMcpService, getArtifact } from './db'
 import { TABLE_RENDER_CAP } from './engine/artifact'
 import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
-import { kbBusy, runIndexJob, validateRepoPath, getLastSummary } from './kb'
+import { kbBusy, busyKbId, runIndexJob, validateRepoPath, getLastSummary, checkChanges } from './kb'
 
 export function registerIpc(): void {
   // 读取配置：明文密钥不出主进程，只回打码串
@@ -118,7 +118,7 @@ export function registerIpc(): void {
     return getMessages(id)
   })
 
-  // 知识库
+  // 知识库（多库，PRD Case 1/2）。kb:get 兼容旧形状供会话控件用（模块 3 移除）
   ipcMain.handle('kb:get', () => {
     const kb = getKb()
     return {
@@ -131,34 +131,83 @@ export function registerIpc(): void {
       ...kbStats()
     }
   })
-  // 名称 + 简介：纯元数据，不触发任何索引
-  ipcMain.handle('kb:update', (_e, input: { name: string; intro: string }) => {
-    setKbMeta({ name: input.name.trim() || '业务知识库', intro: input.intro.trim() })
+  // 库列表：卡片数据一次给齐——元数据、统计、变更检查（秒级）、构建中状态
+  ipcMain.handle('kb:list', () => {
+    const busy = busyKbId()
+    return listKbs().map((k) => ({
+      ...k,
+      ...kbStatsFor(k.id),
+      changes: busy === k.id ? null : checkChanges(k.id), // 构建中的库不做检查（数据在变）
+      building: busy === k.id,
+      othersBuilding: busy !== null && busy !== k.id // 构建互斥：其他库按钮置灰
+    }))
   })
-  // 移除：清空索引数据并复位（不影响 git 仓库本身）
-  ipcMain.handle('kb:remove', () => {
-    if (kbBusy()) return { ok: false, error: '知识库处理中，请稍后再试' }
-    resetKb()
-    return { ok: true }
-  })
-  // 点「构建」：校验 → 整库重建（换路径与首次构建同语义）；简介为必填元数据，随表单一并保存
-  ipcMain.handle('kb:build', async (e, input: { path: string; name: string; intro: string }) => {
+  // 新建库：登记后立即首次构建（PRD Case 1 功能点 1）
+  ipcMain.handle('kb:add', async (e, input: { name: string; intro: string; path: string }) => {
+    if (kbBusy()) return { ok: false, error: '有知识库正在构建，请稍后再试' }
     const invalid = await validateRepoPath(input.path)
     if (invalid) return { ok: false, error: invalid }
-    setKbMeta({ intro: input.intro.trim() })
-    void runIndexJob(e.sender, input.path, true, input.name.trim() || '业务知识库')
+    const r = createKb(input.name.trim(), input.intro.trim(), input.path.trim())
+    if (!r.ok) return r
+    void runIndexJob(e.sender, r.id, true)
+    return { ok: true, id: r.id }
+  })
+  // 编辑：只改名称简介直接存；路径变了按新路径重建（PRD Case 1 功能点 2）
+  ipcMain.handle('kb:update', async (e, input: { id: number; name: string; intro: string; path: string }) => {
+    const cur = listKbs().find((k) => k.id === input.id)
+    if (!cur) return { ok: false, error: '知识库不存在' }
+    const pathChanged = input.path.trim() !== cur.rootPath
+    if (pathChanged) {
+      if (kbBusy()) return { ok: false, error: '有知识库正在构建，请稍后再试' }
+      const invalid = await validateRepoPath(input.path)
+      if (invalid) return { ok: false, error: invalid }
+    }
+    const r = updateKb(input.id, { name: input.name.trim(), intro: input.intro.trim(), rootPath: input.path.trim() })
+    if (!r.ok) return r
+    if (pathChanged) void runIndexJob(e.sender, input.id, true)
+    return { ok: true, rebuilt: pathChanged }
+  })
+  ipcMain.handle('kb:remove', (_e, id: number) => {
+    if (busyKbId() === id) return { ok: false, error: '该知识库正在构建，请稍后再试' }
+    deleteKb(id)
     return { ok: true }
   })
-  // 点「刷新」：增量
-  ipcMain.handle('kb:refresh', (e) => {
-    const kb = getKb()
-    if (!kb.rootPath) return { ok: false, error: '尚未配置知识库' }
-    void runIndexJob(e.sender, kb.rootPath, false)
+  // 构建：按变更检查决定增量或全量；大批删除先确认（PRD Case 2）
+  ipcMain.handle('kb:build', (e, input: { id: number; force?: boolean }) => {
+    if (kbBusy()) return { ok: false, error: '有知识库正在构建，请稍后再试' }
+    const c = checkChanges(input.id)
+    if (c.folderMissing) return { ok: false, error: '文件夹不可用，请重新指定' }
+    const { files } = kbStatsFor(input.id)
+    if (!input.force && files > 0 && c.deleted > files / 2) {
+      return { ok: false, confirmRequired: { deleted: c.deleted, kept: files - c.deleted } }
+    }
+    void runIndexJob(e.sender, input.id, c.needsFullRebuild)
     return { ok: true }
   })
-  ipcMain.handle('conv:setKb', (_e, input: { id: string; enabled: boolean }) =>
-    setConversationKb(input.id, input.enabled)
+  // 选择文件夹
+  ipcMain.handle('kb:pickFolder', async () => {
+    const { dialog } = await import('electron')
+    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    return r.canceled ? null : r.filePaths[0]
+  })
+  // 会话选库（PRD Case 3）：多选，[{id, name}] name 为快照
+  ipcMain.handle('conv:setKbSel', (_e, input: { id: string; sel: KbSelEntry[] }) =>
+    setConversationKbSelection(input.id, input.sel)
   )
+  ipcMain.handle('conv:getKbSel', (_e, id: string) => getConversationKbSelection(id))
+  // 会话控件的库选项：轻量（不做哈希检查），带可选性状态
+  ipcMain.handle('kb:options', async () => {
+    const { existsSync } = await import('fs')
+    const { busyKbId } = await import('./kb')
+    const busy = busyKbId()
+    return listKbs().map((k) => ({
+      id: k.id,
+      name: k.name,
+      ready: !!k.indexedAt, // 红档：从未构建成功不可选
+      building: busy === k.id, // 绿档：构建中可选，检索已建好的部分
+      folderMissing: !!k.rootPath && !existsSync(k.rootPath) // 黄档：可选，用已有索引
+    }))
+  })
 
   // Case 8 会话选用工具：读写本会话选用的 MCP 服务清单
   ipcMain.handle('conv:setMcpSel', (_e, input: { id: string; serviceIds: number[] }) =>
@@ -221,12 +270,12 @@ export function registerIpc(): void {
   })
 
   // 打开来源文档（侧板阅读视图）：读磁盘现状；校验片段用消息自带的原文快照，此处不查库
-  ipcMain.handle('doc:open', (_e, filePath: string) => {
-    const kb = getKb()
-    if (!kb.rootPath) return { ok: false, reason: 'no-kb' }
+  ipcMain.handle('doc:open', (_e, input: { kbId: number; filePath: string }) => {
+    const kb = listKbs().find((k) => k.id === input.kbId)
+    if (!kb) return { ok: false, reason: 'no-kb' } // 库已移除：侧板降级显示片段快照
     if (kbBusy()) return { ok: false, reason: 'busy' }
     const root = resolve(kb.rootPath)
-    const abs = resolve(join(root, filePath))
+    const abs = resolve(join(root, input.filePath))
     if (!abs.startsWith(root + '/') || !existsSync(abs)) return { ok: false, reason: 'missing' }
     try {
       return { ok: true, content: readFileSync(abs, 'utf8') }

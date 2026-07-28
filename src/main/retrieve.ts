@@ -1,5 +1,5 @@
 // 检索链路：向量(内存点积) + 关键词(FTS5) 双路召回 → RRF 融合 → 重排 → 阈值判定
-import { embed, rerank, EMBED_MODEL_ID } from './model'
+import { embed, rerank } from './model'
 import { segmentText, toMatchQuery, kbBusy } from './kb'
 import * as db from './db'
 
@@ -13,6 +13,7 @@ const COARSE_FLOOR = 0.25 // 粗筛：向量最高分低于此且关键词零命
 export interface Source {
   n: number
   chunkId: number
+  kbId: number
   filePath: string
   headingPath: string
   startLine: number
@@ -27,28 +28,32 @@ export type RetrieveResult =
   | { status: 'busy' } // 知识库更新中
   | { status: 'needs-rebuild' } // embedding 模型已更换，须重建
 
-// 向量缓存：首查时全量载入；记住加载时的 indexedAt，刷新过就自动重载（自愈，无需通知）
-let cache: { id: number; vec: Float32Array }[] | null = null
+// 向量缓存：首查时全量载入（全部库，条目带 kbId 供选库过滤）；
+// 失效键 = 全库 MAX(indexed_at)，任一库重建即整体重载（毫秒级，不做按库分片）
+let cache: { id: number; kbId: number; vec: Float32Array }[] | null = null
 let cachedAt: number | null = null
 
-function loadCache(indexedAt: number | null): { id: number; vec: Float32Array }[] {
-  if (!cache || cachedAt !== indexedAt) {
+function loadCache(): { id: number; kbId: number; vec: Float32Array }[] {
+  const maxAt = db.kbMaxIndexedAt()
+  if (!cache || cachedAt !== maxAt) {
     cache = db.loadAllEmbeddings().map((r) => ({
       id: r.id,
+      kbId: r.kbId,
       vec: new Float32Array(r.embedding.buffer, r.embedding.byteOffset, r.embedding.byteLength / 4)
     }))
-    cachedAt = indexedAt
+    cachedAt = maxAt
   }
   return cache
 }
 
-export async function retrieve(query: string): Promise<RetrieveResult> {
+// 检索：范围限定在本会话选用的库（kbIds），跨库合并统一重排——多库只是候选池变宽，
+// 最终进提示词的仍是全局最相关的几条，条数上限不因库变多而放宽（PRD Case 3）
+export async function retrieve(query: string, kbIds: number[]): Promise<RetrieveResult> {
   if (kbBusy()) return { status: 'busy' }
-  // 模型校验在检索入口，而非仅在刷新时——升级后直接提问也拦得住
-  const kb = db.getKb()
-  if (kb.embedModel && kb.embedModel !== EMBED_MODEL_ID) return { status: 'needs-rebuild' }
+  if (kbIds.length === 0) return { status: 'miss' }
 
-  const vecs = loadCache(kb.indexedAt)
+  const idSet = new Set(kbIds)
+  const vecs = loadCache().filter((v) => idSet.has(v.kbId))
   if (vecs.length === 0) return { status: 'miss' }
 
   const [q] = await embed([query], true)
@@ -60,7 +65,7 @@ export async function retrieve(query: string): Promise<RetrieveResult> {
     })
     .sort((a, b) => b.s - a.s)
   const vecTop = scored.slice(0, RECALL_K)
-  const ftsTop = db.ftsSearch(toMatchQuery(segmentText(query)), RECALL_K)
+  const ftsTop = db.ftsSearch(toMatchQuery(segmentText(query)), RECALL_K, kbIds)
 
   // 粗筛：与库内容明显无关（闲聊）→ 不进重排
   if (vecTop[0].s < COARSE_FLOOR && ftsTop.length === 0) return { status: 'miss' }
@@ -86,6 +91,7 @@ export async function retrieve(query: string): Promise<RetrieveResult> {
     sources: passed.map((x, i) => ({
       n: i + 1,
       chunkId: x.c.id,
+      kbId: x.c.kbId,
       filePath: x.c.filePath,
       headingPath: x.c.headingPath,
       startLine: x.c.startLine,
@@ -106,7 +112,7 @@ export async function selftest(): Promise<boolean> {
   let ok = true
   for (const c of cases) {
     const t0 = Date.now()
-    const r = await retrieve(c.q)
+    const r = await retrieve(c.q, db.listKbs().map((k) => k.id))
     const detail = r.status === 'hit' ? `${r.sources[0].filePath} score=${r.sources[0].score.toFixed(3)} 共${r.sources.length}条` : ''
     const pass = r.status === c.expect
     ok = ok && pass

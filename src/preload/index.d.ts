@@ -16,6 +16,8 @@ export interface DetectResult {
 export interface SourceRef {
   n: number
   chunkId: number
+  kbId: number
+  kbName: string
   filePath: string
   headingPath: string
   startLine: number
@@ -100,7 +102,7 @@ export interface Conversation {
   title: string
   model: string
   updatedAt: number
-  kbEnabled?: number
+  kbSelection?: { id: number; name: string }[]
 }
 
 export interface PersistedMessage {
@@ -131,6 +133,7 @@ export interface KbInfo {
 }
 
 export interface KbProgress {
+  kbId?: number
   phase: 'pulling' | 'scanning' | 'downloading-model' | 'embedding' | 'done' | 'error'
   current?: number
   total?: number
@@ -138,6 +141,44 @@ export interface KbProgress {
   message?: string
   warning?: string
   stats?: { files: number; chunks: number; summary: KbSummary }
+}
+
+// 变更检查结果（PRD Case 2）
+export interface KbChanges {
+  added: number
+  changed: number
+  deleted: number
+  needsFullRebuild: boolean
+  folderMissing: boolean
+}
+
+// 会话选库条目（name 为快照）
+export interface KbSelEntry {
+  id: number
+  name: string
+}
+
+// 会话控件的库选项（轻量，不含哈希检查）
+export interface KbOption {
+  id: number
+  name: string
+  ready: boolean
+  building: boolean
+  folderMissing: boolean
+}
+
+// 多库列表卡片项
+export interface KbCard {
+  id: number
+  name: string
+  intro: string
+  rootPath: string
+  indexedAt: number | null
+  files: number
+  chunks: number
+  changes: KbChanges | null // 构建中为 null
+  building: boolean
+  othersBuilding: boolean
 }
 
 // MCP 服务列表项（配置 + 运行时状态；认证头值已打码）
@@ -205,12 +246,20 @@ export interface ChimeApi {
   }) => Promise<McpTestResult>
   onMcpStatus: (cb: () => void) => () => void
   getKb: () => Promise<KbInfo>
-  kbBuild: (input: { path: string; name: string; intro: string }) => Promise<{ ok: boolean; error?: string }>
-  kbRefresh: () => Promise<{ ok: boolean; error?: string }>
-  kbUpdate: (input: { name: string; intro: string }) => Promise<void>
-  kbRemove: () => Promise<{ ok: boolean; error?: string }>
-  setConversationKb: (input: { id: string; enabled: boolean }) => Promise<void>
-  openDoc: (filePath: string) => Promise<DocOpenResult>
+  kbList: () => Promise<KbCard[]>
+  kbAdd: (input: { name: string; intro: string; path: string }) => Promise<{ ok: boolean; error?: string; id?: number }>
+  kbUpdate: (
+    input: { id: number; name: string; intro: string; path: string }
+  ) => Promise<{ ok: boolean; error?: string; rebuilt?: boolean }>
+  kbRemove: (id: number) => Promise<{ ok: boolean; error?: string }>
+  kbBuild: (
+    input: { id: number; force?: boolean }
+  ) => Promise<{ ok: boolean; error?: string; confirmRequired?: { deleted: number; kept: number } }>
+  kbPickFolder: () => Promise<string | null>
+  setConversationKbSel: (input: { id: string; sel: KbSelEntry[] }) => Promise<void>
+  getConversationKbSel: (id: string) => Promise<KbSelEntry[]>
+  kbOptions: () => Promise<KbOption[]>
+  openDoc: (input: { kbId: number; filePath: string }) => Promise<DocOpenResult>
   getArtifact: (id: number) => Promise<ArtifactView | null>
   onKbProgress: (cb: (p: KbProgress) => void) => () => void
 }

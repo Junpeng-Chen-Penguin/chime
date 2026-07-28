@@ -22,6 +22,8 @@ const RESULT_CHAR_LIMIT = 6000 // 规则 2：单次工具返回入场上限（�
 export interface TurnToolContext {
   pool: SourceSnapshot[] // 本轮检索结果池：多次检索连续编号，回答结束按 [n] 反查
   searches: number
+  kbIds: number[] // 本会话选用的库（检索范围）
+  kbNames: Map<number, string> // 库 id → 名称（来源快照用）
 }
 
 // 注册表元信息（统一工具格式的落点）：展示名、用途（服务自带描述）、需要授权
@@ -311,7 +313,7 @@ export function makeSearchTool(ctx: TurnToolContext) {
       }
       ctx.searches++
       try {
-        const r = await retrieve(query)
+        const r = await retrieve(query, ctx.kbIds)
         if (r.status === 'busy') return { notice: '知识库正在更新，请稍后再试' }
         if (r.status === 'needs-rebuild') return { notice: '知识库暂时不可用' } // 组装时已按无库拦下，此为兜底
         if (r.status === 'miss') return { results: [] }
@@ -321,6 +323,8 @@ export function makeSearchTool(ctx: TurnToolContext) {
         const numbered = r.sources.map((s, i) => ({
           n: start + i + 1,
           chunkId: s.chunkId,
+          kbId: s.kbId,
+          kbName: ctx.kbNames.get(s.kbId) ?? '',
           filePath: s.filePath,
           headingPath: s.headingPath,
           startLine: s.startLine,

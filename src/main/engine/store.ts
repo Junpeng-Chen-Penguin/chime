@@ -8,6 +8,8 @@ import { getDb } from '../db'
 export interface SourceSnapshot {
   n: number
   chunkId: number
+  kbId: number
+  kbName: string // 库名快照：来源展示带库名，且不随库改名/移除而丢失
   filePath: string
   headingPath: string
   startLine: number

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUp, ChevronDown, Check, BookOpen, X, TriangleAlert, Wrench } from 'lucide-react'
+import { ArrowUp, ChevronDown, Check, BookOpen, TriangleAlert, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // 工具菜单（Case 8）：勾选 = 本会话选用该 MCP 服务；连接状态就地显示（选用与状态一个载体）
@@ -20,7 +20,17 @@ function Kbd({ children }: { children: ReactNode }): React.JSX.Element {
   )
 }
 
-export type KbState = 'none' | 'busy' | 'ready'
+export interface KbOption {
+  id: number
+  name: string
+  ready: boolean
+  building: boolean
+  folderMissing: boolean
+}
+export interface KbSelEntry {
+  id: number
+  name: string
+}
 
 interface Props {
   model: string
@@ -33,11 +43,10 @@ interface Props {
   onChange: (v: string) => void
   onSubmit: () => void
   onStop: () => void
-  kbState: KbState
-  kbName: string
-  kbSelected: boolean
+  kbOptions: KbOption[]
+  kbSel: KbSelEntry[] // 本会话已选的库（锁定态含已移除库的快照名）
   kbLocked: boolean // 会话已定性（发过首条消息）
-  onToggleKb: () => void
+  onToggleKb: (id: number, name: string) => void
   services?: ServiceStatus[] // 已启用的外部服务及连接状态
   selectedServiceIds?: number[] // 本会话选用的服务（Case 8）
   onToggleService?: (id: number) => void
@@ -56,9 +65,8 @@ export default function Composer({
   onChange,
   onSubmit,
   onStop,
-  kbState,
-  kbName,
-  kbSelected,
+  kbOptions,
+  kbSel,
   kbLocked,
   onToggleKb,
   services,
@@ -87,12 +95,21 @@ export default function Composer({
 
   // 提问卡等待中输入框开放：有内容时可发送（中断提问、开新一轮），空时右下仍是停止
   const canSend = value.trim().length > 0 && (!sending || askWaiting)
-  const kbDisabledHint =
-    kbState === 'none'
-      ? '尚无知识库，请到「设置 › 知识库」添加'
-      : kbState === 'busy'
-        ? '知识库更新中，暂不可选用'
-        : '会话已开始，不可再更改'
+  // 库状态三档（PRD Case 3）：红 = 不可用（已移除 / 尚未构建），黄 = 文件夹不可用（仍可检索），绿 = 正常
+  const optById = new Map(kbOptions.map((o) => [o.id, o]))
+  const kbStatusOf = (
+    sel: KbSelEntry
+  ): { dot: 'red' | 'amber' | 'green'; text: string } => {
+    const o = optById.get(sel.id)
+    if (!o) return { dot: 'red', text: '已移除' }
+    if (!o.ready) return { dot: 'red', text: '尚未构建' }
+    if (o.folderMissing) return { dot: 'amber', text: '文件夹不可用' }
+    if (o.building) return { dot: 'green', text: '构建中' }
+    return { dot: 'green', text: '可用' }
+  }
+  // 控件报警只算红档：黄档还答得出问题（PRD Case 3 功能点 3）
+  const kbUnavailable = kbSel.filter((s) => kbStatusOf(s).dot === 'red').length
+  const kbAnyIssue = kbSel.some((s) => kbStatusOf(s).dot !== 'green') || kbOptions.some((o) => !o.ready)
 
   return (
     // 输入框比对话流宽（840 > 内容 760），像托着对话；带柔和阴影浮起，不再是单纯描边
@@ -117,60 +134,110 @@ export default function Composer({
             className="block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-[14px] leading-[1.6] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           />
           <div className="flex items-center justify-between px-3 pb-3">
-            {/* 左下：知识库控件 + 服务状态标识（全部正常时不显示） */}
+            {/* 左下：知识库控件（多选）+ 服务状态标识（全部正常时不显示） */}
             <div className="flex items-center gap-1">
-            {kbSelected ? (
-              <span
-                className="group flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
-                title={kbLocked ? '本会话基于该知识库回答' : '已选用知识库'}
+            <div className="relative">
+              <button
+                onClick={kbOptions.length || kbSel.length ? () => setKbMenuOpen((v) => !v) : undefined}
+                onBlur={() => setTimeout(() => setKbMenuOpen(false), 120)}
+                title={
+                  kbOptions.length === 0 && kbSel.length === 0
+                    ? '尚无知识库，请到「设置 › 知识库」添加'
+                    : kbLocked
+                      ? '本会话选用的知识库'
+                      : '选择知识库'
+                }
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] transition-colors',
+                  kbOptions.length || kbSel.length
+                    ? 'cursor-pointer text-muted-foreground hover:bg-muted'
+                    : 'cursor-not-allowed text-muted-foreground/50',
+                  kbSel.length === 0 && 'px-1.5'
+                )}
               >
-                <BookOpen className="size-4 text-muted-foreground" />
-                {kbName}
-                {!kbLocked && (
-                  <button
-                    onClick={onToggleKb}
-                    title="取消选用"
-                    className="grid size-4 place-items-center rounded-full text-muted-foreground opacity-50 transition-opacity hover:opacity-100"
-                  >
-                    <X className="size-3.5" />
-                  </button>
+                {kbUnavailable > 0 ? (
+                  <>
+                    <TriangleAlert className="size-3.5" />
+                    {kbUnavailable} 个知识库不可用
+                  </>
+                ) : (
+                  <>
+                    <BookOpen className="size-4" />
+                    {kbSel.length > 0 && kbSel.length}
+                  </>
                 )}
-              </span>
-            ) : (
-              <div className="relative">
-                <button
-                  onClick={kbState === 'ready' && !kbLocked ? () => setKbMenuOpen((v) => !v) : undefined}
-                  onBlur={() => setTimeout(() => setKbMenuOpen(false), 120)}
-                  title={kbState === 'ready' && !kbLocked ? '选择知识库' : kbDisabledHint}
-                  className={cn(
-                    'grid size-8 place-items-center rounded-lg transition-colors',
-                    kbState === 'ready' && !kbLocked
-                      ? 'cursor-pointer text-muted-foreground hover:bg-muted'
-                      : 'cursor-not-allowed text-muted-foreground/50'
-                  )}
-                >
-                  <BookOpen className="size-4" />
-                </button>
-                {kbMenuOpen && (
-                  <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-                    <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-medium text-muted-foreground">
-                      选择知识库（本会话内生效）
-                    </div>
-                    <button
-                      onMouseDown={(e) => {
-                        e.preventDefault()
-                        onToggleKb()
-                        setKbMenuOpen(false)
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted"
-                    >
-                      <BookOpen className="size-3.5 flex-none text-muted-foreground" />
-                      <span>{kbName}</span>
-                    </button>
+              </button>
+              {kbMenuOpen && (
+                <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 min-w-[260px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                  <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-medium text-muted-foreground">
+                    {kbLocked ? '本会话选用的知识库' : '选择知识库'}
                   </div>
-                )}
-              </div>
-            )}
+                  {/* 已移除的库（锁定态快照）排在最前，只读展示 */}
+                  {kbSel
+                    .filter((sel) => !optById.has(sel.id))
+                    .map((sel) => (
+                      <div key={`gone-${sel.id}`} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] opacity-60">
+                        <span className="grid size-5 flex-none place-items-center rounded-md border border-border bg-muted">
+                          <Check className="size-3.5" strokeWidth={3} />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">{sel.name}</span>
+                        <span className="size-1.5 flex-none rounded-full bg-destructive" />
+                        <span className="flex-none text-[12px] text-muted-foreground">已移除</span>
+                      </div>
+                    ))}
+                  {kbOptions.map((o) => {
+                    const picked = kbSel.some((sel) => sel.id === o.id)
+                    const st = kbStatusOf({ id: o.id, name: o.name })
+                    const disabled = kbLocked || (!o.ready && !picked)
+                    return (
+                      <button
+                        key={o.id}
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          if (!disabled) onToggleKb(o.id, o.name)
+                        }}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
+                          disabled ? 'cursor-default opacity-60' : 'hover:bg-muted'
+                        )}
+                      >
+                        {/* 方形勾选框 = 多选（与 MCP 服务菜单同款） */}
+                        <span
+                          className={cn(
+                            'grid size-5 flex-none place-items-center rounded-md border',
+                            picked ? 'border-primary bg-primary text-primary-foreground' : 'border-border'
+                          )}
+                        >
+                          {picked && <Check className="size-3.5" strokeWidth={3} />}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">{o.name}</span>
+                        <span
+                          className={cn(
+                            'size-1.5 flex-none rounded-full',
+                            st.dot === 'green' ? 'bg-emerald-600' : st.dot === 'amber' ? 'bg-amber-500' : 'bg-destructive'
+                          )}
+                        />
+                        <span className="flex-none text-[12px] text-muted-foreground">{st.text}</span>
+                      </button>
+                    )
+                  })}
+                  {kbAnyIssue && (
+                    <div className="mt-1 border-t border-border px-1 pt-1.5">
+                      <button
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          setKbMenuOpen(false)
+                          onOpenSettings?.()
+                        }}
+                        className="w-full rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
+                      >
+                        前往设置
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {svcList.length > 0 && (
               <div className="relative">

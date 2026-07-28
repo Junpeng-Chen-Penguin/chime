@@ -59,18 +59,21 @@ const api = {
   },
 
   getKb: () => ipcRenderer.invoke('kb:get'),
-  kbBuild: (input: { path: string; name: string; intro: string }) =>
-    ipcRenderer.invoke('kb:build', input),
-  kbRefresh: () => ipcRenderer.invoke('kb:refresh'),
-  kbUpdate: (input: { name: string; intro: string }) => ipcRenderer.invoke('kb:update', input),
-  kbRemove: () => ipcRenderer.invoke('kb:remove'),
-  setConversationKb: (input: { id: string; enabled: boolean }) =>
-    ipcRenderer.invoke('conv:setKb', input),
+  kbList: () => ipcRenderer.invoke('kb:list'),
+  kbAdd: (input: { name: string; intro: string; path: string }) => ipcRenderer.invoke('kb:add', input),
+  kbUpdate: (input: { id: number; name: string; intro: string; path: string }) => ipcRenderer.invoke('kb:update', input),
+  kbRemove: (id: number) => ipcRenderer.invoke('kb:remove', id),
+  kbBuild: (input: { id: number; force?: boolean }) => ipcRenderer.invoke('kb:build', input),
+  kbPickFolder: () => ipcRenderer.invoke('kb:pickFolder'),
+  setConversationKbSel: (input: { id: string; sel: { id: number; name: string }[] }) =>
+    ipcRenderer.invoke('conv:setKbSel', input),
+  getConversationKbSel: (id: string) => ipcRenderer.invoke('conv:getKbSel', id),
+  kbOptions: () => ipcRenderer.invoke('kb:options'),
   setConversationMcpSelection: (input: { id: string; serviceIds: number[] }) =>
     ipcRenderer.invoke('conv:setMcpSel', input),
   getConversationMcpSelection: (id: string): Promise<number[]> =>
     ipcRenderer.invoke('conv:getMcpSel', id),
-  openDoc: (filePath: string) => ipcRenderer.invoke('doc:open', filePath),
+  openDoc: (input: { kbId: number; filePath: string }) => ipcRenderer.invoke('doc:open', input),
   getArtifact: (id: number) => ipcRenderer.invoke('artifact:get', id),
   onKbProgress: (cb: (p: unknown) => void): (() => void) => {
     const h = (_e: IpcRendererEvent, p: unknown): void => cb(p)

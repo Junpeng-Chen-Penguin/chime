@@ -48,16 +48,15 @@ export const SEARCH_TOOL_DESCRIPTION = `检索本会话关联的知识库（业�
 - 带 notice 字段 = 知识库暂时不可用（如正在更新），把 notice 内容如实转达给用户，不要说成「出错」或「没有找到」`
 
 export interface KbEnv {
-  name: string
-  intro: string
-  docCount: number
+  libraries: { id: number; name: string; intro: string; docCount: number }[]
 }
 
 // 系统提示词 = 固定主干 +（带工具时）输出约定 +（挂库时）知识库条件段 + 环境信息，前缀稳定利于缓存
 export function buildSystemPrompt(kb: KbEnv | null, hasTools: boolean): string {
   const d = new Date()
   const envLines: string[] = []
-  if (kb) envLines.push(`知识库：${kb.name}（${kb.docCount} 篇文档）`, `简介：${kb.intro}`)
+  if (kb)
+    for (const lib of kb.libraries) envLines.push(`知识库：${lib.name}（${lib.docCount} 篇文档）——${lib.intro}`)
   envLines.push(`当前日期：${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`)
 
   const parts = [TRUNK]
