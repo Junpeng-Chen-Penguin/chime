@@ -14,6 +14,7 @@ export interface PersistedMessage {
   role: 'user' | 'assistant'
   content: string
   items: string | null // TurnItem[] 的 JSON，仅 assistant 行有
+  usage: string | null // {input, output, cached} JSON
   status: string
   createdAt: number
 }

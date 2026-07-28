@@ -4,11 +4,18 @@ import type { TurnItem, AskOutcomePayload } from '../../../preload/index.d'
 // interrupted = 应用退出打断、启动修复后收场（仅出现在水合的历史消息里）
 export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error' | 'interrupted'
 
+export interface Usage {
+  input: number
+  output: number
+  cached: number
+}
+
 export interface Msg {
   id: string
   role: 'user' | 'assistant'
   content: string // assistant：最终回答文本（复制、自动标题用）
   items?: TurnItem[] // assistant：一轮的有序过程
+  usage?: Usage // 正常收尾才有；中断轮无（不显示不估算）
   status: MsgStatus
   error?: string
   notice?: string // 一次性提示（如知识库需重建），不落库
@@ -102,7 +109,14 @@ export function useChat(onChange?: () => void): ChatHandle {
                 .reverse()
                 .find((i): i is { t: 'text'; text: string } => i.t === 'text' && !!i.text.trim())
                 ?.text ?? ''
-            return { ...m, status, error: evt.error, content: answer }
+            const u = evt.usage
+            return {
+              ...m,
+              status,
+              error: evt.error,
+              content: answer,
+              usage: u ? { input: u.inputTokens, output: u.outputTokens, cached: u.cachedInputTokens ?? 0 } : m.usage
+            }
           })
           setContextRatio((c) => ({ ...c, [r.convId]: evt.contextRatio }))
           onChangeRef.current?.()

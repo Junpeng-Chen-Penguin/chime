@@ -15,6 +15,7 @@ const toMsg = (p: PersistedMessage): Msg => ({
   role: p.role,
   content: p.content,
   items: p.items ? JSON.parse(p.items) : undefined,
+  usage: p.usage ? JSON.parse(p.usage) : undefined,
   status: p.status as MsgStatus,
   createdAt: p.createdAt
 })

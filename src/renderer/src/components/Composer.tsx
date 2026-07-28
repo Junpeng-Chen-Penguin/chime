@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, ChevronDown, Check, BookOpen, TriangleAlert, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -7,17 +7,6 @@ export interface ServiceStatus {
   id: number
   name: string
   status: 'connected' | 'auth' | 'error'
-}
-
-function Kbd({ children }: { children: ReactNode }): React.JSX.Element {
-  return (
-    <kbd
-      style={{ fontFamily: '-apple-system, BlinkMacSystemFont, system-ui, sans-serif' }}
-      className="inline-grid h-4 min-w-4 place-items-center rounded border border-border bg-muted px-1 text-[11px] leading-none text-muted-foreground"
-    >
-      {children}
-    </kbd>
-  )
 }
 
 export interface KbOption {
@@ -43,6 +32,7 @@ interface Props {
   onChange: (v: string) => void
   onSubmit: () => void
   onStop: () => void
+  sessionUsage?: { input: number; output: number; cached: number } | null // 会话累计（正常轮次之和）
   kbOptions: KbOption[]
   kbSel: KbSelEntry[] // 本会话已选的库（锁定态含已移除库的快照名）
   kbLocked: boolean // 会话已定性（发过首条消息）
@@ -65,6 +55,7 @@ export default function Composer({
   onChange,
   onSubmit,
   onStop,
+  sessionUsage,
   kbOptions,
   kbSel,
   kbLocked,
@@ -389,16 +380,30 @@ export default function Composer({
             </div>
           </div>
         </div>
-        <div className="mt-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-          <span>Chime 可能会出错，请核对重要信息</span>
-          <span className="inline-flex items-center gap-1.5">
-            <Kbd>⏎</Kbd>Enter 发送
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <Kbd>⇧</Kbd>
-            <Kbd>⏎</Kbd>Shift+Enter 换行
-          </span>
-        </div>
+        {/* 会话累计用量（PRD Case 5）：左对齐，悬停看拆分；无正常轮次时不显示 */}
+        {sessionUsage && (
+          <div className="group relative mt-2 inline-block text-[11px] text-muted-foreground">
+            <span className="cursor-default">
+              本次会话消耗 {(sessionUsage.input + sessionUsage.output).toLocaleString()} tokens
+            </span>
+            <div className="absolute bottom-[calc(100%+6px)] left-0 z-20 hidden min-w-[190px] rounded-xl border border-border bg-popover p-3 text-[12px] shadow-lg group-hover:block">
+              <div className="flex justify-between gap-8">
+                <span className="text-muted-foreground">输入</span>
+                <span className="tabular-nums">{sessionUsage.input.toLocaleString()}</span>
+              </div>
+              {sessionUsage.cached > 0 && (
+                <div className="mt-1.5 flex justify-between gap-8">
+                  <span className="pl-1 text-muted-foreground">└ 缓存命中</span>
+                  <span className="tabular-nums text-muted-foreground">{sessionUsage.cached.toLocaleString()}</span>
+                </div>
+              )}
+              <div className="mt-1.5 flex justify-between gap-8">
+                <span className="text-muted-foreground">输出</span>
+                <span className="tabular-nums">{sessionUsage.output.toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

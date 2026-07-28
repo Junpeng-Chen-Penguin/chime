@@ -301,6 +301,7 @@ export interface MessageRow {
   role: string
   content: string
   items: string | null // 一轮的有序过程记录（JSON），仅 assistant 行有
+  usage: string | null // {input, output, cached} JSON；中断轮为 NULL
   status: string
   createdAt: number
 }
@@ -420,7 +421,7 @@ export function listToolResults(conversationId: string): { id: number; content: 
 export function getMessages(conversationId: string): MessageRow[] {
   return db
     .prepare(
-      'SELECT id, conversation_id AS conversationId, role, content, items, status, created_at AS createdAt FROM message WHERE conversation_id = ? ORDER BY created_at'
+      'SELECT id, conversation_id AS conversationId, role, content, items, usage, status, created_at AS createdAt FROM message WHERE conversation_id = ? ORDER BY created_at'
     )
     .all(conversationId) as MessageRow[]
 }

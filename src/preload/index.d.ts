@@ -92,7 +92,7 @@ export type ChatEvent =
       streamId: string
       status: 'done' | 'stopped' | 'error'
       error?: string
-      usage?: { inputTokens: number; outputTokens: number }
+      usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
       contextRatio: number
     }
   | { type: 'notice'; streamId: string; text: string }
@@ -111,6 +111,7 @@ export interface PersistedMessage {
   role: 'user' | 'assistant'
   content: string
   items: string | null // TurnItem[] 的 JSON，仅 assistant 行有
+  usage: string | null // {input, output, cached} JSON；中断轮 NULL
   status: string
   createdAt: number
 }

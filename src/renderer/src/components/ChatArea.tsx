@@ -105,6 +105,22 @@ export default function ChatArea({
   const authWaiting = activeCard?.auth === 'pending'
   const askItem = activeCard?.ask?.state === 'pending' ? activeCard : undefined
 
+  // 会话累计用量：各正常轮次之和（中断轮无 usage 自然不计入）
+  const sessionUsage = useMemo(() => {
+    let input = 0
+    let output = 0
+    let cached = 0
+    let any = false
+    for (const m of messages) {
+      if (m.role !== 'assistant' || !m.usage) continue
+      any = true
+      input += m.usage.input
+      output += m.usage.output
+      cached += m.usage.cached
+    }
+    return any ? { input, output, cached } : null
+  }, [messages])
+
   const composer = (
     <Composer
       model={model}
@@ -119,6 +135,7 @@ export default function ChatArea({
         if (!overLimit) onSubmit()
       }}
       onStop={onStop}
+      sessionUsage={sessionUsage}
       kbOptions={kbOptions}
       kbSel={kbSel}
       kbLocked={kbLocked}
@@ -412,6 +429,7 @@ function AssistantMsg({
         <MessageActions
           content={answer ? stripCitations(answer, false) : ''}
           onRetry={isLast ? onRetry : undefined}
+          usage={m.status === 'done' ? m.usage : undefined}
         />
       )}
       {m.status === 'error' && hasBody && (
@@ -1123,10 +1141,12 @@ function SourcesFooter({
 
 function MessageActions({
   content,
-  onRetry
+  onRetry,
+  usage
 }: {
   content: string
   onRetry?: () => void
+  usage?: { input: number; output: number; cached: number }
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const copy = async (): Promise<void> => {
@@ -1145,6 +1165,38 @@ function MessageActions({
         <ActionBtn title="重新生成" onClick={onRetry}>
           <RotateCw className="size-4" />
         </ActionBtn>
+      )}
+      {usage && <UsageChip usage={usage} />}
+    </div>
+  )
+}
+
+// 本轮用量（PRD Case 5）：按钮形态尾随复制 / 重新生成，悬停看输入（含缓存命中）与输出拆分
+function UsageChip({ usage }: { usage: { input: number; output: number; cached: number } }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const total = usage.input + usage.output
+  return (
+    <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <span className="grid h-8 cursor-default place-items-center rounded-md px-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted">
+        {total.toLocaleString()} tokens
+      </span>
+      {open && (
+        <div className="absolute bottom-[calc(100%+6px)] left-0 z-20 min-w-[190px] rounded-xl border border-border bg-popover p-3 text-[12px] shadow-lg">
+          <div className="flex justify-between gap-8">
+            <span className="text-muted-foreground">输入</span>
+            <span className="tabular-nums">{usage.input.toLocaleString()}</span>
+          </div>
+          {usage.cached > 0 && (
+            <div className="mt-1.5 flex justify-between gap-8">
+              <span className="pl-1 text-muted-foreground">└ 缓存命中</span>
+              <span className="tabular-nums text-muted-foreground">{usage.cached.toLocaleString()}</span>
+            </div>
+          )}
+          <div className="mt-1.5 flex justify-between gap-8">
+            <span className="text-muted-foreground">输出</span>
+            <span className="tabular-nums">{usage.output.toLocaleString()}</span>
+          </div>
+        </div>
       )}
     </div>
   )

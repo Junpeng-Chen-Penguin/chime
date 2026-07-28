@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
-import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2 } from 'lucide-react'
+import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText } from 'lucide-react'
+import { BUILTIN_TOOLS } from '../../../shared/builtinTools'
 import { Button } from '@/components/ui/button'
 import ConfirmDialog from './ConfirmDialog'
 import { cn } from '@/lib/utils'
@@ -656,30 +657,38 @@ function ToolsPanel({ initialSub }: { initialSub: 'builtin' | 'mcp' }): React.JS
   )
 }
 
-// 内置工具：只展示（图标 + 名称 + 一句话用途），无开关无配置——核心体验不属于「可要可不要」；
-// 取数等内部支撑工具不进列表（用户无感知也无需决策）
-const BUILTIN_TOOLS = [
-  { icon: Search, name: '知识库检索', desc: '在你选用的知识库中查找业务资料' },
-  { icon: MessageCircleQuestion, name: '向你提问', desc: '缺少关键信息时弹出选择卡片让你定夺' },
-  { icon: Table2, name: '生成表格', desc: '成批数据整理成表格，在侧板查看全貌' }
-]
+// 内置工具：只展示（图标 + 中文名 + 函数名 + 一句话用途），无开关无配置（PRD Case 4）。
+// 名称与用途来自登记表（与时间线、测试记录同一份）；函数名一并展示——写用例断言时照抄
+const TOOL_ICONS: Record<string, typeof Search> = {
+  search_knowledge_base: Search,
+  ask_user_question: MessageCircleQuestion,
+  create_artifact: Table2,
+  grep_result: TextSearch,
+  read_result: FileText
+}
 
 function BuiltinToolsPane(): React.JSX.Element {
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6">
       <div className="rounded-lg border border-border">
-        {BUILTIN_TOOLS.map((t, i) => (
-          <div key={t.name} className={cn('flex items-center gap-3 px-4 py-3', i > 0 && 'border-t border-border')}>
-            <span className="grid size-8 flex-none place-items-center rounded-lg bg-muted">
-              <t.icon className="size-4 text-muted-foreground" />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-[14px] font-medium">{t.name}</div>
-              <div className="mt-1 text-[13px] text-muted-foreground">{t.desc}</div>
+        {BUILTIN_TOOLS.map((t, i) => {
+          const Icon = TOOL_ICONS[t.name] ?? Search
+          return (
+            <div key={t.name} className={cn('flex items-center gap-3 px-4 py-3', i > 0 && 'border-t border-border')}>
+              <span className="grid size-8 flex-none place-items-center rounded-lg bg-muted">
+                <Icon className="size-4 text-muted-foreground" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[14px] font-medium">{t.display}</span>
+                  <span className="font-mono text-[11px] text-muted-foreground">{t.name}</span>
+                </div>
+                <div className="mt-1 text-[13px] text-muted-foreground">{t.desc}</div>
+              </div>
+              <span className="flex-none text-[12px] text-muted-foreground">默认开启</span>
             </div>
-            <span className="flex-none text-[12px] text-muted-foreground">默认开启</span>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )

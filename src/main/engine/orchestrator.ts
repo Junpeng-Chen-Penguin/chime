@@ -18,6 +18,7 @@ import {
 } from '../db'
 import { EMBED_MODEL_ID } from '../model'
 import { humanize } from '../ai'
+import { builtinDisplay } from '../../shared/builtinTools'
 import { buildSystemPrompt, type KbEnv } from './prompts'
 import { budgetFor, estimateTokens, recordUsage } from './budget'
 import {
@@ -28,13 +29,9 @@ import {
   makeReadResultTool,
   makeArtifactTool,
   ASK_TOOL_NAME,
-  ASK_TOOL_DISPLAY,
   GREP_TOOL_NAME,
-  GREP_TOOL_DISPLAY,
   READ_TOOL_NAME,
-  READ_TOOL_DISPLAY,
   ARTIFACT_TOOL_NAME,
-  ARTIFACT_TOOL_DISPLAY,
   TOOL_ROUND_HARD_LIMIT,
   STEP_COUNT_LIMIT,
   type TurnToolContext
@@ -206,11 +203,11 @@ async function streamCore(core: {
     if (!it || (it.t !== 'text' && it.t !== 'reasoning')) return
     emit({ type: 'item-done', streamId, index: cur, item: it })
   }
-  const finish = (status: TurnStatus, error?: string, usage?: { inputTokens: number; outputTokens: number }, contextRatio = 0): void => {
+  const finish = (status: TurnStatus, error?: string, usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }, contextRatio = 0): void => {
     // 模型可能发出空的 text/reasoning 段（如开了个头就转去调工具），不落库
     const kept = items.filter((i) => (i.t !== 'text' && i.t !== 'reasoning') || i.text.trim())
     const content = [...kept].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')?.text ?? ''
-    saveAssistantTurn(convId, msgId, { content, items: kept, status })
+    saveAssistantTurn(convId, msgId, { content, items: kept, status, usage })
     emit({ type: 'turn-done', streamId, status, error, usage, contextRatio })
   }
   // 弹卡即落库 / 卡片回应后落库：等待中的快照（最终态由 finish 覆盖）
@@ -462,15 +459,7 @@ async function streamCore(core: {
             t: 'tool',
             name: part.toolName,
             id: part.toolCallId,
-            display: isAsk
-              ? ASK_TOOL_DISPLAY
-              : part.toolName === GREP_TOOL_NAME
-                ? GREP_TOOL_DISPLAY
-                : part.toolName === READ_TOOL_NAME
-                  ? READ_TOOL_DISPLAY
-                  : part.toolName === ARTIFACT_TOOL_NAME
-                  ? ARTIFACT_TOOL_DISPLAY
-                  : meta?.display,
+            display: builtinDisplay(part.toolName) ?? meta?.display,
             desc: meta?.needsAuth ? meta.desc : undefined,
             auth: meta?.needsAuth ? (earlyAuth.get(part.toolCallId) ?? 'pending') : undefined,
             ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
@@ -524,7 +513,12 @@ async function streamCore(core: {
     const usage = await result.usage
     const input = usage.inputTokens ?? 0
     recordUsage(estimatedInput, input)
-    finish('done', undefined, { inputTokens: input, outputTokens: usage.outputTokens ?? 0 }, contextRatio)
+    finish(
+      'done',
+      undefined,
+      { inputTokens: input, outputTokens: usage.outputTokens ?? 0, cachedInputTokens: usage.inputTokenDetails?.cacheReadTokens ?? 0 },
+      contextRatio
+    )
   } catch (e) {
     if (controller.signal.aborted) {
       // 停止是正常收场：已流出内容保留，标 stopped。

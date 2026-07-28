@@ -63,15 +63,24 @@ export function saveUserMessage(convId: string, text: string): void {
 export function saveAssistantTurn(
   convId: string,
   msgId: string,
-  turn: { content: string; items: TurnItem[]; status: TurnStatus }
+  turn: {
+    content: string
+    items: TurnItem[]
+    status: TurnStatus
+    usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
+  }
 ): void {
   const db = getDb()
   const now = Date.now()
+  // 用量落库（PRD Case 5）：{input, output, cached}；中断轮 usage 为空存 NULL——没有就是没有，不估算
+  const usageJson = turn.usage
+    ? JSON.stringify({ input: turn.usage.inputTokens, output: turn.usage.outputTokens, cached: turn.usage.cachedInputTokens ?? 0 })
+    : null
   db.prepare(
-    `INSERT INTO message (id, conversation_id, role, content, items, status, created_at)
-     VALUES (?, ?, 'assistant', ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET content = excluded.content, items = excluded.items, status = excluded.status`
-  ).run(msgId, convId, turn.content, JSON.stringify(turn.items), turn.status, now)
+    `INSERT INTO message (id, conversation_id, role, content, items, usage, status, created_at)
+     VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET content = excluded.content, items = excluded.items, usage = excluded.usage, status = excluded.status`
+  ).run(msgId, convId, turn.content, JSON.stringify(turn.items), usageJson, turn.status, now)
   db.prepare('UPDATE conversation SET updated_at = ? WHERE id = ?').run(now, convId)
 }
 
