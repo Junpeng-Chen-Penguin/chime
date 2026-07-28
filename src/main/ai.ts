@@ -1,3 +1,23 @@
+// 服务商健康标记（PRD Case 7）：从失败中记状态——请求因鉴权/服务问题失败时标异常，
+// 成功或设置页检测通过后清除。内存态，不做启动探测（问题只有真正请求时才暴露）
+const health = new Map<string, { ok: boolean; reason?: string }>()
+let healthNotify: ((vendor: string) => void) | null = null
+
+export function setHealthNotify(fn: (vendor: string) => void): void {
+  healthNotify = fn
+}
+
+export function markVendorHealth(vendor: string, ok: boolean, reason?: string): void {
+  const prev = health.get(vendor)
+  if (prev?.ok === ok && prev?.reason === reason) return
+  health.set(vendor, { ok, reason })
+  healthNotify?.(vendor)
+}
+
+export function vendorHealth(): Record<string, { ok: boolean; reason?: string }> {
+  return Object.fromEntries(health)
+}
+
 export interface DetectResult {
   ok: boolean
   latencyMs?: number

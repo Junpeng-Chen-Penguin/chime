@@ -243,6 +243,103 @@ export function setSetting(key: string, value: string): void {
   db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value)
 }
 
+// ── 多服务商正式接口（PRD Case 6/7）──────────────────
+
+export interface ProviderModel {
+  id: string
+  picked: boolean
+  offline?: boolean // 再次拉取清单时已不在返回中（不自动取消勾选）
+}
+
+export interface ProviderRecord {
+  vendor: string
+  apiKey: string
+  baseUrl: string
+  enabled: boolean
+  models: ProviderModel[]
+  extraParams: Record<string, unknown>
+}
+
+export function listProviderRecords(): ProviderRecord[] {
+  const rows = db
+    .prepare('SELECT vendor, api_key AS apiKey, base_url AS baseUrl, enabled, models, extra_params AS extraParams FROM provider')
+    .all() as { vendor: string; apiKey: string; baseUrl: string; enabled: number; models: string; extraParams: string }[]
+  const order = new Map(VENDORS.map((v, i) => [v.vendor, i]))
+  return rows
+    .map((r) => {
+      let models: ProviderModel[] = []
+      let extra: Record<string, unknown> = {}
+      try {
+        models = JSON.parse(r.models)
+      } catch {
+        // 坏数据按空处理
+      }
+      try {
+        extra = JSON.parse(r.extraParams)
+      } catch {
+        // 同上
+      }
+      return { vendor: r.vendor, apiKey: r.apiKey, baseUrl: r.baseUrl, enabled: !!r.enabled, models, extraParams: extra }
+    })
+    .sort((a, b) => (order.get(a.vendor) ?? 99) - (order.get(b.vendor) ?? 99))
+}
+
+export function getProviderRecord(vendor: string): ProviderRecord | null {
+  return listProviderRecords().find((p) => p.vendor === vendor) ?? null
+}
+
+// patch 语义：apiKey 为 null 沿用已存（界面未改动）；未传的字段不动
+export function saveProviderRecord(
+  vendor: string,
+  patch: Partial<{ apiKey: string | null; baseUrl: string; enabled: boolean; models: ProviderModel[]; extraParams: Record<string, unknown> }>
+): void {
+  const cur = getProviderRecord(vendor)
+  if (!cur) return
+  const apiKey = patch.apiKey === undefined || patch.apiKey === null ? cur.apiKey : patch.apiKey
+  db.prepare('UPDATE provider SET api_key = ?, base_url = ?, enabled = ?, models = ?, extra_params = ? WHERE vendor = ?').run(
+    apiKey,
+    patch.baseUrl ?? cur.baseUrl,
+    (patch.enabled ?? cur.enabled) ? 1 : 0,
+    JSON.stringify(patch.models ?? cur.models),
+    JSON.stringify(patch.extraParams ?? cur.extraParams),
+    vendor
+  )
+}
+
+// 默认模型（vendor:model）；失效时退到任一已启用服务商的首个勾选模型
+export function getDefaultModelRef(): string {
+  const ref = getSetting('default_model') ?? ''
+  const check = (r: string): boolean => {
+    const i = r.indexOf(':')
+    if (i < 0) return false
+    const p = getProviderRecord(r.slice(0, i))
+    return !!p && p.enabled && p.models.some((m) => m.picked && m.id === r.slice(i + 1))
+  }
+  if (check(ref)) return ref
+  for (const p of listProviderRecords()) {
+    if (!p.enabled) continue
+    const m = p.models.find((x) => x.picked)
+    if (m) return `${p.vendor}:${m.id}`
+  }
+  return ref
+}
+
+export function setDefaultModelRef(ref: string): void {
+  setSetting('default_model', ref)
+}
+
+// 每轮调用的模型定位：vendor:model（历史无前缀按 deepseek）→ 该服务商的连接信息
+export function resolveModelRef(
+  ref: string
+): { vendor: string; model: string; apiKey: string; baseUrl: string; extraParams: Record<string, unknown>; enabled: boolean } | null {
+  const i = ref.indexOf(':')
+  const vendor = i < 0 ? 'deepseek' : ref.slice(0, i)
+  const model = i < 0 ? ref : ref.slice(i + 1)
+  const p = getProviderRecord(vendor)
+  if (!p) return null
+  return { vendor, model, apiKey: p.apiKey, baseUrl: p.baseUrl, extraParams: p.extraParams, enabled: p.enabled }
+}
+
 // ── 兼容壳（模块 4 多服务商界面就位后移除）：以「默认模型所属服务商」拼出旧的单套配置形状 ──
 export function getProvider(): ProviderRow {
   const ref = getSetting('default_model') ?? ''

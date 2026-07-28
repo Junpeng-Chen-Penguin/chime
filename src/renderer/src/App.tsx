@@ -34,7 +34,7 @@ function App(): React.JSX.Element {
   const [settingsTab, setSettingsTab] = useState<'provider' | 'kb' | 'mcp' | undefined>(undefined)
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
   const [defaultModel, setDefaultModel] = useState('deepseek-v4-pro')
-  const [models, setModels] = useState<string[]>([])
+  const [models, setModels] = useState<import('./components/Composer').ModelGroup[]>([])
   const [convModel, setConvModel] = useState<Record<string, string>>({})
   // 每个会话各自的输入草稿
   const [inputs, setInputs] = useState<Record<string, string>>({})
@@ -136,8 +136,8 @@ function App(): React.JSX.Element {
   useEffect(() => {
     if (didInit.current) return
     didInit.current = true
-    window.api.getProvider().then((p) => p.defaultModel && setDefaultModel(p.defaultModel))
-    window.api.getModels().then(setModels)
+    window.api.providerGetDefault().then((r) => r && setDefaultModel(r))
+    window.api.providerMenu().then(setModels)
     window.api.listConversations().then((list) => {
       setConversations(list)
       if (list.length) setActiveId(list[0].id)
@@ -305,7 +305,7 @@ function App(): React.JSX.Element {
         }}
         onSaved={(m) => {
           if (m) setDefaultModel(m)
-          window.api.getModels().then(setModels)
+          window.api.providerMenu().then(setModels)
         }}
       />
 

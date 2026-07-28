@@ -154,6 +154,32 @@ export interface KbChanges {
 }
 
 // 会话选库条目（name 为快照）
+// 模型服务商（PRD Case 6/7）
+export interface VendorModel {
+  id: string
+  picked: boolean
+  offline?: boolean
+}
+export interface VendorInfo {
+  vendor: string
+  name: string
+  baseUrl: string
+  defaultBaseUrl: string
+  keyMask: string
+  hasKey: boolean
+  enabled: boolean
+  models: VendorModel[]
+  extraParams: Record<string, unknown>
+  windows: Record<string, number>
+  health: { ok: boolean; reason?: string }
+}
+export interface VendorMenuGroup {
+  vendor: string
+  name: string
+  health: { ok: boolean; reason?: string }
+  models: string[]
+}
+
 export interface KbSelEntry {
   id: number
   name: string
@@ -202,15 +228,6 @@ export interface McpTestResult {
 }
 
 export interface ChimeApi {
-  getProvider: () => Promise<ProviderInfo>
-  saveProvider: (input: {
-    baseUrl: string
-    defaultModel: string
-    apiKey: string | null
-    defaultWindow?: number
-  }) => Promise<void>
-  detect: (input: { baseUrl: string; apiKey: string | null }) => Promise<DetectResult>
-  getModels: () => Promise<string[]>
   listConversations: () => Promise<Conversation[]>
   createConversation: (input: { id: string; model: string }) => Promise<Conversation>
   deleteConversation: (id: string) => Promise<void>
@@ -260,6 +277,20 @@ export interface ChimeApi {
   setConversationKbSel: (input: { id: string; sel: KbSelEntry[] }) => Promise<void>
   getConversationKbSel: (id: string) => Promise<KbSelEntry[]>
   kbOptions: () => Promise<KbOption[]>
+  providerList: () => Promise<VendorInfo[]>
+  providerSave: (input: {
+    vendor: string
+    apiKey?: string | null
+    baseUrl?: string
+    enabled?: boolean
+    extraParams?: Record<string, unknown>
+  }) => Promise<void>
+  providerDetect: (input: { vendor: string; apiKey: string | null }) => Promise<DetectResult>
+  providerFetchModels: (vendor: string) => Promise<{ ok: boolean; error?: string; models?: VendorModel[] }>
+  providerPickModel: (input: { vendor: string; id: string; picked: boolean }) => Promise<void>
+  providerGetDefault: () => Promise<string>
+  providerSetDefault: (ref: string) => Promise<void>
+  providerMenu: () => Promise<VendorMenuGroup[]>
   openDoc: (input: { kbId: number; filePath: string }) => Promise<DocOpenResult>
   getArtifact: (id: number) => Promise<ArtifactView | null>
   onKbProgress: (cb: (p: KbProgress) => void) => () => void

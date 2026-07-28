@@ -8,7 +8,7 @@ import type { ModelMessage, Tool } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { randomUUID } from 'crypto'
 import {
-  getProvider,
+  resolveModelRef,
   getConversationKbSelection,
   getConversationMcpSelection,
   listKbs,
@@ -17,7 +17,7 @@ import {
   insertToolResult
 } from '../db'
 import { EMBED_MODEL_ID } from '../model'
-import { humanize } from '../ai'
+import { humanize, markVendorHealth } from '../ai'
 import { builtinDisplay } from '../../shared/builtinTools'
 import { buildSystemPrompt, type KbEnv } from './prompts'
 import { budgetFor, estimateTokens, recordUsage } from './budget'
@@ -145,13 +145,13 @@ export async function runTurn(opts: {
 
 async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
   const { streamId, convId, text, model, emit } = opts
-  const p = getProvider()
+  const p = resolveModelRef(model)
 
   if (opts.saveUser !== false) saveUserMessage(convId, text)
   emit({ type: 'turn-start', streamId })
 
   const msgId = randomUUID()
-  if (!p.apiKey) {
+  if (!p || !p.apiKey) {
     const items: TurnItem[] = [{ t: 'boundary', kind: 'error', text: '请先在设置里配置 API 密钥' }]
     saveAssistantTurn(convId, msgId, { content: '', items, status: 'error' })
     emit({ type: 'turn-done', streamId, status: 'error', error: '请先在设置里配置 API 密钥', contextRatio: 0 })
@@ -183,7 +183,12 @@ async function streamCore(core: {
   kbEnv: KbEnv | null
 }): Promise<void> {
   const { streamId, convId, model, emit, msgId, items, kbEnv } = core
-  const p = getProvider()
+  const p = resolveModelRef(model)
+  if (!p || !p.apiKey || !p.enabled) {
+    saveAssistantTurn(convId, msgId, { content: '', items: [], status: 'error' })
+    emit({ type: 'turn-done', streamId, status: 'error', error: p ? '该模型所属的服务商未启用或未配置密钥' : '模型无法定位，请重新选择', contextRatio: 0 })
+    return
+  }
 
   let cur = -1
   const startItem = (t: TurnItem['t'], item: TurnItem): void => {
@@ -343,10 +348,13 @@ async function streamCore(core: {
     apiKey: p.apiKey,
     includeUsage: true
   })
+  // 附加参数（PRD Case 6）：某家独有的非标准开关随每次请求发出，靠配置不靠改代码
+  const extraBody = Object.keys(p.extraParams).length ? p.extraParams : undefined
 
   try {
     const result = streamText({
-      model: provider(model),
+      model: provider(p.model),
+      providerOptions: extraBody ? ({ chime: extraBody } as never) : undefined,
       instructions: system,
       messages: history,
       abortSignal: controller.signal,
@@ -513,6 +521,7 @@ async function streamCore(core: {
     const usage = await result.usage
     const input = usage.inputTokens ?? 0
     recordUsage(estimatedInput, input)
+    markVendorHealth(p.vendor, true)
     finish(
       'done',
       undefined,
@@ -546,6 +555,9 @@ async function streamCore(core: {
       finish('stopped', undefined, undefined, contextRatio)
     } else {
       const msg = humanizeError(e)
+      // 鉴权 / 服务端错误 → 标记该服务商异常（控件警示 + 前往设置），下次成功或检测通过后解除
+      const sc = (e as SdkError).statusCode
+      if (sc && (sc === 401 || sc === 403 || sc >= 500)) markVendorHealth(p.vendor, false, msg)
       items.push({ t: 'boundary', kind: 'error', text: msg })
       finish('error', msg, undefined, contextRatio)
     }

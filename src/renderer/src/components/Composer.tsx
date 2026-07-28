@@ -21,9 +21,16 @@ export interface KbSelEntry {
   name: string
 }
 
-interface Props {
-  model: string
+export interface ModelGroup {
+  vendor: string
+  name: string
+  health: { ok: boolean; reason?: string }
   models: string[]
+}
+
+interface Props {
+  model: string // vendor:model 引用
+  models: ModelGroup[] // 按服务商分组
   onPickModel: (m: string) => void
   sending: boolean
   inputDisabled?: boolean // 等待授权中：输入框禁用，只能操作卡片或点停止
@@ -328,29 +335,37 @@ export default function Composer({
                   onBlur={() => setTimeout(() => setMenuOpen(false), 120)}
                   className="flex items-center gap-1 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
                 >
-                  {model}
+                  {model.includes(':') ? model.slice(model.indexOf(':') + 1) : model}
                   <ChevronDown className="size-3.5 text-muted-foreground" />
                 </button>
                 {menuOpen && models.length > 0 && (
                   <div className="absolute right-0 bottom-[calc(100%+8px)] z-20 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-                    <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-medium text-muted-foreground">
-                      切换模型（仅当前会话）
-                    </div>
-                    {models.map((m) => (
-                      <button
-                        key={m}
-                        onMouseDown={(e) => {
-                          e.preventDefault()
-                          onPickModel(m)
-                          setMenuOpen(false)
-                        }}
-                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted"
-                      >
-                        <span className="flex w-3.5 flex-none justify-center">
-                          {m === model && <Check className="size-3.5 text-primary" />}
-                        </span>
-                        <span>{m}</span>
-                      </button>
+                    {models.map((g) => (
+                      <div key={g.vendor}>
+                        <div className="flex items-center gap-1.5 px-2.5 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">
+                          {g.name}
+                          {!g.health.ok && <TriangleAlert className="size-3 text-amber-500" />}
+                        </div>
+                        {g.models.map((m) => {
+                          const ref = `${g.vendor}:${m}`
+                          return (
+                            <button
+                              key={ref}
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                onPickModel(ref)
+                                setMenuOpen(false)
+                              }}
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted"
+                            >
+                              <span className="flex w-3.5 flex-none justify-center">
+                                {ref === model && <Check className="size-3.5 text-primary" />}
+                              </span>
+                              <span>{m}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
                     ))}
                   </div>
                 )}

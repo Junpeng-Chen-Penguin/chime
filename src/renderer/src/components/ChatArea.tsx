@@ -20,7 +20,7 @@ import type { Msg } from '@/hooks/useChat'
 import type { SourceRef, TurnItem, SearchToolResult, AskOutcomePayload, AskQuestionSpec } from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { Markdown } from './Markdown'
-import Composer, { type KbOption, type KbSelEntry, type ServiceStatus } from './Composer'
+import Composer, { type KbOption, type KbSelEntry, type ModelGroup, type ServiceStatus } from './Composer'
 
 // 规则 5：单条消息上限（字符），发送前就地拦下；与主进程常量同值（engine/budget SEND_CHAR_LIMIT）
 const SEND_CHAR_LIMIT = 30000
@@ -41,7 +41,7 @@ interface Props {
   onRetry: () => void
   onRename: (title: string) => void
   model: string
-  models: string[]
+  models: ModelGroup[]
   onPickModel: (m: string) => void
   kbOptions: KbOption[]
   kbSel: KbSelEntry[]

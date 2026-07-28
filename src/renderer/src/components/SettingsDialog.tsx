@@ -1,6 +1,10 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText } from 'lucide-react'
 import { BUILTIN_TOOLS } from '../../../shared/builtinTools'
+import deepseekIcon from '@/assets/vendors/deepseek.png'
+import zhipuIcon from '@/assets/vendors/zhipu.png'
+
+const VENDOR_ICONS: Record<string, string> = { deepseek: deepseekIcon, zhipu: zhipuIcon }
 import { Button } from '@/components/ui/button'
 import ConfirmDialog from './ConfirmDialog'
 import { cn } from '@/lib/utils'
@@ -22,61 +26,12 @@ interface Props {
 }
 
 export default function SettingsDialog({ open, onClose, onSaved, initialTab }: Props): React.JSX.Element | null {
-  const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com')
-  const [keyInput, setKeyInput] = useState('')
-  const [keyMask, setKeyMask] = useState('')
-  const [hasKey, setHasKey] = useState(false)
-  const [showKey, setShowKey] = useState(false)
-  const [status, setStatus] = useState<Status>('idle')
-  const [error, setError] = useState('')
-  const [models, setModels] = useState<string[]>([])
-  const [defaultModel, setDefaultModel] = useState('')
-  const [defaultWindow, setDefaultWindow] = useState('65536')
   const [tab, setTab] = useState<Tab>('provider')
 
-  const runDetect = useCallback(
-    async (keyOverride?: string | null) => {
-      const apiKey = keyOverride !== undefined ? keyOverride : keyInput.trim() || null
-      setStatus('detecting')
-      setError('')
-      const r = await window.api.detect({ baseUrl, apiKey })
-      if (r.ok && r.models) {
-        setModels(r.models)
-        setStatus('success')
-        setDefaultModel((prev) => (prev && r.models!.includes(prev) ? prev : r.models![0]))
-      } else {
-        setModels([])
-        setStatus('error')
-        setError(r.error || '连接失败')
-      }
-    },
-    [baseUrl, keyInput]
-  )
-
-  // 打开时载入配置；已配过则自动检测拉取模型
   useEffect(() => {
     if (!open) return
-    let cancelled = false
     setTab(initialTab ?? 'provider')
-    setStatus('idle')
-    setError('')
-    setModels([])
-    setKeyInput('')
-    setShowKey(false)
-    window.api.getProvider().then((p) => {
-      if (cancelled) return
-      setBaseUrl(p.baseUrl)
-      setDefaultModel(p.defaultModel)
-      setDefaultWindow(String(p.defaultWindow))
-      setKeyMask(p.keyMask)
-      setHasKey(p.hasKey)
-      if (p.hasKey) runDetect(null)
-    })
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, initialTab])
 
   useEffect(() => {
     if (!open) return
@@ -88,17 +43,6 @@ export default function SettingsDialog({ open, onClose, onSaved, initialTab }: P
   }, [open, onClose])
 
   if (!open) return null
-
-  const save = async (): Promise<void> => {
-    await window.api.saveProvider({
-      baseUrl,
-      defaultModel,
-      apiKey: keyInput.trim() || null,
-      defaultWindow: Math.max(4096, parseInt(defaultWindow, 10) || 65536)
-    })
-    onSaved(defaultModel)
-    onClose()
-  }
 
   return (
     <div
@@ -142,118 +86,7 @@ export default function SettingsDialog({ open, onClose, onSaved, initialTab }: P
             ) : tab === 'mcp' ? (
               <ToolsPanel initialSub={initialTab === 'mcp' ? 'mcp' : 'builtin'} />
             ) : (
-              <>
-                <div className="flex-1 overflow-y-auto px-6 py-6">
-                  <Section title="平台">
-                    <div className="flex items-center gap-2.5 rounded-lg border border-primary/40 bg-primary-soft px-3 py-2.5">
-                      <span className="grid size-6 flex-none place-items-center rounded-md bg-primary text-[12px] font-semibold text-primary-foreground">
-                        D
-                      </span>
-                      <span className="text-[14px]">DeepSeek</span>
-                    </div>
-                  </Section>
-                  <Section title="API 密钥">
-            <div className="flex gap-2.5">
-              <div className="relative flex-1">
-                <input
-                  type={showKey ? 'text' : 'password'}
-                  value={keyInput}
-                  onChange={(e) => setKeyInput(e.target.value)}
-                  placeholder={hasKey ? keyMask : 'sk-...'}
-                  className="h-10 w-full rounded-lg border border-input bg-background pr-10 pl-3 text-[14px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
-                />
-                <button
-                  onClick={() => setShowKey((v) => !v)}
-                  className="absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted"
-                >
-                  {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                </button>
-              </div>
-              <Button onClick={() => runDetect()} disabled={status === 'detecting'} className="h-10 px-5">
-                检测
-              </Button>
-            </div>
-            {status === 'detecting' && (
-              <StatusLine>
-                <Loader2 className="size-3.5 animate-spin" />
-                正在检测连接…
-              </StatusLine>
-            )}
-            {status === 'success' && (
-              <StatusLine className="text-emerald-600">
-                <Check className="size-3.5" />
-                连接成功，已获取可用模型
-              </StatusLine>
-            )}
-            {status === 'error' && <StatusLine className="text-destructive">{error}</StatusLine>}
-          </Section>
-
-          <Section title="服务地址">
-            <input
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              className="h-10 w-full rounded-lg border border-input bg-background px-3 text-[14px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
-            />
-          </Section>
-
-          <Section title="上下文窗口" hint="未能自动识别窗口大小的模型按此值估算（token 数）">
-            <input
-              type="number"
-              value={defaultWindow}
-              onChange={(e) => setDefaultWindow(e.target.value)}
-              className="h-10 w-[200px] rounded-lg border border-input bg-background px-3 text-[14px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
-            />
-          </Section>
-
-          <Section title="模型" hint="检测成功后自动获取，选择一个作为默认模型">
-            {models.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border px-4 py-3 text-[13px] text-muted-foreground">
-                {status === 'detecting' ? '正在获取模型列表…' : '检测成功后在这里选择默认模型'}
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {models.map((m) => {
-                  const sel = m === defaultModel
-                  return (
-                    <button
-                      key={m}
-                      onClick={() => setDefaultModel(m)}
-                      className={cn(
-                        'flex items-center gap-3 rounded-lg border px-3 py-3 text-left text-[14px] transition-colors',
-                        sel ? 'border-primary/40 bg-primary-soft' : 'border-border hover:bg-muted'
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          'grid size-[18px] flex-none place-items-center rounded-full border',
-                          sel ? 'border-primary' : 'border-muted-foreground/40'
-                        )}
-                      >
-                        {sel && <span className="size-2.5 rounded-full bg-primary" />}
-                      </span>
-                      <span className="flex-1">{m}</span>
-                      {sel && (
-                        <span className="rounded bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground">
-                          默认
-                        </span>
-                      )}
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </Section>
-                </div>
-
-                <div className="flex h-16 flex-none items-center justify-end gap-2.5 border-t border-border px-6">
-                  <Button variant="outline" onClick={onClose} className="h-9">
-                    取消
-                  </Button>
-                  <Button onClick={save} disabled={!hasKey && !keyInput.trim()} className="h-9 px-5">
-                    保存
-                  </Button>
-                </div>
-              </>
+              <ProviderPanel onSaved={onSaved} />
             )}
           </div>
         </div>
@@ -261,6 +94,336 @@ export default function SettingsDialog({ open, onClose, onSaved, initialTab }: P
     </div>
   )
 }
+
+// ── 模型服务商分区（PRD Case 6）：两栏——左为默认模型入口 + 预置服务商清单，右为选中项配置 ──
+
+function ProviderPanel({ onSaved }: { onSaved: (defaultModel: string) => void }): React.JSX.Element {
+  type VendorInfo = import('../../../preload/index.d').VendorInfo
+  const [list, setList] = useState<VendorInfo[]>([])
+  const [sel, setSel] = useState<string>('') // '' = 默认模型页
+  const [defaultRef, setDefaultRef] = useState('')
+
+  const reload = useCallback(() => {
+    window.api.providerList().then((l) => {
+      setList(l)
+      setSel((cur) => (cur && !l.some((v) => v.vendor === cur) ? '' : cur))
+    })
+    window.api.providerGetDefault().then(setDefaultRef)
+  }, [])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
+
+  const cur = list.find((v) => v.vendor === sel) ?? null
+
+  return (
+    <div className="flex min-h-0 flex-1">
+      <div className="flex w-[190px] flex-none flex-col gap-1 overflow-y-auto border-r border-border p-3">
+        <button
+          onClick={() => setSel('')}
+          className={cn(
+            'rounded-lg px-3 py-2 text-left text-[13px] transition-colors',
+            sel === '' ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60'
+          )}
+        >
+          默认模型
+        </button>
+        <div className="mx-1 my-1 border-t border-border" />
+        {list.map((v) => (
+          <button
+            key={v.vendor}
+            onClick={() => setSel(v.vendor)}
+            className={cn(
+              'flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] transition-colors',
+              sel === v.vendor ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60'
+            )}
+          >
+            {VENDOR_ICONS[v.vendor] ? (
+              <img src={VENDOR_ICONS[v.vendor]} alt="" className="size-6 flex-none rounded-md" />
+            ) : (
+              <span className="grid size-6 flex-none place-items-center rounded-md bg-primary text-[12px] font-semibold text-primary-foreground">
+                {v.name[0]}
+              </span>
+            )}
+            <span className="min-w-0 flex-1 truncate">{v.name}</span>
+            {!v.health.ok && <span className="size-1.5 flex-none rounded-full bg-destructive" />}
+          </button>
+        ))}
+      </div>
+      <div className="min-w-0 flex-1 overflow-y-auto">
+        {cur ? (
+          <VendorPane key={cur.vendor} v={cur} onChanged={reload} />
+        ) : (
+          <DefaultModelPane
+            list={list}
+            defaultRef={defaultRef}
+            onPick={async (ref) => {
+              await window.api.providerSetDefault(ref)
+              setDefaultRef(ref)
+              onSaved(ref)
+            }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DefaultModelPane({
+  list,
+  defaultRef,
+  onPick
+}: {
+  list: import('../../../preload/index.d').VendorInfo[]
+  defaultRef: string
+  onPick: (ref: string) => void
+}): React.JSX.Element {
+  const groups = list.filter((v) => v.enabled && v.models.some((m) => m.picked))
+  return (
+    <div className="px-6 py-6">
+      <div className="mb-4 text-[15px] font-semibold">默认模型</div>
+      {groups.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center text-[13px] text-muted-foreground">
+          先在左侧选择一家服务商，填入密钥并启用模型
+        </div>
+      ) : (
+        groups.map((v) => (
+          <div key={v.vendor} className="mb-4">
+            <div className="mb-2 text-[12px] font-medium text-muted-foreground">{v.name}</div>
+            <div className="flex flex-col gap-2">
+              {v.models
+                .filter((m) => m.picked)
+                .map((m) => {
+                  const ref = `${v.vendor}:${m.id}`
+                  const active = ref === defaultRef
+                  return (
+                    <button
+                      key={ref}
+                      onClick={() => onPick(ref)}
+                      className={cn(
+                        'flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-[14px] transition-colors',
+                        active ? 'border-primary/40 bg-primary-soft' : 'border-border hover:bg-muted'
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'grid size-[18px] flex-none place-items-center rounded-full border',
+                          active ? 'border-primary' : 'border-muted-foreground/40'
+                        )}
+                      >
+                        {active && <span className="size-2.5 rounded-full bg-primary" />}
+                      </span>
+                      <span className="flex-1">{m.id}</span>
+                    </button>
+                  )
+                })}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+
+function VendorPane({
+  v,
+  onChanged
+}: {
+  v: import('../../../preload/index.d').VendorInfo
+  onChanged: () => void
+}): React.JSX.Element {
+  const [keyInput, setKeyInput] = useState('')
+  const [showKey, setShowKey] = useState(false)
+  const [baseUrl, setBaseUrl] = useState(v.baseUrl)
+  const [status, setStatus] = useState<Status>('idle')
+  const [error, setError] = useState('')
+  const [fetching, setFetching] = useState(false)
+
+  // 随填随存：密钥失焦即存（空输入 = 未改动沿用）
+  const commitKey = async (): Promise<void> => {
+    if (!keyInput.trim()) return
+    await window.api.providerSave({ vendor: v.vendor, apiKey: keyInput.trim() })
+    onChanged()
+  }
+  const commitUrl = async (): Promise<void> => {
+    if (baseUrl.trim() && baseUrl.trim() !== v.baseUrl) {
+      await window.api.providerSave({ vendor: v.vendor, baseUrl: baseUrl.trim() })
+      onChanged()
+    }
+  }
+
+  const runDetect = async (): Promise<void> => {
+    await commitKey()
+    setStatus('detecting')
+    setError('')
+    const r = await window.api.providerDetect({ vendor: v.vendor, apiKey: keyInput.trim() || null })
+    if (r.ok) {
+      setStatus('success')
+    } else {
+      setStatus('error')
+      setError(r.error || '连接失败')
+    }
+  }
+
+  const fetchModels = async (): Promise<void> => {
+    await commitKey()
+    setFetching(true)
+    setError('')
+    const r = await window.api.providerFetchModels(v.vendor)
+    setFetching(false)
+    if (!r.ok) {
+      setStatus('error')
+      setError(r.error || '拉取失败')
+    } else {
+      onChanged()
+    }
+  }
+
+
+  return (
+    <div className="px-6 py-6">
+      <div className="mb-5 flex items-center justify-between">
+        <div className="text-[15px] font-semibold">{v.name}</div>
+        {/* 启用开关：关闭即整家停用，配置保留 */}
+        <button
+          onClick={async () => {
+            await window.api.providerSave({ vendor: v.vendor, enabled: !v.enabled })
+            onChanged()
+          }}
+          className={cn(
+            'relative h-6 w-11 flex-none rounded-full transition-colors',
+            v.enabled ? 'bg-primary' : 'bg-muted-foreground/30'
+          )}
+        >
+          <span
+            className={cn(
+              'absolute top-0.5 size-5 rounded-full bg-white shadow transition-all',
+              v.enabled ? 'left-[22px]' : 'left-0.5'
+            )}
+          />
+        </button>
+      </div>
+
+      {!v.health.ok && (
+        <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/5 px-3.5 py-2.5 text-[12px] text-destructive">
+          最近一次请求失败：{v.health.reason || '服务异常'}，请检测密钥或稍后再试
+        </div>
+      )}
+
+      <Section title="API 密钥">
+        <div className="flex gap-2.5">
+          <div className="relative flex-1">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              onBlur={commitKey}
+              placeholder={v.hasKey ? v.keyMask : 'sk-...'}
+              className="h-10 w-full rounded-lg border border-input bg-background pr-10 pl-3 text-[14px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
+            />
+            <button
+              onClick={() => setShowKey((x) => !x)}
+              className="absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted"
+            >
+              {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+            </button>
+          </div>
+          <Button onClick={runDetect} disabled={status === 'detecting' || (!v.hasKey && !keyInput.trim())} className="h-10 px-5">
+            检测
+          </Button>
+        </div>
+        {status === 'detecting' && (
+          <StatusLine>
+            <Loader2 className="size-3.5 animate-spin" />
+            正在检测连接…
+          </StatusLine>
+        )}
+        {status === 'success' && (
+          <StatusLine className="text-emerald-600">
+            <Check className="size-3.5" />
+            连接成功
+          </StatusLine>
+        )}
+        {status === 'error' && <StatusLine className="text-destructive">{error}</StatusLine>}
+      </Section>
+
+      <Section title="服务地址">
+        <div className="flex gap-2.5">
+          <input
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            onBlur={commitUrl}
+            className="h-10 w-full flex-1 rounded-lg border border-input bg-background px-3 font-mono text-[13px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
+          />
+          {baseUrl !== v.defaultBaseUrl && (
+            <Button
+              variant="outline"
+              onClick={async () => {
+                setBaseUrl(v.defaultBaseUrl)
+                await window.api.providerSave({ vendor: v.vendor, baseUrl: v.defaultBaseUrl })
+                onChanged()
+              }}
+              className="h-10 px-4"
+            >
+              还原
+            </Button>
+          )}
+        </div>
+        <div className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+          对话接口：{baseUrl.replace(/\/+$/, '')}/chat/completions
+        </div>
+      </Section>
+
+      <Section title="模型">
+        <div className="mb-2">
+          <Button variant="outline" onClick={fetchModels} disabled={fetching || (!v.hasKey && !keyInput.trim())} className="h-9 px-4">
+            {fetching ? '获取中…' : '获取模型列表'}
+          </Button>
+        </div>
+        {v.models.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border px-4 py-3 text-[13px] text-muted-foreground">
+            获取后在这里勾选要用的模型
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {v.models.map((m) => {
+              const win = v.windows[m.id.toLowerCase()]
+              return (
+                <button
+                  key={m.id}
+                  onClick={async () => {
+                    await window.api.providerPickModel({ vendor: v.vendor, id: m.id, picked: !m.picked })
+                    onChanged()
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-left text-[13px] transition-colors hover:bg-muted"
+                >
+                  <span
+                    className={cn(
+                      'grid size-5 flex-none place-items-center rounded-md border',
+                      m.picked ? 'border-primary bg-primary text-primary-foreground' : 'border-border'
+                    )}
+                  >
+                    {m.picked && <Check className="size-3.5" strokeWidth={3} />}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{m.id}</span>
+                  {m.offline && <span className="flex-none text-[11px] text-amber-600">已下线</span>}
+                  {win && (
+                    <span className="flex-none text-[11px] text-muted-foreground">
+                      {win >= 1048576 ? `${Math.round(win / 1048576)}M` : `${Math.round(win / 1024)}K`}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </Section>
+
+    </div>
+  )
+}
+
 
 const KB_PHASE_TEXT: Record<string, string> = {
   pulling: '获取最新内容…',

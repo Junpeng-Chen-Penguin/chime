@@ -7,7 +7,7 @@ import icon from '../../resources/icon.png?asset'
 import { tmpdir } from 'os'
 import {
   initDb,
-  getProvider,
+  getDefaultModelRef,
   saveProvider,
   createConversation,
   getMessages,
@@ -289,7 +289,8 @@ app.whenReady().then(() => {
             updateKb(row.id, { intro: kbSpec.intro })
           }
         }
-        const model = spec.model || process.env.CHIME_ENGINE_MODEL || getProvider().defaultModel
+        // 模型可为 vendor:model 或裸名（历史用例，按 deepseek 解析）；缺省用默认模型
+        const model = spec.model || process.env.CHIME_ENGINE_MODEL || getDefaultModelRef()
         const emit = (e: object): void => {
           process.stdout.write(JSON.stringify(e) + '\n')
         }

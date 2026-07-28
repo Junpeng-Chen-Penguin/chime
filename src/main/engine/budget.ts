@@ -1,6 +1,6 @@
 // 上下文预算：预算 = 窗口 × 0.75 − 8192；估算按字符折算，用 API 实测用量做全局校准
 
-import { getProvider } from '../db'
+import { parseModelRef, windowFor as vendorWindow } from '../vendors'
 
 const SAFETY = 0.75
 const OUTPUT_RESERVE = 8192
@@ -8,10 +8,10 @@ const OUTPUT_RESERVE = 8192
 // 单条消息发送上限（字符）：渲染层发送前拦截用同一常量，联调期校准
 export const SEND_CHAR_LIMIT = 30000
 
-// 窗口大小无法从 OpenAI 兼容接口自动检测：几行识别规则 + 服务配置的默认值兜底
-export function windowFor(model: string): number {
-  if (model.toLowerCase().includes('deepseek')) return 131072 // DeepSeek 官方 128K
-  return getProvider().defaultWindow
+// 窗口取值：接口不提供窗口字段（两家均查证），按预置表取、未知模型 128K 兜底
+export function windowFor(ref: string): number {
+  const { vendor, model } = parseModelRef(ref)
+  return vendorWindow(vendor, model)
 }
 
 export function budgetFor(model: string): number {

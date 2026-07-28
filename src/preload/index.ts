@@ -9,12 +9,21 @@ interface ChatEvent {
 
 // 暴露给渲染进程的 API（明文密钥始终留在主进程）
 const api = {
-  getProvider: () => ipcRenderer.invoke('provider:get'),
-  saveProvider: (input: { baseUrl: string; defaultModel: string; apiKey: string | null }) =>
-    ipcRenderer.invoke('provider:save', input),
-  detect: (input: { baseUrl: string; apiKey: string | null }) =>
-    ipcRenderer.invoke('provider:detect', input),
-  getModels: (): Promise<string[]> => ipcRenderer.invoke('provider:models'),
+  providerList: () => ipcRenderer.invoke('provider:list'),
+  providerSave: (input: {
+    vendor: string
+    apiKey?: string | null
+    baseUrl?: string
+    enabled?: boolean
+    extraParams?: Record<string, unknown>
+  }) => ipcRenderer.invoke('provider:save', input),
+  providerDetect: (input: { vendor: string; apiKey: string | null }) => ipcRenderer.invoke('provider:detect', input),
+  providerFetchModels: (vendor: string) => ipcRenderer.invoke('provider:fetchModels', vendor),
+  providerPickModel: (input: { vendor: string; id: string; picked: boolean }) =>
+    ipcRenderer.invoke('provider:pickModel', input),
+  providerGetDefault: (): Promise<string> => ipcRenderer.invoke('provider:getDefault'),
+  providerSetDefault: (ref: string) => ipcRenderer.invoke('provider:setDefault', ref),
+  providerMenu: () => ipcRenderer.invoke('provider:menu'),
 
   listConversations: () => ipcRenderer.invoke('conv:list'),
   createConversation: (input: { id: string; model: string }) =>

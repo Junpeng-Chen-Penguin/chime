@@ -2,8 +2,6 @@ import { ipcMain } from 'electron'
 import { existsSync, readFileSync } from 'fs'
 import { join, resolve } from 'path'
 import {
-  getProvider,
-  saveProvider,
   maskApiKey,
   listConversations,
   createConversation,
@@ -12,55 +10,115 @@ import {
   getConversationMeta,
   setConversationTitle
 } from './db'
-import { detect, listModels, generateTitle } from './ai'
+import { detect, listModels, generateTitle, vendorHealth, markVendorHealth, humanize } from './ai'
 import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
 import { respondCard, respondAskCard, type AskOutcome } from './engine/cards'
 import { lastUserText, deleteLastAssistant, repairConversation } from './engine/store'
-import { getKb, kbStats, setConversationKbSelection, getConversationKbSelection, setConversationMcpSelection, getConversationMcpSelection, listKbs, createKb, updateKb, deleteKb, kbStatsFor, type KbSelEntry } from './db'
+import {
+  getKb,
+  kbStats,
+  setConversationKbSelection,
+  getConversationKbSelection,
+  setConversationMcpSelection,
+  getConversationMcpSelection,
+  listKbs,
+  createKb,
+  updateKb,
+  deleteKb,
+  kbStatsFor,
+  listProviderRecords,
+  getProviderRecord,
+  saveProviderRecord,
+  getDefaultModelRef,
+  setDefaultModelRef,
+  resolveModelRef,
+  type KbSelEntry
+} from './db'
+import { vendorPreset } from './vendors'
 import { listMcpServices, getMcpService, saveMcpService, deleteMcpService, getArtifact } from './db'
 import { TABLE_RENDER_CAP } from './engine/artifact'
 import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
 import { kbBusy, busyKbId, runIndexJob, validateRepoPath, getLastSummary, checkChanges } from './kb'
 
 export function registerIpc(): void {
-  // 读取配置：明文密钥不出主进程，只回打码串
-  ipcMain.handle('provider:get', () => {
-    const p = getProvider()
-    return {
-      baseUrl: p.baseUrl,
-      defaultModel: p.defaultModel,
-      defaultWindow: p.defaultWindow,
-      keyMask: maskApiKey(p.apiKey),
-      hasKey: !!p.apiKey
-    }
+  // ── 模型服务商（PRD Case 6/7）：预置多家，密钥明文不出主进程 ──
+  ipcMain.handle('provider:list', () => {
+    const health = vendorHealth()
+    return listProviderRecords().map((p) => {
+      const preset = vendorPreset(p.vendor)
+      return {
+        vendor: p.vendor,
+        name: preset?.name ?? p.vendor,
+        baseUrl: p.baseUrl,
+        defaultBaseUrl: preset?.baseUrl ?? '',
+        keyMask: maskApiKey(p.apiKey),
+        hasKey: !!p.apiKey,
+        enabled: p.enabled,
+        models: p.models,
+        extraParams: p.extraParams,
+        windows: preset?.windows ?? {},
+        health: health[p.vendor] ?? { ok: true }
+      }
+    })
   })
-
   ipcMain.handle(
     'provider:save',
-    (
-      _e,
-      input: { baseUrl: string; defaultModel: string; apiKey: string | null; defaultWindow?: number }
-    ) => {
-      saveProvider(input)
+    (_e, input: { vendor: string; apiKey?: string | null; baseUrl?: string; enabled?: boolean; extraParams?: Record<string, unknown> }) => {
+      saveProviderRecord(input.vendor, input)
     }
   )
-
-  // apiKey 为 null 表示界面没改密钥，用已存的检测
-  ipcMain.handle('provider:detect', (_e, input: { baseUrl: string; apiKey: string | null }) => {
-    const key = input.apiKey ?? getProvider().apiKey
-    return detect(input.baseUrl, key)
+  // 检测：向该服务商发一条极短消息确认能真正对话（PRD Case 6 功能点 4）
+  ipcMain.handle('provider:detect', async (_e, input: { vendor: string; apiKey: string | null }) => {
+    const p = getProviderRecord(input.vendor)
+    if (!p) return { ok: false, error: '服务商不存在' }
+    const key = input.apiKey ?? p.apiKey
+    const r = await detect(p.baseUrl, key)
+    if (r.ok) markVendorHealth(input.vendor, true) // 检测通过解除警示
+    return r
   })
-
-  // 拉模型列表（供对话里切换模型用），失败返回空数组
-  ipcMain.handle('provider:models', async () => {
-    const p = getProvider()
-    if (!p.apiKey) return []
+  // 拉取模型清单并合并：已勾选保持勾选；消失的标已下线不自动取消；新出现的不自动勾选
+  ipcMain.handle('provider:fetchModels', async (_e, vendor: string) => {
+    const p = getProviderRecord(vendor)
+    if (!p || !p.apiKey) return { ok: false, error: '请先填写 API 密钥' }
     try {
-      return await listModels(p.baseUrl, p.apiKey)
-    } catch {
-      return []
+      const ids = await listModels(p.baseUrl, p.apiKey)
+      const prev = new Map(p.models.map((m) => [m.id, m]))
+      const merged = [
+        ...ids.map((id) => ({ id, picked: prev.get(id)?.picked ?? false, offline: false })),
+        ...p.models.filter((m) => !ids.includes(m.id)).map((m) => ({ ...m, offline: true }))
+      ]
+      // 预置认得的对话模型排前（带窗口值），其余按接口返回顺序
+      const windows = vendorPreset(vendor)?.windows ?? {}
+      merged.sort((a, b) => (windows[b.id.toLowerCase()] ? 1 : 0) - (windows[a.id.toLowerCase()] ? 1 : 0))
+      saveProviderRecord(vendor, { models: merged })
+      return { ok: true, models: merged }
+    } catch (e) {
+      const status = (e as { status?: number }).status
+      return { ok: false, error: status ? humanize(status) : '拉取失败，请检查网络或服务地址' }
     }
   })
+  ipcMain.handle('provider:pickModel', (_e, input: { vendor: string; id: string; picked: boolean }) => {
+    const p = getProviderRecord(input.vendor)
+    if (!p) return
+    saveProviderRecord(input.vendor, {
+      models: p.models.map((m) => (m.id === input.id ? { ...m, picked: input.picked } : m))
+    })
+  })
+  ipcMain.handle('provider:getDefault', () => getDefaultModelRef())
+  ipcMain.handle('provider:setDefault', (_e, ref: string) => setDefaultModelRef(ref))
+  // 会话模型菜单数据源：已启用服务商的勾选模型，按服务商分组
+  ipcMain.handle('provider:menu', () => {
+    const health = vendorHealth()
+    return listProviderRecords()
+      .filter((p) => p.enabled && p.apiKey)
+      .map((p) => ({
+        vendor: p.vendor,
+        name: vendorPreset(p.vendor)?.name ?? p.vendor,
+        health: health[p.vendor] ?? { ok: true },
+        models: p.models.filter((m) => m.picked).map((m) => m.id)
+      }))
+  })
+  ipcMain.handle('provider:health', () => vendorHealth())
 
   // 流式对话：渲染层只发「会话 + 一句话」，事件从统一通道 chat:event 单向推回
   ipcMain.on(
@@ -290,13 +348,13 @@ export function registerIpc(): void {
     async (_e, input: { convId: string; userText: string; assistantText: string }) => {
       const meta = getConversationMeta(input.convId)
       if (!meta || !meta.titleAuto) return null
-      const p = getProvider()
-      if (!p.apiKey) return null
+      const p = resolveModelRef(getDefaultModelRef())
+      if (!p || !p.apiKey) return null
       try {
         const title = await generateTitle({
           baseUrl: p.baseUrl,
           apiKey: p.apiKey,
-          model: p.defaultModel || 'deepseek-v4-flash',
+          model: p.model || 'deepseek-v4-flash',
           userText: input.userText,
           assistantText: input.assistantText
         })
