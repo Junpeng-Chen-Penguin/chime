@@ -378,10 +378,8 @@ export function saveProvider(input: {
 
 // 仅用于界面展示，明文密钥不离开主进程
 export function maskApiKey(key: string): string {
-  if (!key) return ''
-  if (key.length > 16) return `${key.slice(0, 6)}••••${key.slice(-4)}`
-  if (key.length > 8) return `${key.slice(0, 3)}••••${key.slice(-2)}`
-  return '••••'
+  // 掩码不带密钥原文（首尾字符也不露），只表示「已保存」
+  return key ? '••••••••' : ''
 }
 
 export interface ConversationRow {
