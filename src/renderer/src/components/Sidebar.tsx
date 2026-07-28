@@ -26,7 +26,7 @@ export default function Sidebar({
   return (
     <aside className="flex h-full w-[256px] flex-none flex-col overflow-hidden rounded-[12px] border border-border bg-[#f8f8f7] shadow-[0_1px_2px_rgba(20,22,30,0.04),0_2px_8px_rgba(20,22,30,0.05)]">
       {/* 收起按钮左侧为红绿灯留空；全屏时红绿灯隐藏，回到常规内边距 */}
-      <div className={cn('app-drag flex h-[44px] flex-none items-center', fullscreen ? 'pl-3' : 'pl-[84px]')}>
+      <div className={cn('app-drag flex h-[44px] flex-none items-center', fullscreen ? 'pl-3' : 'pl-[70px]')}>
         <button
           onClick={onCollapse}
           title="收起侧栏  ⌘."
