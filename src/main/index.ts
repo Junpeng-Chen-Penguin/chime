@@ -132,35 +132,62 @@ app.whenReady().then(() => {
     void (async () => {
       try {
         const { default: Database } = await import('better-sqlite3')
-        let row: { api_key: string | null; base_url: string; default_model: string | null } | undefined
-        let kbReady = false
-        let mcpEnabledCount = 0
+        // 多服务商报告（Case 13）：vendors 含各家启用态与勾选模型；kbs / mcpServices 供 Tuner 预检（Case 10）
+        interface VendorReport {
+          vendor: string
+          apiKey: string | null
+          baseUrl: string
+          enabled: boolean
+          models: string[]
+        }
+        let vendors: VendorReport[] = []
+        let defaultModel: string | null = null
+        let kbs: { name: string; ready: boolean }[] = []
+        let mcpServices: { name: string; enabled: boolean }[] = []
         try {
           const rdb = new Database(join(app.getPath('userData'), 'chime.db'), {
             readonly: true,
             fileMustExist: true
           })
-          row = rdb
-            .prepare('SELECT api_key, base_url, default_model FROM provider WHERE id = 1')
-            .get() as typeof row
-          // 环境快照预检（tuner 用，见《Tuner-技术方案》第七章）：同一只读连接裸查，旧库无表按未配置处理
           try {
-            const k = rdb.prepare('SELECT root_path, indexed_at FROM kb WHERE id = 1').get() as
-              | { root_path: string | null; indexed_at: number | null }
-              | undefined
-            kbReady = !!(k?.root_path && k?.indexed_at)
+            const rows = rdb.prepare('SELECT vendor, api_key, base_url, enabled, models FROM provider').all() as {
+              vendor: string
+              api_key: string
+              base_url: string
+              enabled: number
+              models: string
+            }[]
+            vendors = rows.map((r) => {
+              let picked: string[] = []
+              try {
+                picked = (JSON.parse(r.models) as { id: string; picked: boolean }[]).filter((m) => m.picked).map((m) => m.id)
+              } catch {
+                // 坏数据按空
+              }
+              return { vendor: r.vendor, apiKey: r.api_key || null, baseUrl: r.base_url, enabled: !!r.enabled, models: picked }
+            })
+            const dm = rdb.prepare("SELECT value FROM settings WHERE key = 'default_model'").get() as { value: string } | undefined
+            defaultModel = dm?.value ?? null
           } catch {
-            // 旧库无 kb 表
+            // 旧库结构：按未配置处理
           }
           try {
-            const m = rdb.prepare('SELECT COUNT(*) AS n FROM mcp_service WHERE enabled = 1').get() as { n: number }
-            mcpEnabledCount = m.n
+            kbs = (rdb.prepare('SELECT name, indexed_at FROM kb').all() as { name: string; indexed_at: number | null }[]).map(
+              (k) => ({ name: k.name, ready: !!k.indexed_at })
+            )
+          } catch {
+            // 旧库无多库表
+          }
+          try {
+            mcpServices = (rdb.prepare('SELECT name, enabled FROM mcp_service').all() as { name: string; enabled: number }[]).map(
+              (m) => ({ name: m.name, enabled: !!m.enabled })
+            )
           } catch {
             // 旧库无 mcp_service 表
           }
           rdb.close()
         } catch {
-          // 库不存在或无 provider 行：按未配置处理
+          // 库不存在：按未配置处理
         }
         const { execFileSync } = await import('child_process')
         const git = (args: string[]): string | null => {
@@ -170,30 +197,24 @@ app.whenReady().then(() => {
             return null // 非 git 环境（如打包分发形态）拿不到就置空
           }
         }
-        const baseUrl = row?.base_url || 'https://api.deepseek.com'
-        const apiKey = row?.api_key ?? null
-        let models: string[] = []
-        let modelsError: string | null = null
-        if (apiKey) {
-          try {
-            const { listModels } = await import('./ai')
-            models = await listModels(baseUrl, apiKey)
-          } catch (e) {
-            modelsError = String(e)
-          }
-        }
+        // 旧字段兼容（Tuner 换版期）：以默认模型所属服务商拼单套形状
+        const defVendor = defaultModel?.includes(':') ? defaultModel.slice(0, defaultModel.indexOf(':')) : 'deepseek'
+        const defRow = vendors.find((v) => v.vendor === defVendor) ?? vendors[0]
         process.stdout.write(
           JSON.stringify({
             appVersion: app.getVersion(),
             gitCommit: git(['rev-parse', 'HEAD']),
             dirty: (git(['status', '--porcelain']) ?? '') !== '',
-            baseUrl,
-            apiKey,
-            defaultModel: row?.default_model ?? null,
-            models,
-            modelsError,
-            kbReady,
-            mcpEnabledCount
+            vendors,
+            defaultModel,
+            kbs,
+            mcpServices,
+            baseUrl: defRow?.baseUrl ?? 'https://api.deepseek.com',
+            apiKey: defRow?.apiKey ?? null,
+            models: defRow?.models ?? [],
+            modelsError: null,
+            kbReady: kbs.some((k) => k.ready),
+            mcpEnabledCount: mcpServices.filter((m) => m.enabled).length
           }) + '\n'
         )
         app.exit(0)
@@ -209,17 +230,12 @@ app.whenReady().then(() => {
     void (async () => {
       try {
         initDb()
-        if (process.env.CHIME_ENGINE_KEY) {
-          saveProvider({
-            apiKey: process.env.CHIME_ENGINE_KEY,
-            baseUrl: process.env.CHIME_ENGINE_BASE_URL || 'https://api.deepseek.com',
-            defaultModel: process.env.CHIME_ENGINE_MODEL || 'deepseek-chat'
-          })
-        }
         const { readFileSync } = await import('fs')
         const spec = JSON.parse(readFileSync(resolve(evalCasePath), 'utf8')) as {
-          kb?: { repo: string; name: string; intro: string } | true // true = 使用库内现成配置（环境快照）
-          mcp?: { name: string; url: string; headers?: Record<string, string> }[] | true // 同上
+          // true = 库内全部现成配置（环境快照）；string[] = 按名选用快照中的库/服务（Tuner 用例 env，Case 10）
+          kb?: { repo: string; name: string; intro: string } | string[] | true
+          mcp?: { name: string; url: string; headers?: Record<string, string> }[] | string[] | true
+          setup?: { tool: string; args?: Record<string, unknown> }[] // 前置动作（Case 12）：首轮前直接调工具，不经模型不弹卡
           model?: string
           messages: string[]
           conv?: string // 往既有会话续发（跨重启多轮自测）；缺省新建会话
@@ -229,14 +245,25 @@ app.whenReady().then(() => {
           cardResponses?: { action: 'approve' | 'deny' | 'answer' | 'skip' }[]
         }
         const { runTurn, stopTurn, REPAIR_TEXTS } = await import('./engine/orchestrator')
+        const mcpByName = Array.isArray(spec.mcp) && (spec.mcp as unknown[]).every((x) => typeof x === 'string')
         // MCP 用例隔离：声明了 mcp 才启用（地址/停用状态变了就更新）；没声明就停用全部服务——
         // 评估共用数据目录，前一用例注册的服务不能泄漏进「无手段」类用例
         {
           const existing = listMcpServices()
-          if (spec.mcp === true) {
-            // 环境快照：库内已启用的服务原样使用，不增改、不停用
+          if (spec.mcp === true || mcpByName) {
+            // 环境快照 / 按名选用：库内服务原样，不增改、不停用；按名时校验声明的服务都在且已启用
+            if (mcpByName) {
+              for (const name of spec.mcp as string[]) {
+                const found = existing.find((e) => e.name === name)
+                if (!found || !found.enabled) {
+                  process.stderr.write(`[eval] ERROR MCP 服务「${name}」不存在或未启用\n`)
+                  app.exit(1)
+                  return
+                }
+              }
+            }
           } else if (spec.mcp) {
-            for (const s of spec.mcp) {
+            for (const s of spec.mcp as { name: string; url: string; headers?: Record<string, string> }[]) {
               const found = existing.find((e) => e.name === s.name)
               if (!found) {
                 saveMcpService({ name: s.name, url: s.url, headers: s.headers ?? {}, enabled: true })
@@ -253,15 +280,33 @@ app.whenReady().then(() => {
         await syncMcpServices()
         // 带库用例。kb === true（环境快照）：库内配置须已完成索引且 embed 模型匹配，
         // 否则报错退出——绝不触发重建（重建路径会对用户真实文档仓库执行 git pull）
-        if (spec.kb === true) {
-          const ready = listKbsDb().filter((k) => k.indexedAt)
-          if (ready.length === 0) {
+        const kbByName = Array.isArray(spec.kb)
+        if (spec.kb === true || kbByName) {
+          const pool = kbByName
+            ? listKbsDb().filter((k) => (spec.kb as string[]).includes(k.name))
+            : listKbsDb().filter((k) => k.indexedAt)
+          if (kbByName) {
+            for (const name of spec.kb as string[]) {
+              const row = listKbsDb().find((k) => k.name === name)
+              if (!row) {
+                process.stderr.write(`[eval] ERROR 知识库「${name}」不存在\n`)
+                app.exit(1)
+                return
+              }
+              if (!row.indexedAt) {
+                process.stderr.write(`[eval] ERROR 知识库「${name}」尚未完成构建\n`)
+                app.exit(1)
+                return
+              }
+            }
+          }
+          if (pool.length === 0) {
             process.stderr.write('[eval] ERROR 没有已完成构建的知识库\n')
             app.exit(1)
             return
           }
           const { EMBED_MODEL_ID } = await import('./model')
-          if (ready.some((k) => k.embedModel && k.embedModel !== EMBED_MODEL_ID)) {
+          if (pool.some((k) => k.embedModel && k.embedModel !== EMBED_MODEL_ID)) {
             process.stderr.write('[eval] ERROR 知识库索引与当前 embed 模型不匹配，请在正式 Chime 重建索引\n')
             app.exit(1)
             return
@@ -269,8 +314,8 @@ app.whenReady().then(() => {
         } else if (spec.kb) {
           // 对象形式（Chime 自测夹具）：按名定位库行（无则建），未就绪或路径不同才构建（预置过则秒过）
           const { listKbs, createKb, updateKb } = await import('./db')
-          const repo = resolve(spec.kb.repo)
-          const kbSpec = spec.kb
+          const kbSpec = spec.kb as { repo: string; name: string; intro: string }
+          const repo = resolve(kbSpec.repo)
           let row = listKbs().find((k) => k.name === kbSpec.name)
           if (!row) {
             const r = createKb(kbSpec.name, kbSpec.intro, repo)
@@ -322,11 +367,17 @@ app.whenReady().then(() => {
         const convId = spec.conv ?? `eval-${process.pid}-${Date.now()}`
         if (!spec.conv) {
           createConversation(convId, model, Date.now())
-          // 环境快照（kb === true）：选中全部已构建的库；对象形式按名选中该库
+          // 环境快照（kb === true）：选中全部已构建的库；string[] 按名选中；对象形式按名选中该库
           if (spec.kb === true) {
             setConversationKbSelection(convId, listKbsDb().filter((k) => k.indexedAt).map((k) => ({ id: k.id, name: k.name })))
+          } else if (Array.isArray(spec.kb)) {
+            const names = spec.kb as string[]
+            setConversationKbSelection(
+              convId,
+              listKbsDb().filter((k) => names.includes(k.name)).map((k) => ({ id: k.id, name: k.name }))
+            )
           } else if (spec.kb) {
-            const named = listKbsDb().find((k) => k.name === (spec.kb as { name: string }).name)
+            const named = listKbsDb().find((k) => k.name === (spec.kb as unknown as { name: string }).name)
             setConversationKbSelection(convId, named ? [{ id: named.id, name: named.name }] : [])
           } else {
             setConversationKbSelection(convId, [])
@@ -336,16 +387,53 @@ app.whenReady().then(() => {
           store.repairConversation(convId, REPAIR_TEXTS) // 与界面打开会话同语义
         }
         // Case 8 会话选用：声明了 mcp 的用例默认全部选入用例会话（既有用例语义不变）；
-        // mcpSelected:false = 服务启用但本会话未选用（选用机制本身的用例）
+        // string[] 按名只选声明的服务（Case 10）；mcpSelected:false = 服务启用但本会话未选用
         {
           const db = await import('./db')
-          const ids =
-            spec.mcp && spec.mcpSelected !== false
-              ? listMcpServices()
-                  .filter((s) => s.enabled)
-                  .map((s) => s.id)
-              : []
+          let ids: number[] = []
+          if (spec.mcp && spec.mcpSelected !== false) {
+            const enabled = listMcpServices().filter((s) => s.enabled)
+            ids = mcpByName
+              ? enabled.filter((s) => (spec.mcp as string[]).includes(s.name)).map((s) => s.id)
+              : enabled.map((s) => s.id)
+          }
           db.setConversationMcpSelection(convId, ids)
+        }
+        // 前置动作（Case 12）：首轮对话前按声明顺序直接调工具——不经模型、不弹授权卡、
+        // 不进对话历史、不进评分材料；任一步失败即整条用例执行失败（环境没布置好，跑了也不算数）
+        if (spec.setup?.length) {
+          const { getMcpToolList, callMcpTool } = await import('./mcp/client')
+          const tools = getMcpToolList()
+          for (let i = 0; i < spec.setup.length; i++) {
+            const step = spec.setup[i]
+            // 工具名写法与用例断言一致（Case 4）：MCP 工具「服务名:工具名」
+            const [svcName, toolName] = step.tool.includes(':')
+              ? [step.tool.slice(0, step.tool.indexOf(':')), step.tool.slice(step.tool.indexOf(':') + 1)]
+              : ['', step.tool]
+            const found = tools.find((t) => t.name === toolName && (svcName === '' || t.serviceName === svcName))
+            if (!found) {
+              emit({ type: 'setup-failed', step: i + 1, tool: step.tool, error: '工具不存在或所属服务未连接' })
+              process.stderr.write(`[eval] SETUP-FAILED 第${i + 1}步 ${step.tool}: 工具不存在或所属服务未连接\n`)
+              app.exit(1)
+              return
+            }
+            try {
+              const r = await callMcpTool(found.serviceId, found.name, step.args ?? {})
+              if (r.isError) {
+                const text = typeof r.content === 'string' ? r.content : JSON.stringify(r.content).slice(0, 300)
+                emit({ type: 'setup-failed', step: i + 1, tool: step.tool, error: text })
+                process.stderr.write(`[eval] SETUP-FAILED 第${i + 1}步 ${step.tool}: ${text}\n`)
+                app.exit(1)
+                return
+              }
+              emit({ type: 'setup-call', step: i + 1, tool: step.tool, ok: true })
+            } catch (e) {
+              emit({ type: 'setup-failed', step: i + 1, tool: step.tool, error: String(e).slice(0, 300) })
+              process.stderr.write(`[eval] SETUP-FAILED 第${i + 1}步 ${step.tool}: ${String(e)}\n`)
+              app.exit(1)
+              return
+            }
+          }
         }
         for (let i = 0; i < spec.messages.length; i++) {
           const streamId = `t${i + 1}`
