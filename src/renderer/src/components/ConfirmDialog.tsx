@@ -21,6 +21,8 @@ export default function ConfirmDialog({
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent): void => {
+      // 输入法合成中的 Enter 是确认候选词，不该触发确认
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'Escape') onCancel()
       if (e.key === 'Enter') onConfirm()
     }

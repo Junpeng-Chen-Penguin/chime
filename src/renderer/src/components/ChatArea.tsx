@@ -260,6 +260,8 @@ function TitleBar({
         onFocus={(e) => e.target.select()}
         onBlur={commit}
         onKeyDown={(e) => {
+          // 输入法合成中的 Enter 是确认候选词，不该触发提交
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return
           if (e.key === 'Enter') {
             e.preventDefault()
             commit()
