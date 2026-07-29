@@ -71,7 +71,9 @@ export async function detect(baseUrl: string, apiKey: string): Promise<DetectRes
         model: models[0],
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1,
-        stream: false
+        stream: false,
+        // 探测不需要思考过程；带思考的模型（如 glm-4.5）会先跑数秒思考再回包，关掉后 1s 内返回。不认识此参数的服务会忽略
+        thinking: { type: 'disabled' }
       }),
       signal: controller.signal
     })

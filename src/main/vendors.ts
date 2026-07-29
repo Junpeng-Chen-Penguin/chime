@@ -35,6 +35,7 @@ export const VENDORS: VendorPreset[] = [
       'glm-4.7-flash': 204800,
       'glm-4.7-flashx': 204800,
       'glm-4.6': 204800,
+      'glm-4.5': 131072,
       'glm-4.5-air': 131072,
       'glm-4.5-airx': 131072,
       'glm-4.5-flash': 131072
