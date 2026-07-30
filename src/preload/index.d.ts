@@ -78,7 +78,7 @@ export type TurnItem =
       ms?: number
     }
   | { t: 'sources'; list: SourceRef[] }
-  | { t: 'artifact'; id: number; title: string; rowCount: number } // 制品卡
+  | { t: 'artifact'; id: number; title: string; rowCount: number; result?: string } // 制品卡
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
 export type ChatEvent =

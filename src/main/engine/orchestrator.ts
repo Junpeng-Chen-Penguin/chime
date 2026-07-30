@@ -485,7 +485,8 @@ async function streamCore(core: {
           // 制品生成成功：工具步骤行原地换成制品卡（成果即过程；失败保持普通工具行带错误）
           const art = artifacts.get(part.toolCallId)
           if (art) {
-            items[idx] = { t: 'artifact', ...art }
+            // 内置工具规范：改写显示形态时保留给模型的返回文本，评分与回放靠它还原"用户看到了什么"
+            items[idx] = { t: 'artifact', ...art, result: String(part.output) }
             emit({ type: 'item-done', streamId, index: idx, item: items[idx] })
             break
           }

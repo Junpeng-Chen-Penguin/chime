@@ -38,7 +38,7 @@ export type TurnItem =
       ms?: number
     }
   | { t: 'sources'; list: SourceSnapshot[] }
-  | { t: 'artifact'; id: number; title: string; rowCount: number } // 制品卡（成功的生成调用不出工具步骤行，成果即过程）
+  | { t: 'artifact'; id: number; title: string; rowCount: number; result?: string } // 制品卡（成功的生成调用不出工具步骤行，成果即过程）；result 为给模型的返回文本，旧记录无此字段
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
 // waiting = 等卡中（弹卡即落库的中间态）；interrupted = 应用退出打断、启动修复后收场
