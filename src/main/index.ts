@@ -425,7 +425,12 @@ app.whenReady().then(() => {
         // 不进对话历史、不进评分材料；任一步失败即整条用例执行失败（环境没布置好，跑了也不算数）
         if (spec.setup?.length) {
           const { getMcpToolList, callMcpTool } = await import('./mcp/client')
-          const tools = getMcpToolList()
+          // 工具查找限定在用例声明的服务内（Case 6 修正）：库内可能连着多个同名工具的服务
+          //（如真实测试环境与本地复刻并存），裸名全局匹配会把前置动作打到用例没声明的服务上
+          const allTools = getMcpToolList()
+          const tools = mcpDecls
+            ? allTools.filter((t) => mcpDecls.some((d) => d.name === t.serviceName))
+            : allTools
           for (let i = 0; i < spec.setup.length; i++) {
             const step = spec.setup[i]
             // 工具名写法与用例断言一致（Case 4）：MCP 工具「服务名:工具名」
