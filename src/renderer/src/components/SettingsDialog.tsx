@@ -909,7 +909,11 @@ function McpPanel(): React.JSX.Element {
       const t = line.trim()
       if (!t) continue
       const i = t.indexOf('=')
-      if (i <= 0) return { ok: false, error: `这一行看不懂：「${t.slice(0, 30)}」。每行一条，写成 请求头名=值` }
+      if (i <= 0)
+        return {
+          ok: false,
+          error: `请求头格式不正确：「${t.slice(0, 30)}」。每行一条，格式为 请求头名=值，如 Authorization=Bearer xxx`
+        }
       const v = t.slice(i + 1).trim()
       if (v.includes('•')) return { ok: false, error: '认证值不完整：修改请求头时，值需要全部重新填写' }
       out[t.slice(0, i).trim()] = v
