@@ -238,7 +238,8 @@ app.whenReady().then(() => {
         const spec = JSON.parse(readFileSync(resolve(evalCasePath), 'utf8')) as {
           // true = 库内全部现成配置（环境快照）；string[] = 按名选用快照中的库/服务（Tuner 用例 env，Case 10）
           kb?: { repo: string; name: string; intro: string } | string[] | true
-          mcp?: { name: string; url: string; headers?: Record<string, string> }[] | string[] | true
+          // 元素 string = 按名选用；对象 = 按名选用并覆盖 headers（url 缺省取快照原值，Case 6）
+          mcp?: (string | { name: string; url?: string; headers?: Record<string, string> })[] | true
           setup?: { tool: string; args?: Record<string, unknown> }[] // 前置动作（Case 12）：首轮前直接调工具，不经模型不弹卡
           model?: string
           messages: string[]
@@ -249,33 +250,50 @@ app.whenReady().then(() => {
           cardResponses?: { action: 'approve' | 'deny' | 'answer' | 'skip' }[]
         }
         const { runTurn, stopTurn, REPAIR_TEXTS } = await import('./engine/orchestrator')
-        const mcpByName = Array.isArray(spec.mcp) && (spec.mcp as unknown[]).every((x) => typeof x === 'string')
-        // MCP 用例隔离：声明了 mcp 才启用（地址/停用状态变了就更新）；没声明就停用全部服务——
-        // 评估共用数据目录，前一用例注册的服务不能泄漏进「无手段」类用例
+        // 统一归一（Case 6）：字符串元素 = {name}，与对象元素 {name, url?, headers?} 走同一条合并逻辑。
+        // 语义 = "选入会话"：按名取快照库同名服务（地址原值），声明了 headers 就覆盖落库，
+        // 未声明的服务不选入也不停用（会话范围由下方 mcpSelected 选择控制）；
+        // 带 url 且库内无同名服务时新建（旧对象写法兼容）
+        type McpDecl = { name: string; url?: string; headers?: Record<string, string> }
+        const mcpDecls: McpDecl[] | null = Array.isArray(spec.mcp)
+          ? (spec.mcp as unknown[]).map((x) => (typeof x === 'string' ? { name: x } : (x as McpDecl)))
+          : null
         {
           const existing = listMcpServices()
-          if (spec.mcp === true || mcpByName) {
-            // 环境快照 / 按名选用：库内服务原样，不增改、不停用；按名时校验声明的服务都在且已启用
-            if (mcpByName) {
-              for (const name of spec.mcp as string[]) {
-                const found = existing.find((e) => e.name === name)
-                if (!found || !found.enabled) {
-                  process.stderr.write(`[eval] ERROR MCP 服务「${name}」不存在或未启用\n`)
+          if (spec.mcp === true) {
+            // 环境快照：库内服务原样
+          } else if (mcpDecls) {
+            for (const s of mcpDecls) {
+              const found = existing.find((e) => e.name === s.name)
+              if (!found) {
+                if (!s.url) {
+                  process.stderr.write(`[eval] ERROR MCP 服务「${s.name}」不存在或未启用\n`)
                   app.exit(1)
                   return
                 }
-              }
-            }
-          } else if (spec.mcp) {
-            for (const s of spec.mcp as { name: string; url: string; headers?: Record<string, string> }[]) {
-              const found = existing.find((e) => e.name === s.name)
-              if (!found) {
                 saveMcpService({ name: s.name, url: s.url, headers: s.headers ?? {}, enabled: true })
-              } else if (found.url !== s.url || !found.enabled) {
-                saveMcpService({ id: found.id, name: s.name, url: s.url, headers: s.headers ?? {}, enabled: true })
+                continue
+              }
+              if (!found.enabled && !s.url && !s.headers) {
+                process.stderr.write(`[eval] ERROR MCP 服务「${s.name}」不存在或未启用\n`)
+                app.exit(1)
+                return
+              }
+              // headers 声明即覆盖（同一快照先后跑不同身份不能串）；url 缺省取原值；headers 传 null 保持现值
+              const needsUpdate =
+                (s.url !== undefined && found.url !== s.url) || !found.enabled || s.headers !== undefined
+              if (needsUpdate) {
+                saveMcpService({
+                  id: found.id,
+                  name: s.name,
+                  url: s.url ?? found.url,
+                  headers: s.headers ?? null,
+                  enabled: true
+                })
               }
             }
-          } else {
+          } else if (!spec.mcp) {
+            // 没声明就停用全部服务：前一用例注册的服务不能泄漏进「无手段」类用例
             for (const e of existing) {
               if (e.enabled) saveMcpService({ id: e.id, name: e.name, url: e.url, headers: null, enabled: false })
             }
@@ -397,8 +415,8 @@ app.whenReady().then(() => {
           let ids: number[] = []
           if (spec.mcp && spec.mcpSelected !== false) {
             const enabled = listMcpServices().filter((s) => s.enabled)
-            ids = mcpByName
-              ? enabled.filter((s) => (spec.mcp as string[]).includes(s.name)).map((s) => s.id)
+            ids = mcpDecls
+              ? enabled.filter((s) => mcpDecls.some((d) => d.name === s.name)).map((s) => s.id)
               : enabled.map((s) => s.id)
           }
           db.setConversationMcpSelection(convId, ids)
