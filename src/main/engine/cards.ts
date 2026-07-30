@@ -35,10 +35,16 @@ interface PendingCard {
   resolve: (outcome: never) => void
 }
 
-// 评估代答（Case 7 正式机制）：注入后弹卡即按用例预设回应，不经 UI。
-// 优先级：注入的代答器 > 环境变量快速钩子 > UI 队列
+// 评估代答（v1.1.1 授权策略 + 询问应答器）：注入后弹卡即按策略回应，不经 UI。
+// 优先级：注入的代答器 > 环境变量快速钩子 > UI 队列。
+// auth 须同步返回（toolName 供名单制策略判定）；ask 可返回 Promise（应答器要调兜底模型）
 let responder:
-  | ((kind: 'auth' | 'ask', toolCallId: string, questions?: AskQuestion[]) => CardDecision | AskOutcome | null)
+  | ((
+      kind: 'auth' | 'ask',
+      toolCallId: string,
+      questions?: AskQuestion[],
+      toolName?: string
+    ) => CardDecision | AskOutcome | Promise<AskOutcome> | null)
   | null = null
 export function setCardResponder(r: typeof responder): void {
   responder = r
@@ -62,11 +68,11 @@ export class CardQueue {
   }
 
   // 授权卡：工具 execute 内 await；用户回应（或停止）后 resolve
-  request(toolCallId: string, signal: AbortSignal): Promise<CardDecision> {
+  request(toolCallId: string, signal: AbortSignal, toolName?: string): Promise<CardDecision> {
     return new Promise((resolve) => {
       if (signal.aborted) return resolve('aborted')
-      // 评估代答（按用例预设）
-      const r = responder?.('auth', toolCallId)
+      // 评估代答（按授权策略）
+      const r = responder?.('auth', toolCallId, undefined, toolName)
       if (r) {
         this.onAuth(toolCallId, r as CardDecision)
         return resolve(r as CardDecision)
@@ -86,11 +92,14 @@ export class CardQueue {
   requestAsk(toolCallId: string, questions: AskQuestion[], signal: AbortSignal): Promise<AskOutcome> {
     return new Promise((resolve) => {
       if (signal.aborted) return resolve({ kind: 'aborted' })
-      // 评估代答（按用例预设）
+      // 评估代答（按应答档案；应答器可能要调兜底模型，容许异步）
       const r = responder?.('ask', toolCallId, questions)
       if (r) {
-        this.onAsk(toolCallId, r as AskOutcome)
-        return resolve(r as AskOutcome)
+        void Promise.resolve(r).then((o) => {
+          this.onAsk(toolCallId, o as AskOutcome)
+          resolve(o as AskOutcome)
+        })
+        return
       }
       // 无界面自测钩子：answer = 每题选第一项，decline = 放弃整卡
       const auto = process.env.CHIME_ASK_AUTO

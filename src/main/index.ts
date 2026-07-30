@@ -246,8 +246,11 @@ app.whenReady().then(() => {
           conv?: string // 往既有会话续发（跨重启多轮自测）；缺省新建会话
           mcpSelected?: boolean // Case 8：false = 服务启用但本会话未选用；缺省 = 声明的服务全部选入
           stopAfterMs?: number // 停止路径自测：每轮开跑后定时触发停止（同用户点停止）
-          // 卡片代答（Case 7 正式机制）：按弹卡顺序逐条消费；耗尽后自动收口（授权拒绝/提问放弃）防挂起
-          cardResponses?: { action: 'approve' | 'deny' | 'answer' | 'skip' }[]
+          // 前置条件与策略（v1.1.1）：授权按策略消费（缺省全通过），提问按应答档案作答（缺省整卡跳过）
+          policy?: {
+            auth?: 'approve_all' | 'deny_all' | { approve: string[] }
+            ask?: { profile: string }
+          }
         }
         const { runTurn, stopTurn, REPAIR_TEXTS } = await import('./engine/orchestrator')
         // 统一归一（Case 6）：字符串元素 = {name}，与对象元素 {name, url?, headers?} 走同一条合并逻辑。
@@ -361,28 +364,68 @@ app.whenReady().then(() => {
         const emit = (e: object): void => {
           process.stdout.write(JSON.stringify(e) + '\n')
         }
-        // 卡片代答：弹卡即按预设回应，动作以 card-answered 事件记入评估输出（可核查）。
-        // 预设按卡类分队列消费（approve/deny 归授权卡，answer/skip 归提问卡）——
-        // 模型先查数还是先弹卡的顺序不定，按类匹配消除抖动。
-        // 代答器无条件挂载：没有预设（或预设耗尽）的卡自动收口（授权拒绝/提问放弃）——评估必须零挂起
+        // 卡片代答（v1.1.1 前置条件与策略）：弹卡即按策略回应，动作以 card-answered 事件记入评估输出。
+        // 授权卡按 policy.auth 消费——approve_all（缺省）全批 / deny_all 全拒 / 名单制按工具原名判；
+        // 提问卡按 policy.ask.profile 走应答器（规则匹配 → 兜底模型 → 逐题未回答），没写档案整卡跳过。
+        // 代答器无条件挂载，评估必须零挂起
         let currentStreamId = ''
         {
           const cardsMod = await import('./engine/cards')
-          const presets = spec.cardResponses ?? []
-          const authQ = presets.filter((c) => c.action === 'approve' || c.action === 'deny')
-          const askQ = presets.filter((c) => c.action === 'answer' || c.action === 'skip')
-          cardsMod.setCardResponder((kind, toolCallId, questions) => {
-            const next = (kind === 'auth' ? authQ : askQ).shift()
-            const action = next?.action ?? (kind === 'auth' ? 'deny' : 'skip')
-            emit({ type: 'card-answered', streamId: currentStreamId, kind, toolCallId, action, exhausted: !next })
-            if (kind === 'auth') return action === 'approve' ? 'approved' : 'denied'
-            if (action === 'answer') {
-              return {
-                kind: 'answers',
-                answers: (questions ?? []).map((q) => ({ question: q.question, answer: q.options[0]?.label ?? null }))
-              }
+          const { answerWithProfile } = await import('./engine/ask-responder')
+          const authPolicy = spec.policy?.auth ?? 'approve_all'
+          const askProfile = spec.policy?.ask?.profile
+          // 兜底模型 = Chime 默认模型的非流式短调用（temperature 0，只输出编号），失败由应答器记未回答
+          const callModel = async (system: string, user: string): Promise<string> => {
+            const { resolveModelRef } = await import('./db')
+            const { generateText } = await import('ai')
+            const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible')
+            const p = resolveModelRef(getDefaultModelRef())
+            if (!p || !p.apiKey) throw new Error('默认模型未配置')
+            const provider = createOpenAICompatible({
+              name: 'chime',
+              baseURL: p.baseUrl.trim().replace(/\/+$/, ''),
+              apiKey: p.apiKey
+            })
+            const r = await generateText({
+              model: provider(p.model),
+              system,
+              prompt: user,
+              temperature: 0,
+              abortSignal: AbortSignal.timeout(15_000)
+            })
+            return r.text
+          }
+          cardsMod.setCardResponder((kind, toolCallId, questions, toolName) => {
+            if (kind === 'auth') {
+              const approved =
+                authPolicy === 'approve_all'
+                  ? true
+                  : authPolicy === 'deny_all'
+                    ? false
+                    : authPolicy.approve.includes(toolName ?? '')
+              emit({
+                type: 'card-answered',
+                streamId: currentStreamId,
+                kind,
+                toolCallId,
+                tool: toolName,
+                action: approved ? 'approve' : 'deny',
+                source: 'policy'
+              })
+              return approved ? 'approved' : 'denied'
             }
-            return { kind: 'declined' }
+            if (!askProfile) {
+              emit({ type: 'card-answered', streamId: currentStreamId, kind, toolCallId, action: 'skip', source: 'policy' })
+              return { kind: 'declined' }
+            }
+            const sid = currentStreamId
+            return answerWithProfile(askProfile, questions ?? [], callModel).then((detail) => {
+              emit({ type: 'card-answered', streamId: sid, kind, toolCallId, action: 'answer', source: 'profile', detail })
+              return {
+                kind: 'answers' as const,
+                answers: detail.map((d) => ({ question: d.question, answer: d.answer }))
+              }
+            })
           })
         }
         // 进程号会循环复用，数据目录跨多次评估累积后会撞 id——带上时间戳保唯一
@@ -558,6 +601,40 @@ app.whenReady().then(() => {
         app.exit(Number(process.exitCode ?? 0))
       } catch (e) {
         process.stderr.write(`[overflow-test] ERROR ${String(e)}\n`)
+        app.exit(1)
+      }
+    })()
+    return
+  }
+
+  // v1.1.1 验证钩子：CHIME_RESPONDER_TEST=1 跑询问应答器纯逻辑自检（规则匹配/编号解析/逐题应答）后退出
+  if (process.env.CHIME_RESPONDER_TEST) {
+    void (async () => {
+      try {
+        const rsp = await import('./engine/ask-responder')
+        const assert = (cond: boolean, name: string): void => {
+          process.stdout.write(`${cond ? '✅' : '❌'} ${name}\n`)
+          if (!cond) process.exitCode = 1
+        }
+        const q1 = { question: '续签节点？', options: [{ label: '商务谈判中' }, { label: '已签约' }] }
+        const qm = { question: '要哪些？', options: [{ label: '甲' }, { label: '乙' }, { label: '丙' }], multiSelect: true }
+        assert(JSON.stringify(rsp.matchByRule('节点选商务谈判中', q1)) === '["商务谈判中"]', '规则：单选唯一命中')
+        assert(rsp.matchByRule('商务谈判中或已签约都行', q1) === null, '规则：单选多命中视为歧义')
+        assert(JSON.stringify(rsp.matchByRule('要甲和丙', qm)) === '["甲","丙"]', '规则：多选全部命中项')
+        assert(JSON.stringify(rsp.parseModelChoice(' 2 ', q1)) === '["已签约"]', '解析：合法编号')
+        assert(rsp.parseModelChoice('0', q1) === null && rsp.parseModelChoice('选2', q1) === null, '解析：0 与含文字均非法')
+        assert(rsp.parseModelChoice('1,2', q1) === null, '解析：单选多编号非法')
+        assert(JSON.stringify(rsp.parseModelChoice('1、3', qm)) === '["甲","丙"]', '解析：多选顿号分隔')
+        const ans = await rsp.answerWithProfile('节点选商务谈判中', [q1, qm], async () => '2,3')
+        assert(ans[0].source === 'rule' && ans[0].answer === '商务谈判中', '应答：规则直选不调模型')
+        assert(ans[1].source === 'model' && ans[1].answer === '乙、丙', '应答：兜底模型编号选中')
+        const bad = await rsp.answerWithProfile('无关档案', [q1], async () => '不知道')
+        assert(bad[0].source === 'unanswered' && bad[0].answer === null && !!bad[0].reason, '应答：非法输出记未回答')
+        const fail = await rsp.answerWithProfile('无关档案', [q1], async () => Promise.reject(new Error('超时')))
+        assert(fail[0].source === 'unanswered' && (fail[0].reason ?? '').includes('超时'), '应答：调用失败记原因不阻塞')
+        app.exit(Number(process.exitCode ?? 0))
+      } catch (e) {
+        process.stderr.write(`[responder-test] ERROR ${String(e)}\n`)
         app.exit(1)
       }
     })()

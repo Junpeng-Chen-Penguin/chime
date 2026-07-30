@@ -56,7 +56,7 @@ export function makeMcpTools(
       description: t.description,
       inputSchema: jsonSchema(t.inputSchema as Parameters<typeof jsonSchema>[0]),
       execute: async (args, { toolCallId }) => {
-        const decision = await cards.request(toolCallId, signal)
+        const decision = await cards.request(toolCallId, signal, t.name)
         if (decision === 'denied') return { denied: AUTH_DENIED }
         if (decision === 'aborted') return { interrupted: INTERRUPT_NOT_STARTED }
         const r = await execMcpTool(name, (args ?? {}) as Record<string, unknown>, signal)
