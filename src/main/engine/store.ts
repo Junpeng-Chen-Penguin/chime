@@ -4,6 +4,7 @@
 import { randomUUID } from 'crypto'
 import type { ModelMessage } from 'ai'
 import { getDb } from '../db'
+import { ARTIFACT_TOOL_NAME } from './tools' // tools 对 store 只有 import type，不构成运行时循环
 
 export interface SourceSnapshot {
   n: number
@@ -38,7 +39,9 @@ export type TurnItem =
       ms?: number
     }
   | { t: 'sources'; list: SourceSnapshot[] }
-  | { t: 'artifact'; id: number; title: string; rowCount: number; result?: string } // 制品卡（成功的生成调用不出工具步骤行，成果即过程）；result 为给模型的返回文本，旧记录无此字段
+  // 制品卡（成功的生成调用不出工具步骤行，成果即过程）。args/result 是这次调用给模型的入参与返回，
+  // 只服务于历史重建——显示形态换了，发给模型的历史仍须还原成一次工具调用。旧记录无这两个字段
+  | { t: 'artifact'; id: number; title: string; rowCount: number; args?: Record<string, unknown>; result?: string; callId?: string }
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
 // waiting = 等卡中（弹卡即落库的中间态）；interrupted = 应用退出打断、启动修复后收场
@@ -170,8 +173,21 @@ export function loadHistoryMessages(convId: string): HistoryBundle {
         if (results.length) flush()
         asst.push({ type: 'text', text: it.text })
       } else if (it.t === 'artifact') {
-        if (results.length) flush()
-        asst.push({ type: 'text', text: `已生成表格制品《${it.title}》（${it.rowCount} 行），用户可随时点开查看` })
+        // 制品在界面上是一张卡，在历史里仍是一次 create_artifact 调用——照工具调用重建。
+        // 曾写成一条 assistant 文本「已生成表格制品《X》（N 行），用户可随时点开查看」，
+        // 模型下一轮看到这句话在自己名下，就跟着说，还不调工具（2026-08-03 定位）
+        const callId = it.callId ?? `hist_${++fallbackId}`
+        const value = it.result ?? `[artifact ok rows=${it.rowCount}]`
+        asst.push({
+          type: 'tool-call',
+          toolCallId: callId,
+          toolName: ARTIFACT_TOOL_NAME,
+          input: it.args ?? { type: 'table', title: it.title }
+        })
+        results.push({
+          part: { type: 'tool-result', toolCallId: callId, toolName: ARTIFACT_TOOL_NAME, output: { type: 'text', value } },
+          meta: { toolCallId: callId, toolName: ARTIFACT_TOOL_NAME, chars: value.length }
+        })
       } else if (it.t === 'tool') {
         const callId = it.id ?? `hist_${++fallbackId}`
         const value = historyToolOutput(it)

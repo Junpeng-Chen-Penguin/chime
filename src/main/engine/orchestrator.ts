@@ -485,8 +485,16 @@ async function streamCore(core: {
           // 制品生成成功：工具步骤行原地换成制品卡（成果即过程；失败保持普通工具行带错误）
           const art = artifacts.get(part.toolCallId)
           if (art) {
-            // 内置工具规范：改写显示形态时保留给模型的返回文本，评分与回放靠它还原"用户看到了什么"
-            items[idx] = { t: 'artifact', ...art, result: String(part.output) }
+            // 内置工具规范：改写显示形态时保留这次调用的入参与返回，评分与回放靠它还原"用户看到了什么"，
+            // 下一轮的历史重建靠它把制品还原成一次工具调用（写成一句助手台词会被模型当成自己说过的话模仿）
+            const call = items[idx] as Extract<TurnItem, { t: 'tool' }>
+            items[idx] = {
+              t: 'artifact',
+              ...art,
+              args: call.args,
+              callId: part.toolCallId,
+              result: String(part.output)
+            }
             emit({ type: 'item-done', streamId, index: idx, item: items[idx] })
             break
           }
