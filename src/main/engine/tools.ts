@@ -283,7 +283,11 @@ export function makeArtifactTool(
       const r = createArtifact(convId, args ?? {})
       if ('error' in r) return r
       onArtifact(toolCallId, r)
-      return `制品已生成（${r.rowCount} 行），卡片已展示给用户。简短收束即可，不要复述表格内容。`
+      // 返回只报事实，不带行为指导。原文案「…简短收束即可，不要复述表格内容」
+      // 是一句可以直接当台词说出口的话，在历史里出现两遍后模型会跳过调用直接复述它
+      //（2026-08-03 实测：第 3 轮零调用却声称「已生成表格制品（10 行）」）。
+      // 收束要求已移入输出约定常驻规则
+      return `已生成制品，${r.rowCount} 行。`
     }
   })
 }
