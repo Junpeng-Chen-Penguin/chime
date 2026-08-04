@@ -7,6 +7,7 @@ import icon from '../../resources/icon.png?asset'
 import { tmpdir } from 'os'
 import {
   initDb,
+  migrateSecrets,
   getDefaultModelRef,
   saveProvider,
   createConversation,
@@ -16,6 +17,7 @@ import {
   listMcpServices,
   saveMcpService
 } from './db'
+import { unseal } from './secret'
 import { registerIpc } from './ipc'
 import { syncMcpServices, onMcpStatusChange, closeAllMcp } from './mcp/client'
 
@@ -168,7 +170,8 @@ app.whenReady().then(() => {
               } catch {
                 // 坏数据按空
               }
-              return { vendor: r.vendor, apiKey: r.api_key || null, baseUrl: r.base_url, enabled: !!r.enabled, models: picked }
+              // 这里绕开 db.ts 直读只读连接，解密要自己来
+              return { vendor: r.vendor, apiKey: unseal(r.api_key) || null, baseUrl: r.base_url, enabled: !!r.enabled, models: picked }
             })
             const dm = rdb.prepare("SELECT value FROM settings WHERE key = 'default_model'").get() as { value: string } | undefined
             defaultModel = dm?.value ?? null
@@ -607,6 +610,32 @@ app.whenReady().then(() => {
     return
   }
 
+  // v1.1.9 验证钩子：CHIME_SECRET_TEST=1 跑凭据加解密自检后退出。
+  // 必须在 app ready 之后跑——safeStorage 此前一律不可用
+  if (process.env.CHIME_SECRET_TEST) {
+    void (async () => {
+      const { seal, unseal, isSealed, canSeal } = await import('./secret')
+      const assert = (cond: boolean, name: string): void => {
+        process.stdout.write(`${cond ? '✅' : '❌'} ${name}\n`)
+        if (!cond) process.exitCode = 1
+      }
+      assert(canSeal(), '当前环境支持加密（macOS 钥匙串）')
+      const key = 'sk-1234567890abcdef'
+      const sealed = seal(key)
+      assert(isSealed(sealed), '加密后带 enc.v1: 前缀')
+      assert(!sealed.includes(key), '密文里不含明文')
+      assert(unseal(sealed) === key, '解密还原一致')
+      assert(seal(sealed) === sealed, '已加密的不再重复加密')
+      assert(seal('') === '' && unseal('') === '', '空值原样通过')
+      assert(unseal('sk-plain-legacy') === 'sk-plain-legacy', '无前缀的旧明文原样返回')
+      assert(unseal('enc.v1:!!!not-base64!!!') === '', '坏密文解不开时返回空，不抛异常')
+      const headers = JSON.stringify({ Authorization: 'Bearer abc123' })
+      assert(unseal(seal(headers)) === headers, 'MCP 认证头整体加解密往返一致')
+      app.exit(process.exitCode === 1 ? 1 : 0)
+    })()
+    return
+  }
+
   // v1.1.1 验证钩子：CHIME_RESPONDER_TEST=1 跑询问应答器纯逻辑自检（规则匹配/编号解析/逐题应答）后退出
   if (process.env.CHIME_RESPONDER_TEST) {
     void (async () => {
@@ -810,6 +839,9 @@ app.whenReady().then(() => {
   })
 
   initDb()
+  // 存量明文凭据转密文。只在有界面的正常启动做——eval / report 是短命进程，
+  // 跑评估时不该顺手改用户的库
+  migrateSecrets()
   registerIpc()
 
   // chime-doc://img/?doc=<相对文档路径>&src=<图片相对路径>：按文档所在目录解析，限制在知识库根内

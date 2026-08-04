@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import Database from 'better-sqlite3'
 import { VENDORS, WINDOW_FALLBACK, vendorFromBaseUrl } from './vendors'
+import { seal, unseal, isSealed, canSeal } from './secret'
 
 export interface ProviderRow {
   apiKey: string
@@ -279,7 +280,7 @@ export function listProviderRecords(): ProviderRecord[] {
       } catch {
         // 同上
       }
-      return { vendor: r.vendor, apiKey: r.apiKey, baseUrl: r.baseUrl, enabled: !!r.enabled, models, extraParams: extra }
+      return { vendor: r.vendor, apiKey: unseal(r.apiKey), baseUrl: r.baseUrl, enabled: !!r.enabled, models, extraParams: extra }
     })
     .sort((a, b) => (order.get(a.vendor) ?? 99) - (order.get(b.vendor) ?? 99))
 }
@@ -297,7 +298,7 @@ export function saveProviderRecord(
   if (!cur) return
   const apiKey = patch.apiKey === undefined || patch.apiKey === null ? cur.apiKey : patch.apiKey
   db.prepare('UPDATE provider SET api_key = ?, base_url = ?, enabled = ?, models = ?, extra_params = ? WHERE vendor = ?').run(
-    apiKey,
+    seal(apiKey), // cur.apiKey 已由 listProviderRecords 解密，这里统一按明文入口加密
     patch.baseUrl ?? cur.baseUrl,
     (patch.enabled ?? cur.enabled) ? 1 : 0,
     JSON.stringify(patch.models ?? cur.models),
@@ -350,7 +351,7 @@ export function getProvider(): ProviderRow {
     | { apiKey: string; baseUrl: string }
     | undefined
   return {
-    apiKey: row?.apiKey ?? '',
+    apiKey: unseal(row?.apiKey ?? ''),
     baseUrl: row?.baseUrl ?? VENDORS[0].baseUrl,
     defaultModel: model,
     defaultWindow: WINDOW_FALLBACK
@@ -368,7 +369,8 @@ export function saveProvider(input: {
   const cur = db.prepare('SELECT api_key AS apiKey FROM provider WHERE vendor = ?').get(vendor) as
     | { apiKey: string }
     | undefined
-  const apiKey = input.apiKey === null ? (cur?.apiKey ?? '') : input.apiKey
+  // cur 直接读列，可能已是密文——沿用时原样透传，新值才加密
+  const apiKey = input.apiKey === null ? (cur?.apiKey ?? '') : seal(input.apiKey)
   const models = input.defaultModel ? JSON.stringify([{ id: input.defaultModel, picked: true }]) : '[]'
   db.prepare(
     'INSERT INTO provider (vendor, api_key, base_url, enabled, models) VALUES (?, ?, ?, 1, ?) ON CONFLICT(vendor) DO UPDATE SET api_key = ?, base_url = ?, enabled = 1, models = ?'
@@ -836,7 +838,8 @@ export function listMcpServices(): McpServiceRow[] {
   const rows = db
     .prepare('SELECT id, name, url, headers, enabled FROM mcp_service ORDER BY created_at')
     .all() as { id: number; name: string; url: string; headers: string; enabled: number }[]
-  return rows.map((r) => ({ ...r, headers: JSON.parse(r.headers), enabled: !!r.enabled }))
+  // headers 整体加密（里面除了认证凭据没有别的），解开后再 parse
+  return rows.map((r) => ({ ...r, headers: JSON.parse(unseal(r.headers) || '{}'), enabled: !!r.enabled }))
 }
 
 export function getMcpService(id: number): McpServiceRow | null {
@@ -857,7 +860,7 @@ export function saveMcpService(input: {
     db.prepare('UPDATE mcp_service SET name = ?, url = ?, headers = ?, enabled = ? WHERE id = ?').run(
       input.name,
       input.url,
-      JSON.stringify(headers),
+      seal(JSON.stringify(headers)),
       input.enabled ? 1 : 0,
       input.id
     )
@@ -865,8 +868,26 @@ export function saveMcpService(input: {
   }
   const r = db
     .prepare('INSERT INTO mcp_service (name, url, headers, enabled, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(input.name, input.url, JSON.stringify(input.headers ?? {}), input.enabled ? 1 : 0, Date.now())
+    .run(input.name, input.url, seal(JSON.stringify(input.headers ?? {})), input.enabled ? 1 : 0, Date.now())
   return Number(r.lastInsertRowid)
+}
+
+// 存量明文凭据一次性转密文。必须在 app ready 之后调用——safeStorage 此前不可用，
+// 提前跑会因为 canSeal 为 false 直接跳过，明文继续留在库里。
+export function migrateSecrets(): void {
+  if (!canSeal()) return
+  const provs = db.prepare('SELECT vendor, api_key AS apiKey FROM provider').all() as { vendor: string; apiKey: string }[]
+  for (const p of provs) {
+    if (p.apiKey && !isSealed(p.apiKey)) {
+      db.prepare('UPDATE provider SET api_key = ? WHERE vendor = ?').run(seal(p.apiKey), p.vendor)
+    }
+  }
+  const svcs = db.prepare('SELECT id, headers FROM mcp_service').all() as { id: number; headers: string }[]
+  for (const s of svcs) {
+    if (s.headers && s.headers !== '{}' && !isSealed(s.headers)) {
+      db.prepare('UPDATE mcp_service SET headers = ? WHERE id = ?').run(seal(s.headers), s.id)
+    }
+  }
 }
 
 // 删除服务：历史会话的调用行、授权记录等全部保留（存在 message.items 里，与服务表无外键）
