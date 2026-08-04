@@ -1,6 +1,6 @@
 {
   "name": "chime",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Chime — 本地 AI 对话桌面应用",
   "main": "./out/main/index.js",
   "author": "Chen Junpeng",
@@ -16,7 +16,7 @@
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
-    "build:mac": "electron-vite build && electron-builder --mac && rm -rf dist/mac-arm64",
+    "build:mac": "electron-vite build && electron-builder --mac && rm -rf \"$HOME/Library/Builds/chime/mac-arm64\"",
     "build:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {

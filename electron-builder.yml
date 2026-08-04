@@ -2,8 +2,13 @@ appId: com.chime.app
 productName: Chime
 directories:
   buildResources: build
+  # 输出必须在 ~/Documents 之外：该目录在 iCloud 同步范围内，同步服务给文件打的
+  # FinderInfo 标记会让 codesign 拒签（detritus），清掉也会被立刻补回（实测 .nosync 豁免无效）。
+  # 历史版本安装包仍在旧 dist/ 里，2026-08-04 起新产物落这里
+  output: /Users/chenjunpeng/Library/Builds/chime
 files:
   - '!**/.vscode/*'
+  - '!dist' # 历史安装包存放处；输出目录移出仓库后不再被自动排除，不挡会整个打进应用
   - '!src/*'
   - '!eval'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
@@ -20,7 +25,17 @@ nsis:
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+afterPack: build/strip-xattr.cjs
 mac:
+  # 本机自签证书（十年期，2026-08-04 生成）：给应用稳定的代码签名身份，
+  # 钥匙串授权（safeStorage）点一次「始终允许」即可跨版本生效，不再每次替换构建都弹。
+  # 只解决本机；对外分发的 Gatekeeper 仍需 Developer ID
+  identity: VibeCoding Local Signing
+  # 时间戳对本机自签证书无意义（其作用是证书过期后仍能证明签名时间），
+  # 关掉后签名从每文件约 1 秒降到毫秒级，也缩小 iCloud 同步补标记的竞态窗口
+  timestamp: none
+  # 硬化运行时的库校验要求主程序与框架同 Team ID，自签证书无 Team ID 必挂；它只为公证服务
+  hardenedRuntime: false
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSDocumentsFolderUsageDescription: Chime 需要读取文稿目录中的知识库文档。
