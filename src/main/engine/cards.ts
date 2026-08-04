@@ -9,7 +9,10 @@ export const INTERRUPT_NOT_STARTED_EXIT = '这次调用未执行（等待授权�
 export const INTERRUPT_LOCAL = '这次调用被中断，未完成，未产生任何变更。需要时可重试。'
 export const interruptExternal = (reason: '用户停止' | '应用退出'): string =>
   `这次调用在执行中被打断（${reason}），指令可能已到达系统，是否生效未知。不要自行重试；先向用户说明，协助核实实际结果后再定下一步。`
-export const AUTH_DENIED = '用户拒绝了这次调用'
+// 只写「用户拒绝了这次调用」时，模型不知道接下来该做什么：实测会原参数重发一次，
+// 且全程不告诉用户操作没执行（用例 17）。照 interruptExternal 与提问卡拒答的写法带上行为指令
+export const AUTH_DENIED =
+  '用户拒绝了这次调用，操作没有执行。不要重发同一个调用，也不要再次征求确认；先在回复里明确告诉用户这件事没有做，然后停下等用户指示。'
 
 // 提问卡的收场文案（PRD 提问卡章定稿）
 export const ASK_INTERRUPTED = '用户中断了本次提问'
