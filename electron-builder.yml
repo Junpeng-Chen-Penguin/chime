@@ -29,7 +29,11 @@ afterPack: build/strip-xattr.cjs
 mac:
   # 本机自签证书（十年期，2026-08-04 生成）：给应用稳定的代码签名身份，
   # 钥匙串授权（safeStorage）点一次「始终允许」即可跨版本生效，不再每次替换构建都弹。
-  # 只解决本机；对外分发的 Gatekeeper 仍需 Developer ID
+  # 只解决本机；对外分发的 Gatekeeper 仍需 Developer ID。
+  # 第五个坑（2026-08-07 实测发现）：光签名不够，证书还必须加入系统信任，否则钥匙串
+  # 校验不了证书身份、「始终允许」退化成只绑当前构建，每发一版仍弹一次。补救：
+  #   security find-certificate -c "VibeCoding Local Signing" -p > /tmp/vibe.pem
+  #   security add-trusted-cert -p codeSign -k ~/Library/Keychains/login.keychain-db /tmp/vibe.pem
   identity: VibeCoding Local Signing
   # 时间戳对本机自签证书无意义（其作用是证书过期后仍能证明签名时间），
   # 关掉后签名从每文件约 1 秒降到毫秒级，也缩小 iCloud 同步补标记的竞态窗口
