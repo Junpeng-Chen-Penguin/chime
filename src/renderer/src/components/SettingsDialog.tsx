@@ -1108,7 +1108,7 @@ function McpPanel(): React.JSX.Element {
                 {busyId === svc.id ? (
                   <StatusLine className="mt-0">
                     <Loader2 className="size-3.5 animate-spin" />
-                    {svc.enabled ? '正在停用…' : '正在连接…'}
+                    正在处理…
                   </StatusLine>
                 ) : !svc.enabled ? (
                   <StatusLine className="mt-0">已停用</StatusLine>
