@@ -27,6 +27,7 @@ interface ServiceState {
   config: McpServiceRow
   client: Client | null
   tools: McpToolInfo[]
+  instructions: string // 服务级说明（握手返回，011 Case 6）；未声明为空串
   status: McpServiceStatus
   error?: string
   dirty: boolean // 调用失败后置位，下次调用前重连
@@ -89,6 +90,7 @@ async function doConnect(st: ServiceState): Promise<void> {
         })
     })
     st.client = client
+    st.instructions = client.getInstructions()?.trim() ?? ''
     await refreshTools(st)
     st.status = 'connected'
     st.dirty = false
@@ -119,7 +121,7 @@ export async function syncMcpServices(): Promise<void> {
     const st = states.get(row.id)
     const configChanged = st && JSON.stringify(st.config) !== JSON.stringify(row)
     if (!st || configChanged || st.status !== 'connected') {
-      const next: ServiceState = { config: row, client: st?.client ?? null, tools: [], status: 'error', dirty: false }
+      const next: ServiceState = { config: row, client: st?.client ?? null, tools: [], instructions: '', status: 'error', dirty: false }
       states.set(row.id, next)
       pending.push(doConnect(next))
     }
@@ -138,6 +140,17 @@ export function getMcpToolList(): McpToolInfo[] {
   const out: McpToolInfo[] = []
   for (const st of states.values()) {
     if (st.status === 'connected') out.push(...st.tools)
+  }
+  return out
+}
+
+// 对话组装读这里（011 Case 6）：所选服务中已连接、有工具、且声明了 instructions 的
+export function getMcpInstructions(selected: Set<number>): { name: string; instructions: string }[] {
+  const out: { name: string; instructions: string }[] = []
+  for (const st of states.values()) {
+    if (!selected.has(st.config.id)) continue
+    if (st.status !== 'connected' || !st.tools.length || !st.instructions) continue
+    out.push({ name: st.config.name, instructions: st.instructions })
   }
   return out
 }

@@ -862,6 +862,7 @@ function McpPanel(): React.JSX.Element {
   const [editing, setEditing] = useState<McpServiceInfo | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<McpServiceInfo | null>(null)
   const [menuFor, setMenuFor] = useState<number | null>(null)
+  const [busyId, setBusyId] = useState<number | null>(null) // 启停进行中的服务（连接/断开有秒级过程，无反馈会误以为没点上）
   // 表单态
   const [formName, setFormName] = useState('')
   const [formUrl, setFormUrl] = useState('')
@@ -1050,15 +1051,22 @@ function McpPanel(): React.JSX.Element {
                 <div className="flex flex-none items-center gap-1.5">
                   <SwitchBtn
                     on={svc.enabled}
+                    busy={busyId === svc.id}
                     onToggle={async () => {
-                      await window.api.mcpSave({
-                        id: svc.id,
-                        name: svc.name,
-                        url: svc.url,
-                        headers: null,
-                        enabled: !svc.enabled
-                      })
-                      reload()
+                      if (busyId !== null) return
+                      setBusyId(svc.id)
+                      try {
+                        await window.api.mcpSave({
+                          id: svc.id,
+                          name: svc.name,
+                          url: svc.url,
+                          headers: null,
+                          enabled: !svc.enabled
+                        })
+                        reload()
+                      } finally {
+                        setBusyId(null)
+                      }
                     }}
                   />
                   <div className="relative">
@@ -1097,7 +1105,12 @@ function McpPanel(): React.JSX.Element {
                 </div>
               </div>
               <div className="mt-2">
-                {!svc.enabled ? (
+                {busyId === svc.id ? (
+                  <StatusLine className="mt-0">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    {svc.enabled ? '正在停用…' : '正在连接…'}
+                  </StatusLine>
+                ) : !svc.enabled ? (
                   <StatusLine className="mt-0">已停用</StatusLine>
                 ) : svc.status === 'connected' ? (
                   <StatusLine className="mt-0 text-emerald-600">
@@ -1134,15 +1147,17 @@ function McpPanel(): React.JSX.Element {
   )
 }
 
-// 启停开关（胶囊型），与卡片状态行搭配使用
-function SwitchBtn({ on, onToggle }: { on: boolean; onToggle: () => void }): React.JSX.Element {
+// 启停开关（胶囊型），与卡片状态行搭配使用；busy 期间禁点防重复触发
+function SwitchBtn({ on, onToggle, busy }: { on: boolean; onToggle: () => void; busy?: boolean }): React.JSX.Element {
   return (
     <button
       onClick={onToggle}
+      disabled={busy}
       title={on ? '停用' : '启用'}
       className={cn(
         'relative h-5 w-9 flex-none rounded-full transition-colors',
-        on ? 'bg-primary' : 'bg-muted-foreground/25'
+        on ? 'bg-primary' : 'bg-muted-foreground/25',
+        busy && 'opacity-50'
       )}
     >
       <span

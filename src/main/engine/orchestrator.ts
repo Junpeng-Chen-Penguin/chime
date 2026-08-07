@@ -20,6 +20,7 @@ import { EMBED_MODEL_ID } from '../model'
 import { humanize, markVendorHealth } from '../ai'
 import { builtinDisplay } from '../../shared/builtinTools'
 import { buildSystemPrompt, type KbEnv } from './prompts'
+import { getMcpInstructions } from '../mcp/client'
 import { budgetFor, estimateTokens, recordUsage } from './budget'
 import {
   makeSearchTool,
@@ -283,7 +284,8 @@ async function streamCore(core: {
   const artifacts = new Map<string, { id: number; title: string; rowCount: number }>()
 
   // 工具组装：内置（询问用户、查结果集、生成制品常备，挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
-  const mcp = makeMcpTools(controller.signal, cards, overflow, new Set(getConversationMcpSelection(convId)))
+  const mcpSelection = new Set(getConversationMcpSelection(convId))
+  const mcp = makeMcpTools(controller.signal, cards, overflow, mcpSelection)
   const turnTools: Record<string, Tool> = { ...mcp.tools }
   turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
   turnTools[GREP_TOOL_NAME] = makeGrepResultTool(convId)
@@ -293,7 +295,7 @@ async function streamCore(core: {
   // 已启用但连不上的服务：工具静默不挂载，不进对话流提醒（07-13 修订——状态常驻输入框标识，与主流一致）
 
   // 组装：系统提示词（固定主干 +（带工具）输出约定 +（挂库）条件段 + 环境信息）+ 消息序列
-  const system = buildSystemPrompt(kbEnv, Object.keys(turnTools).length > 0)
+  const system = buildSystemPrompt(kbEnv, Object.keys(turnTools).length > 0, getMcpInstructions(mcpSelection))
   const budget = budgetFor(model)
   const bundle = core.history
   let history = bundle.messages
