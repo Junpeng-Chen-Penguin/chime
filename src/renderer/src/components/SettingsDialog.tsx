@@ -1081,6 +1081,31 @@ function McpPanel(): React.JSX.Element {
                     </button>
                     {menuFor === svc.id && (
                       <div className="absolute top-[calc(100%+4px)] right-0 z-20 min-w-[140px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                        {svc.enabled && (
+                          <button
+                            onMouseDown={(e) => {
+                              e.preventDefault()
+                              setMenuFor(null)
+                              if (!svc.trusted) {
+                                setConfirmTrust({ id: svc.id, name: svc.name })
+                                return
+                              }
+                              void (async () => {
+                                setTrustBusyId(svc.id)
+                                try {
+                                  await window.api.mcpSetTrusted({ id: svc.id, trusted: false })
+                                  reload()
+                                } finally {
+                                  setTrustBusyId(null)
+                                }
+                              })()
+                            }}
+                            className="flex w-full items-center justify-between gap-3 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted"
+                          >
+                            信任只读声明
+                            {svc.trusted && <Check className="size-3.5 text-primary" />}
+                          </button>
+                        )}
                         <button
                           onMouseDown={(e) => {
                             e.preventDefault()
@@ -1107,7 +1132,7 @@ function McpPanel(): React.JSX.Element {
                 </div>
               </div>
               <div className="mt-2">
-                {busyId === svc.id ? (
+                {busyId === svc.id || trustBusyId === svc.id ? (
                   <StatusLine className="mt-0">
                     <Loader2 className="size-3.5 animate-spin" />
                     正在处理…
@@ -1130,32 +1155,7 @@ function McpPanel(): React.JSX.Element {
                   <StatusLine className="text-amber-600">⚠ 工具清单已变更，只读信任已自动关闭</StatusLine>
                 )}
               </div>
-              {svc.enabled && (
-                <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2.5">
-                  <span className="text-[13px] text-muted-foreground">信任只读声明</span>
-                  {trustBusyId === svc.id ? (
-                    <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-                  ) : (
-                    <SwitchBtn
-                      on={svc.trusted}
-                      onToggle={async () => {
-                        if (trustBusyId !== null) return
-                        if (!svc.trusted) {
-                          setConfirmTrust({ id: svc.id, name: svc.name })
-                          return
-                        }
-                        setTrustBusyId(svc.id)
-                        try {
-                          await window.api.mcpSetTrusted({ id: svc.id, trusted: false })
-                          reload()
-                        } finally {
-                          setTrustBusyId(null)
-                        }
-                      }}
-                    />
-                  )}
-                </div>
-              )}
+
             </div>
           ))}
         </div>
