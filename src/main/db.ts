@@ -122,6 +122,18 @@ export function initDb(): void {
   } catch {
     // 列已存在
   }
+  // 迁移（011 Case 4/5 服务级信任）：信任只读声明开关 + 开启时的清单指纹 + 变更标识
+  for (const col of [
+    "ALTER TABLE mcp_service ADD COLUMN trusted INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE mcp_service ADD COLUMN tools_fingerprint TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE mcp_service ADD COLUMN tools_changed INTEGER NOT NULL DEFAULT 0"
+  ]) {
+    try {
+      db.exec(col)
+    } catch {
+      // 列已存在
+    }
+  }
   migrateV1()
   // chunk.kb_id 索引：旧库要等迁移加上列才能建，故放建表段之后
   db.exec('CREATE INDEX IF NOT EXISTS idx_chunk_kb ON chunk (kb_id)')
@@ -832,14 +844,34 @@ export interface McpServiceRow {
   url: string
   headers: Record<string, string> // 认证请求头键值对，明文只在主进程
   enabled: boolean
+  trusted: boolean // 信任只读声明（011 Case 4）：开启后 readOnlyHint 为真的工具免授权确认
+  toolsFingerprint: string // 开启信任时的清单指纹（Case 5 比对基准）
+  toolsChanged: boolean // 已信任服务的清单发生过变更（提示标识，重新开启信任时清除）
 }
 
 export function listMcpServices(): McpServiceRow[] {
   const rows = db
-    .prepare('SELECT id, name, url, headers, enabled FROM mcp_service ORDER BY created_at')
-    .all() as { id: number; name: string; url: string; headers: string; enabled: number }[]
+    .prepare(
+      'SELECT id, name, url, headers, enabled, trusted, tools_fingerprint AS toolsFingerprint, tools_changed AS toolsChanged FROM mcp_service ORDER BY created_at'
+    )
+    .all() as {
+    id: number
+    name: string
+    url: string
+    headers: string
+    enabled: number
+    trusted: number
+    toolsFingerprint: string
+    toolsChanged: number
+  }[]
   // headers 整体加密（里面除了认证凭据没有别的），解开后再 parse
-  return rows.map((r) => ({ ...r, headers: JSON.parse(unseal(r.headers) || '{}'), enabled: !!r.enabled }))
+  return rows.map((r) => ({
+    ...r,
+    headers: JSON.parse(unseal(r.headers) || '{}'),
+    enabled: !!r.enabled,
+    trusted: !!r.trusted,
+    toolsChanged: !!r.toolsChanged
+  }))
 }
 
 export function getMcpService(id: number): McpServiceRow | null {
@@ -857,6 +889,9 @@ export function saveMcpService(input: {
   if (input.id) {
     const cur = getMcpService(input.id)
     const headers = input.headers ?? cur?.headers ?? {}
+    // 连接目标（URL/认证）变了，信任基础不复存在，自动撤销；仅改显示名不影响（011 Case 4）
+    const targetChanged =
+      cur && (cur.url !== input.url || JSON.stringify(cur.headers) !== JSON.stringify(headers))
     db.prepare('UPDATE mcp_service SET name = ?, url = ?, headers = ?, enabled = ? WHERE id = ?').run(
       input.name,
       input.url,
@@ -864,12 +899,29 @@ export function saveMcpService(input: {
       input.enabled ? 1 : 0,
       input.id
     )
+    if (targetChanged) {
+      db.prepare(
+        "UPDATE mcp_service SET trusted = 0, tools_fingerprint = '', tools_changed = 0 WHERE id = ?"
+      ).run(input.id)
+    }
     return input.id
   }
   const r = db
     .prepare('INSERT INTO mcp_service (name, url, headers, enabled, created_at) VALUES (?, ?, ?, ?, ?)')
     .run(input.name, input.url, seal(JSON.stringify(input.headers ?? {})), input.enabled ? 1 : 0, Date.now())
   return Number(r.lastInsertRowid)
+}
+
+// 信任开关（011 Case 4）：开启记当前清单指纹并清变更标识；关闭清空
+export function setMcpTrusted(id: number, trusted: boolean, fingerprint: string): void {
+  db.prepare(
+    "UPDATE mcp_service SET trusted = ?, tools_fingerprint = ?, tools_changed = 0 WHERE id = ?"
+  ).run(trusted ? 1 : 0, trusted ? fingerprint : '', id)
+}
+
+// 已信任服务清单变更（011 Case 5）：自动关信任、置提示标识
+export function markMcpToolsChanged(id: number): void {
+  db.prepare("UPDATE mcp_service SET trusted = 0, tools_fingerprint = '', tools_changed = 1 WHERE id = ?").run(id)
 }
 
 // 存量明文凭据一次性转密文。必须在 app ready 之后调用——safeStorage 此前不可用，

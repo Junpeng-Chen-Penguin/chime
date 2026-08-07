@@ -35,9 +35,9 @@ import {
   type KbSelEntry
 } from './db'
 import { vendorPreset } from './vendors'
-import { listMcpServices, getMcpService, saveMcpService, deleteMcpService, getArtifact } from './db'
+import { listMcpServices, getMcpService, saveMcpService, deleteMcpService, getArtifact, setMcpTrusted } from './db'
 import { TABLE_RENDER_CAP } from './engine/artifact'
-import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
+import { syncMcpServices, getMcpServiceRuntime, testMcpConnection, getMcpFingerprint } from './mcp/client'
 import { kbBusy, busyKbId, runIndexJob, validateRepoPath, getLastSummary, checkChanges } from './kb'
 
 export function registerIpc(): void {
@@ -287,6 +287,8 @@ export function registerIpc(): void {
         url: s.url,
         headersMasked: Object.fromEntries(Object.entries(s.headers).map(([k, v]) => [k, maskApiKey(v)])),
         enabled: s.enabled,
+        trusted: s.trusted,
+        toolsChanged: s.toolsChanged,
         status: s.enabled ? (rt?.status ?? 'error') : null,
         error: rt?.error,
         toolCount: rt?.toolCount ?? 0
@@ -301,6 +303,11 @@ export function registerIpc(): void {
       await syncMcpServices()
     }
   )
+  // 信任只读声明开关（011 Case 4）：开启记当前清单指纹；改动经 sync 生效（trusted 变更触发重连重建工具）
+  ipcMain.handle('mcp:setTrusted', async (_e, input: { id: number; trusted: boolean }) => {
+    setMcpTrusted(input.id, input.trusted, input.trusted ? getMcpFingerprint(input.id) : '')
+    await syncMcpServices()
+  })
   ipcMain.handle('mcp:delete', async (_e, id: number) => {
     deleteMcpService(id)
     await syncMcpServices()

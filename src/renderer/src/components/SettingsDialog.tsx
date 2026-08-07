@@ -863,6 +863,8 @@ function McpPanel(): React.JSX.Element {
   const [confirmDelete, setConfirmDelete] = useState<McpServiceInfo | null>(null)
   const [menuFor, setMenuFor] = useState<number | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null) // 启停进行中的服务（连接/断开有秒级过程，无反馈会误以为没点上）
+  const [trustBusyId, setTrustBusyId] = useState<number | null>(null) // 信任开关处理中
+  const [confirmTrust, setConfirmTrust] = useState<{ id: number; name: string } | null>(null) // 开启信任的确认弹窗（011 Case 4：关键告知走弹窗，页面不放说明文案）
   // 表单态
   const [formName, setFormName] = useState('')
   const [formUrl, setFormUrl] = useState('')
@@ -1124,12 +1126,59 @@ function McpPanel(): React.JSX.Element {
                     连接失败，请检查服务地址，以及公司网络 / VPN 是否可用
                   </StatusLine>
                 )}
+                {svc.enabled && svc.toolsChanged && (
+                  <StatusLine className="text-amber-600">⚠ 工具清单已变更，只读信任已自动关闭</StatusLine>
+                )}
               </div>
+              {svc.enabled && (
+                <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2.5">
+                  <span className="text-[13px] text-muted-foreground">信任只读声明</span>
+                  {trustBusyId === svc.id ? (
+                    <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+                  ) : (
+                    <SwitchBtn
+                      on={svc.trusted}
+                      onToggle={async () => {
+                        if (trustBusyId !== null) return
+                        if (!svc.trusted) {
+                          setConfirmTrust({ id: svc.id, name: svc.name })
+                          return
+                        }
+                        setTrustBusyId(svc.id)
+                        try {
+                          await window.api.mcpSetTrusted({ id: svc.id, trusted: false })
+                          reload()
+                        } finally {
+                          setTrustBusyId(null)
+                        }
+                      }}
+                    />
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
 
+      <ConfirmDialog
+        open={!!confirmTrust}
+        title="开启只读信任？"
+        body="开启后，该服务声明为只读的工具将直接执行、不再逐次确认；写操作仍每次确认。服务的工具清单发生变更时会自动关闭。"
+        confirmText="开启"
+        onConfirm={async () => {
+          const id = confirmTrust!.id
+          setConfirmTrust(null)
+          setTrustBusyId(id)
+          try {
+            await window.api.mcpSetTrusted({ id, trusted: true })
+            reload()
+          } finally {
+            setTrustBusyId(null)
+          }
+        }}
+        onCancel={() => setConfirmTrust(null)}
+      />
       <ConfirmDialog
         open={!!confirmDelete}
         title="删除服务"

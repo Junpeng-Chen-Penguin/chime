@@ -6,7 +6,8 @@ import { app } from 'electron'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
-import { listMcpServices, type McpServiceRow } from '../db'
+import { createHash } from 'crypto'
+import { listMcpServices, markMcpToolsChanged, type McpServiceRow } from '../db'
 
 // SDK 默认 60s 对数据导出类工具不足；有进度通知时重置计时
 export const MCP_CALL_TIMEOUT_MS = 120_000
@@ -16,7 +17,9 @@ export type McpServiceStatus = 'connected' | 'error' | 'auth'
 export interface McpToolInfo {
   serviceId: number
   serviceName: string
+  serviceTrusted: boolean // 服务级信任只读声明（011 Case 4）：分级授权判定用
   name: string
+  title: string // 协议顶层 title（给人看的名称）；服务未声明为空串
   description: string
   inputSchema: Record<string, unknown>
   outputSchema?: Record<string, unknown>
@@ -28,6 +31,7 @@ interface ServiceState {
   client: Client | null
   tools: McpToolInfo[]
   instructions: string // 服务级说明（握手返回，011 Case 6）；未声明为空串
+  fingerprint: string // 当前清单指纹（011 Case 5）
   status: McpServiceStatus
   error?: string
   dirty: boolean // 调用失败后置位，下次调用前重连
@@ -64,15 +68,45 @@ function makeClient(config: McpServiceRow): { client: Client; transport: Streama
 async function refreshTools(st: ServiceState): Promise<void> {
   if (!st.client) return
   const { tools } = await st.client.listTools()
+  // 清单指纹（011 Case 5）：工具名+描述+schema+注解按名排序取哈希；
+  // 连接、重连、listChanged 通知都汇到本函数，比对统一放这里
+  const fp = fingerprintOf(tools as FingerprintInput[])
+  st.fingerprint = fp
+  if (st.config.trusted && st.config.toolsFingerprint && fp !== st.config.toolsFingerprint) {
+    // 已信任服务的清单变了：安全侧优先，先关信任再提示（渲染层经 notify 刷新看到标识）
+    markMcpToolsChanged(st.config.id)
+    st.config = { ...st.config, trusted: false, toolsFingerprint: '', toolsChanged: true }
+  }
   st.tools = tools.map((t) => ({
     serviceId: st.config.id,
     serviceName: st.config.name,
+    serviceTrusted: st.config.trusted,
     name: t.name,
+    title: (t as { title?: string }).title ?? '',
     description: t.description ?? '',
     inputSchema: t.inputSchema as Record<string, unknown>,
     outputSchema: t.outputSchema as Record<string, unknown> | undefined,
     annotations: t.annotations as Record<string, unknown> | undefined
   }))
+}
+
+type FingerprintInput = {
+  name: string
+  description?: string
+  inputSchema?: unknown
+  annotations?: unknown
+}
+
+function fingerprintOf(tools: FingerprintInput[]): string {
+  const canon = [...tools]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((t) => ({ n: t.name, d: t.description ?? '', s: t.inputSchema ?? null, a: t.annotations ?? null }))
+  return createHash('sha256').update(JSON.stringify(canon)).digest('hex')
+}
+
+// 开启信任时记录当前清单指纹（011 Case 4）
+export function getMcpFingerprint(id: number): string {
+  return states.get(id)?.fingerprint ?? ''
 }
 
 async function doConnect(st: ServiceState): Promise<void> {
@@ -121,7 +155,7 @@ export async function syncMcpServices(): Promise<void> {
     const st = states.get(row.id)
     const configChanged = st && JSON.stringify(st.config) !== JSON.stringify(row)
     if (!st || configChanged || st.status !== 'connected') {
-      const next: ServiceState = { config: row, client: st?.client ?? null, tools: [], instructions: '', status: 'error', dirty: false }
+      const next: ServiceState = { config: row, client: st?.client ?? null, tools: [], instructions: '', fingerprint: '', status: 'error', dirty: false }
       states.set(row.id, next)
       pending.push(doConnect(next))
     }
@@ -207,7 +241,7 @@ export async function testMcpConnection(
 ): Promise<{ ok: boolean; toolNames?: string[]; error?: string; auth?: boolean }> {
   let client: Client | null = null
   try {
-    const made = makeClient({ id: 0, name: 'test', url, headers, enabled: true })
+    const made = makeClient({ id: 0, name: 'test', url, headers, enabled: true, trusted: false, toolsFingerprint: '', toolsChanged: false })
     client = made.client
     await client.connect(made.transport)
     const { tools } = await client.listTools()

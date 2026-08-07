@@ -215,6 +215,8 @@ export interface McpServiceInfo {
   url: string
   headersMasked: Record<string, string>
   enabled: boolean
+  trusted: boolean // 信任只读声明（011 Case 4）
+  toolsChanged: boolean // 已信任服务清单变更过（011 Case 5 提示标识）
   status: 'connected' | 'error' | 'auth' | null // null = 已停用
   error?: string
   toolCount: number
@@ -246,6 +248,7 @@ export interface ChimeApi {
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
   onFullscreen: (cb: (v: boolean) => void) => () => void
   mcpList: () => Promise<McpServiceInfo[]>
+  mcpSetTrusted: (input: { id: number; trusted: boolean }) => Promise<void>
   mcpRetry: () => Promise<void>
   setConversationMcpSelection: (input: { id: string; serviceIds: number[] }) => Promise<void>
   getConversationMcpSelection: (id: string) => Promise<number[]>

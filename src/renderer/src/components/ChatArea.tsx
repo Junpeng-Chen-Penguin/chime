@@ -723,6 +723,16 @@ function GenericToolRow({
             {expandable && <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />}
           </button>
         )}
+        {waiting && active && args.length > 0 && (
+          <div className="mt-1 ml-5 flex max-h-[200px] flex-col gap-1 overflow-y-auto">
+            {args.map(([k, v]) => (
+              <div key={k} className="flex gap-3 text-[13px]">
+                <span className="w-[120px] flex-none truncate text-muted-foreground">{k}</span>
+                <span className="min-w-0 break-all">{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {open && expandable && (
           <div className="mt-1.5 ml-5 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
             {args.length > 0 && (
@@ -752,8 +762,8 @@ function GenericToolRow({
   )
 }
 
-// 授权卡（四段式，挂在当前调用行下方）：状态徽标 / 展示名 + 用途（服务描述原样，不经模型转述）/
-// 参数键值全展开（授权卡的目的就是看清即将发生什么，单值过长卡内滚动）/ 拒绝 + 同意（同意为主按钮居右）
+// 授权决策条（011 Case 4 瘦身）：信息在工具行显示一次（title＋参数），这里只剩决策——
+// 一句问句＋允许/拒绝，不重复工具名与参数、不显示工具描述全文（描述是给模型读的材料）
 function AuthCard({
   item,
   onRespond
@@ -761,49 +771,27 @@ function AuthCard({
   item: Extract<TurnItem, { t: 'tool' }>
   onRespond: (toolCallId: string, decision: 'approved' | 'denied') => void
 }): React.JSX.Element {
-  const args = Object.entries(item.args ?? {})
   const respond = (d: 'approved' | 'denied'): void => {
     if (item.id) onRespond(item.id, d)
   }
   return (
-    <div className="ml-4 max-w-[440px] rounded-xl border border-border bg-background px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
-      <div className="flex items-center gap-2 text-[12px] font-medium text-primary">
-        <span className="size-[6px] animate-pulse rounded-full bg-primary" />
-        等待授权
+    <div className="ml-4 flex max-w-[440px] items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
+      <div className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+        <span className="size-[6px] flex-none animate-pulse rounded-full bg-primary" />
+        允许执行这次操作吗？
       </div>
-      <div className="mt-2 text-[14px] font-medium text-foreground">{item.display ?? item.name}</div>
-      {item.desc && (
-        <div className="mt-0.5 line-clamp-3 text-[13px] leading-[1.6] text-muted-foreground">{item.desc}</div>
-      )}
-      {args.length > 0 && (
-        <>
-          <div className="mt-2.5 border-t border-border pt-2.5 text-[12px] font-medium text-muted-foreground">
-            参数
-          </div>
-          <div className="mt-1.5 flex max-h-[200px] flex-col gap-1 overflow-y-auto">
-            {args.map(([k, v]) => (
-              <div key={k} className="flex gap-3 text-[13px]">
-                <span className="w-[104px] flex-none truncate text-muted-foreground">{k}</span>
-                <span className="min-w-0 break-all text-foreground">
-                  {typeof v === 'string' ? v : JSON.stringify(v)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-      <div className="mt-3 flex justify-end gap-2 border-t border-border pt-3">
+      <div className="flex flex-none gap-2">
+        <button
+          onClick={() => respond('approved')}
+          className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+        >
+          允许
+        </button>
         <button
           onClick={() => respond('denied')}
           className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
         >
           拒绝
-        </button>
-        <button
-          onClick={() => respond('approved')}
-          className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-        >
-          同意
         </button>
       </div>
     </div>

@@ -33,10 +33,12 @@ export interface ToolMeta {
   needsAuth: boolean
 }
 
-// MCP 工具动态注册：模型可见名 mcp__服务id__工具名（重名天然隔离），展示名「服务名:工具名」。
+// MCP 工具动态注册：模型可见名 mcp__服务id__工具名（重名天然隔离），展示名 title 优先、
+// 未声明的维持「服务名:工具名」（011 Case 4：内置工具本有中文名，MCP 工具经 title 享受同一待遇）。
 // 结果原样交回：成功为纯文本（存储不归一），失败为 { error }（模型据此重试、换路或说明），
 // 拒绝授权为 { denied }、停止未执行为 { interrupted }（历史映射原样保留文案）。
-// MCP 工具统一需授权：execute 先过卡片队列，同意才发起调用；成功结果过单结果闸（超限落库换摘要）。
+// 分级授权（011 Case 4）：默认一律过卡片队列；服务开了「信任只读声明」且工具声明 readOnlyHint
+// 为真的直接执行（协议默认非只读，未声明按写操作弹卡）。成功结果过单结果闸（超限落库换摘要）。
 export function makeMcpTools(
   signal: AbortSignal,
   cards: CardQueue,
@@ -51,14 +53,18 @@ export function makeMcpTools(
   for (const t of getMcpToolList()) {
     if (!allowed.has(t.serviceId)) continue
     const name = `mcp__${t.serviceId}__${t.name}`
-    meta.set(name, { display: `${t.serviceName}:${t.name}`, desc: t.description, needsAuth: true })
+    const title = t.title || (typeof t.annotations?.title === 'string' ? t.annotations.title : '')
+    const needsAuth = !(t.serviceTrusted && t.annotations?.readOnlyHint === true)
+    meta.set(name, { display: title || `${t.serviceName}:${t.name}`, desc: t.description, needsAuth })
     tools[name] = tool({
       description: t.description,
       inputSchema: jsonSchema(t.inputSchema as Parameters<typeof jsonSchema>[0]),
       execute: async (args, { toolCallId }) => {
-        const decision = await cards.request(toolCallId, signal, t.name)
-        if (decision === 'denied') return { denied: AUTH_DENIED }
-        if (decision === 'aborted') return { interrupted: INTERRUPT_NOT_STARTED }
+        if (needsAuth) {
+          const decision = await cards.request(toolCallId, signal, t.name)
+          if (decision === 'denied') return { denied: AUTH_DENIED }
+          if (decision === 'aborted') return { interrupted: INTERRUPT_NOT_STARTED }
+        }
         const r = await execMcpTool(name, (args ?? {}) as Record<string, unknown>, signal)
         if ('error' in r) return r
         return guardSingle(overflow, toolCallId, name, r.text, r.structured)
