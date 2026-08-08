@@ -517,6 +517,13 @@ app.whenReady().then(() => {
               : enabled.map((s) => s.id)
           }
           db.setConversationMcpSelection(convId, ids)
+          // 服务说明随事件流带给 Tuner：助手看得到它（系统提示词的「已连接服务说明」节），
+          // 判分材料原先没有，助手照说明说的话（如「建议联系所属区域业财」）被判成编造
+          if (ids.length) {
+            const { getMcpInstructions } = await import('./mcp/client')
+            const list = getMcpInstructions(new Set(ids))
+            if (list.length) emit({ type: 'mcp-instructions', list })
+          }
         }
         // 前置动作（Case 12）：首轮对话前按声明顺序直接调工具——不经模型、不弹授权卡、
         // 不进对话历史、不进评分材料；任一步失败即整条用例执行失败（环境没布置好，跑了也不算数）
