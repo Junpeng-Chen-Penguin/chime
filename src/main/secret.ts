@@ -9,7 +9,7 @@
 // 下次写入时自然变成密文；migrateSecrets 在启动时把存量明文与 v1 密文一次性转过来。
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { app, safeStorage } from 'electron'
 
 const PREFIX = 'enc.v2:'
@@ -20,14 +20,16 @@ let cached: Buffer | null = null
 // 密钥文件读不到或坏了就新生成一把——此时旧密文本来也解不开，让用户重填
 function key(): Buffer {
   if (cached) return cached
-  const path = join(app.getPath('userData'), 'secret.key')
+  // 钉在默认用户目录，不跟 userData 走：--data-dir 会把 userData 指到隔离的临时目录，
+  // 密钥跟着走就解不开从真实库复制过去的密文，模型密钥会变成空（2026-08-08 实测全用例无回复）
+  const path = join(app.getPath('appData'), app.getName(), 'secret.key')
   try {
     const k = Buffer.from(readFileSync(path, 'utf8').trim(), 'base64')
     if (k.length !== 32) throw new Error('密钥长度不对')
     cached = k
   } catch {
     cached = randomBytes(32)
-    mkdirSync(app.getPath('userData'), { recursive: true })
+    mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, cached.toString('base64'), { mode: 0o600 })
     chmodSync(path, 0o600) // 文件已存在时 writeFileSync 的 mode 不生效，补一次
   }
