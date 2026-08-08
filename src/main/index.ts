@@ -41,18 +41,20 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  // 全屏时红绿灯隐藏，通知界面调整左上角内边距（收起态不再为红绿灯留空）。
+  // 启动时就在全屏（系统记住上次状态）不会触发 enter-full-screen，show 时补发一次
+  const sendFs = (v: boolean): void => mainWindow.webContents.send('window:fullscreen', v)
+  mainWindow.on('enter-full-screen', () => sendFs(true))
+  mainWindow.on('leave-full-screen', () => sendFs(false))
+
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+    sendFs(mainWindow.isFullScreen())
   })
 
   // 页面缩放锁死 100%：Electron 会按站点持久化用户缩放（Cmd+= 一次就长期偏大），
   // 与 Tuner 的界面一致性依赖两边都不缩放
   mainWindow.webContents.on('did-finish-load', () => mainWindow.webContents.setZoomLevel(0))
-
-  // 全屏时红绿灯隐藏，通知界面调整左上角内边距（收起态不再为红绿灯留空）
-  const sendFs = (v: boolean): void => mainWindow.webContents.send('window:fullscreen', v)
-  mainWindow.on('enter-full-screen', () => sendFs(true))
-  mainWindow.on('leave-full-screen', () => sendFs(false))
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     // 只放行 http(s)，防 file: / 自定义协议被系统打开
