@@ -924,20 +924,20 @@ export function markMcpToolsChanged(id: number): void {
   db.prepare("UPDATE mcp_service SET trusted = 0, tools_fingerprint = '', tools_changed = 1 WHERE id = ?").run(id)
 }
 
-// 存量明文凭据一次性转密文。必须在 app ready 之后调用——safeStorage 此前不可用，
-// 提前跑会因为 canSeal 为 false 直接跳过，明文继续留在库里。
+// 存量凭据一次性转成当前格式：明文加密，v1 密文解开后按 v2 重存（unseal 认两种前缀）。
+// v1 那次解密要过钥匙串，所以必须在 app ready 之后调用；转完之后再不碰钥匙串。
 export function migrateSecrets(): void {
   if (!canSeal()) return
   const provs = db.prepare('SELECT vendor, api_key AS apiKey FROM provider').all() as { vendor: string; apiKey: string }[]
   for (const p of provs) {
     if (p.apiKey && !isSealed(p.apiKey)) {
-      db.prepare('UPDATE provider SET api_key = ? WHERE vendor = ?').run(seal(p.apiKey), p.vendor)
+      db.prepare('UPDATE provider SET api_key = ? WHERE vendor = ?').run(seal(unseal(p.apiKey)), p.vendor)
     }
   }
   const svcs = db.prepare('SELECT id, headers FROM mcp_service').all() as { id: number; headers: string }[]
   for (const s of svcs) {
     if (s.headers && s.headers !== '{}' && !isSealed(s.headers)) {
-      db.prepare('UPDATE mcp_service SET headers = ? WHERE id = ?').run(seal(s.headers), s.id)
+      db.prepare('UPDATE mcp_service SET headers = ? WHERE id = ?').run(seal(unseal(s.headers)), s.id)
     }
   }
 }

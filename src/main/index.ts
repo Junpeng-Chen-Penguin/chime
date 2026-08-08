@@ -681,18 +681,23 @@ app.whenReady().then(() => {
         process.stdout.write(`${cond ? '✅' : '❌'} ${name}\n`)
         if (!cond) process.exitCode = 1
       }
-      assert(canSeal(), '当前环境支持加密（macOS 钥匙串）')
+      assert(canSeal(), '当前环境支持加密（密钥文件可读写）')
       const key = 'sk-1234567890abcdef'
       const sealed = seal(key)
-      assert(isSealed(sealed), '加密后带 enc.v1: 前缀')
+      assert(isSealed(sealed), '加密后带 enc.v2: 前缀')
       assert(!sealed.includes(key), '密文里不含明文')
       assert(unseal(sealed) === key, '解密还原一致')
       assert(seal(sealed) === sealed, '已加密的不再重复加密')
       assert(seal('') === '' && unseal('') === '', '空值原样通过')
       assert(unseal('sk-plain-legacy') === 'sk-plain-legacy', '无前缀的旧明文原样返回')
-      assert(unseal('enc.v1:!!!not-base64!!!') === '', '坏密文解不开时返回空，不抛异常')
+      assert(unseal('enc.v2:!!!not-base64!!!') === '', '坏密文解不开时返回空，不抛异常')
       const headers = JSON.stringify({ Authorization: 'Bearer abc123' })
       assert(unseal(seal(headers)) === headers, 'MCP 认证头整体加解密往返一致')
+      // 迁移路径：v1 密文（钥匙串）能解开、且不算已加密，migrateSecrets 才会重存成 v2
+      const { safeStorage } = await import('electron')
+      const v1 = 'enc.v1:' + safeStorage.encryptString(key).toString('base64')
+      assert(unseal(v1) === key, '旧版钥匙串密文仍能解开')
+      assert(!isSealed(v1), '旧版密文不算当前格式，会被迁移重存')
       app.exit(process.exitCode === 1 ? 1 : 0)
     })()
     return
