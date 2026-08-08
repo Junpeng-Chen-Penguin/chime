@@ -209,7 +209,7 @@ function DefaultModelPane({
                       <span
                         className={cn(
                           'grid size-[18px] flex-none place-items-center rounded-full border',
-                          active ? 'border-primary' : 'border-muted-foreground/40'
+                          active ? 'border-primary' : 'border-input'
                         )}
                       >
                         {active && <span className="size-2.5 rounded-full bg-primary" />}
