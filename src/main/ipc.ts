@@ -35,6 +35,7 @@ import {
   type KbSelEntry
 } from './db'
 import { vendorPreset } from './vendors'
+import { refreshRegistry, windowsForVendor } from './registry'
 import { listMcpServices, getMcpService, saveMcpService, deleteMcpService, getArtifact, setMcpTrusted } from './db'
 import { TABLE_RENDER_CAP } from './engine/artifact'
 import { syncMcpServices, getMcpServiceRuntime, testMcpConnection, getMcpFingerprint } from './mcp/client'
@@ -56,7 +57,7 @@ export function registerIpc(): void {
         enabled: p.enabled,
         models: p.models,
         extraParams: p.extraParams,
-        windows: preset?.windows ?? {},
+        windows: windowsForVendor(p.vendor),
         health: health[p.vendor] ?? { ok: true }
       }
     })
@@ -81,14 +82,16 @@ export function registerIpc(): void {
     const p = getProviderRecord(vendor)
     if (!p || !p.apiKey) return { ok: false, error: '请先填写 API 密钥' }
     try {
-      const ids = await listModels(p.baseUrl, p.apiKey)
+      // 名单以厂商 /models 为准，窗口以登记表为准，两件事各拉各的。
+      // 登记表拉失败不影响检测——窗口退回预置表，名单照常更新
+      const [ids] = await Promise.all([listModels(p.baseUrl, p.apiKey), refreshRegistry()])
       const prev = new Map(p.models.map((m) => [m.id, m]))
       const merged = [
         ...ids.map((id) => ({ id, picked: prev.get(id)?.picked ?? false, offline: false })),
         ...p.models.filter((m) => !ids.includes(m.id)).map((m) => ({ ...m, offline: true }))
       ]
-      // 预置认得的对话模型排前（带窗口值），其余按接口返回顺序
-      const windows = vendorPreset(vendor)?.windows ?? {}
+      // 认得窗口的对话模型排前，其余按接口返回顺序
+      const windows = windowsForVendor(vendor)
       merged.sort((a, b) => (windows[b.id.toLowerCase()] ? 1 : 0) - (windows[a.id.toLowerCase()] ? 1 : 0))
       saveProviderRecord(vendor, { models: merged })
       return { ok: true, models: merged }

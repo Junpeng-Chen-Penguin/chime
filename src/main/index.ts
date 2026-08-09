@@ -19,6 +19,7 @@ import {
 } from './db'
 import { unseal } from './secret'
 import { registerIpc } from './ipc'
+import { warmRegistry } from './registry'
 import { syncMcpServices, onMcpStatusChange, closeAllMcp } from './mcp/client'
 
 function createWindow(): BrowserWindow {
@@ -711,7 +712,7 @@ app.whenReady().then(() => {
       try {
         initDb()
         const { runTurn } = await import('./engine/orchestrator')
-        const model = process.env.CHIME_ENGINE_MODEL || 'deepseek-chat'
+        const model = process.env.CHIME_ENGINE_MODEL || 'deepseek-v4-flash'
         // 隔离目录的库是空的，模型服务配置经环境变量注入
         saveProvider({
           apiKey: process.env.CHIME_ENGINE_KEY ?? '',
@@ -776,7 +777,7 @@ app.whenReady().then(() => {
         const { runTurn } = await import('./engine/orchestrator')
         const { makeSearchTool } = await import('./engine/tools')
         const kb = await import('./kb')
-        const model = process.env.CHIME_ENGINE_MODEL || 'deepseek-chat'
+        const model = process.env.CHIME_ENGINE_MODEL || 'deepseek-v4-flash'
         saveProvider({
           apiKey: process.env.CHIME_ENGINE_KEY ?? '',
           baseUrl: process.env.CHIME_ENGINE_BASE_URL || 'https://api.deepseek.com',
@@ -871,6 +872,8 @@ app.whenReady().then(() => {
   // 跑评估时不该顺手改用户的库
   migrateSecrets()
   registerIpc()
+  // 首装还没有登记表缓存时后台补一次，免得第一轮对话按预置表算预算（拉不到就照旧退预置表）
+  warmRegistry()
 
   // chime-doc://img/?doc=<相对文档路径>&src=<图片相对路径>：按文档所在目录解析，限制在知识库根内
   protocol.handle('chime-doc', (req) => {

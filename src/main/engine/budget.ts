@@ -1,6 +1,7 @@
 // 上下文预算：预算 = 窗口 × 0.75 − 8192；估算按字符折算，用 API 实测用量做全局校准
 
 import { parseModelRef, windowFor as vendorWindow } from '../vendors'
+import { registryContext } from '../registry'
 
 const SAFETY = 0.75
 const OUTPUT_RESERVE = 8192
@@ -8,10 +9,12 @@ const OUTPUT_RESERVE = 8192
 // 单条消息发送上限（字符）：渲染层发送前拦截用同一常量，联调期校准
 export const SEND_CHAR_LIMIT = 30000
 
-// 窗口取值：接口不提供窗口字段（两家均查证），按预置表取、未知模型 128K 兜底
+// 窗口取值：厂商接口不提供窗口字段（两家均查证），先用 models.dev 登记表，
+// 拉不到再退预置表、未知模型 128K 兜底。硬编码表停在旧值时预算会偏小——
+// DeepSeek V4 升到 1M 后预置表仍写 128K，预算被卡在 9 万（2026-08-09 查出）
 export function windowFor(ref: string): number {
   const { vendor, model } = parseModelRef(ref)
-  return vendorWindow(vendor, model)
+  return registryContext(vendor, model) ?? vendorWindow(vendor, model)
 }
 
 export function budgetFor(model: string): number {
