@@ -912,16 +912,22 @@ export function saveMcpService(input: {
   return Number(r.lastInsertRowid)
 }
 
-// 信任开关（011 Case 4）：开启记当前清单指纹并清变更标识；关闭清空
-export function setMcpTrusted(id: number, trusted: boolean, fingerprint: string): void {
-  db.prepare(
-    "UPDATE mcp_service SET trusted = ?, tools_fingerprint = ?, tools_changed = 0 WHERE id = ?"
-  ).run(trusted ? 1 : 0, trusted ? fingerprint : '', id)
+// 信任开关（011 Case 4）：开关只管信任位，指纹基线由连接时统一维护（012 改）
+export function setMcpTrusted(id: number, trusted: boolean): void {
+  db.prepare('UPDATE mcp_service SET trusted = ?, tools_changed = 0 WHERE id = ?').run(trusted ? 1 : 0, id)
 }
 
-// 已信任服务清单变更（011 Case 5）：自动关信任、置提示标识
-export function markMcpToolsChanged(id: number): void {
-  db.prepare("UPDATE mcp_service SET trusted = 0, tools_fingerprint = '', tools_changed = 1 WHERE id = ?").run(id)
+// 首次连上记指纹基线（012）：不再等到开信任才记，没开信任的服务同样要能发现说明被改
+export function setMcpFingerprint(id: number, fingerprint: string): void {
+  db.prepare('UPDATE mcp_service SET tools_fingerprint = ? WHERE id = ?').run(fingerprint, id)
+}
+
+// 清单变更：自动关信任、置提示标识，并把新指纹记为基线（否则每次重连都重复告警）
+export function markMcpToolsChanged(id: number, fingerprint: string): void {
+  db.prepare('UPDATE mcp_service SET trusted = 0, tools_fingerprint = ?, tools_changed = 1 WHERE id = ?').run(
+    fingerprint,
+    id
+  )
 }
 
 // 存量凭据一次性转成当前格式：明文加密，v1 密文解开后按 v2 重存（unseal 认两种前缀）。

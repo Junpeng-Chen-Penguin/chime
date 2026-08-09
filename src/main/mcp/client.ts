@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 import { createHash } from 'crypto'
-import { listMcpServices, markMcpToolsChanged, type McpServiceRow } from '../db'
+import { listMcpServices, markMcpToolsChanged, setMcpFingerprint, type McpServiceRow } from '../db'
 
 // SDK 默认 60s 对数据导出类工具不足；有进度通知时重置计时
 export const MCP_CALL_TIMEOUT_MS = 120_000
@@ -72,10 +72,15 @@ async function refreshTools(st: ServiceState): Promise<void> {
   // 连接、重连、listChanged 通知都汇到本函数，比对统一放这里
   const fp = fingerprintOf(tools as FingerprintInput[])
   st.fingerprint = fp
-  if (st.config.trusted && st.config.toolsFingerprint && fp !== st.config.toolsFingerprint) {
-    // 已信任服务的清单变了：安全侧优先，先关信任再提示（渲染层经 notify 刷新看到标识）
-    markMcpToolsChanged(st.config.id)
-    st.config = { ...st.config, trusted: false, toolsFingerprint: '', toolsChanged: true }
+  if (!st.config.toolsFingerprint) {
+    // 首次连上就记基线，不再等到开信任才记——没开信任的服务改了工具说明同样要看得见。
+    // 工具说明进模型上下文而用户看不到，改动本身是唯一藏不住的信号（012 调研）
+    setMcpFingerprint(st.config.id, fp)
+    st.config = { ...st.config, toolsFingerprint: fp }
+  } else if (fp !== st.config.toolsFingerprint) {
+    // 清单变了：安全侧优先，先关信任（若开着）再提示，并把新指纹记为基线，避免每次重连重复告警
+    markMcpToolsChanged(st.config.id, fp)
+    st.config = { ...st.config, trusted: false, toolsFingerprint: fp, toolsChanged: true }
   }
   st.tools = tools.map((t) => ({
     serviceId: st.config.id,
@@ -102,11 +107,6 @@ function fingerprintOf(tools: FingerprintInput[]): string {
     .sort((a, b) => a.name.localeCompare(b.name))
     .map((t) => ({ n: t.name, d: t.description ?? '', s: t.inputSchema ?? null, a: t.annotations ?? null }))
   return createHash('sha256').update(JSON.stringify(canon)).digest('hex')
-}
-
-// 开启信任时记录当前清单指纹（011 Case 4）
-export function getMcpFingerprint(id: number): string {
-  return states.get(id)?.fingerprint ?? ''
 }
 
 async function doConnect(st: ServiceState): Promise<void> {

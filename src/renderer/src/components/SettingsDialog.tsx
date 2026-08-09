@@ -1152,7 +1152,7 @@ function McpPanel(): React.JSX.Element {
                   </StatusLine>
                 )}
                 {svc.enabled && svc.toolsChanged && (
-                  <StatusLine className="text-amber-600">⚠ 工具清单已变更，只读信任已自动关闭</StatusLine>
+                  <StatusLine className="text-amber-600">⚠ 工具清单已变更</StatusLine>
                 )}
               </div>
 

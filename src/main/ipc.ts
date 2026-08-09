@@ -38,7 +38,7 @@ import { vendorPreset } from './vendors'
 import { refreshRegistry, windowsForVendor } from './registry'
 import { listMcpServices, getMcpService, saveMcpService, deleteMcpService, getArtifact, setMcpTrusted } from './db'
 import { TABLE_RENDER_CAP } from './engine/artifact'
-import { syncMcpServices, getMcpServiceRuntime, testMcpConnection, getMcpFingerprint } from './mcp/client'
+import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
 import { kbBusy, busyKbId, runIndexJob, validateRepoPath, getLastSummary, checkChanges } from './kb'
 
 export function registerIpc(): void {
@@ -306,9 +306,9 @@ export function registerIpc(): void {
       await syncMcpServices()
     }
   )
-  // 信任只读声明开关（011 Case 4）：开启记当前清单指纹；改动经 sync 生效（trusted 变更触发重连重建工具）
+  // 信任只读声明开关（011 Case 4）：只管信任位；指纹基线在连接时统一记（012 改）
   ipcMain.handle('mcp:setTrusted', async (_e, input: { id: number; trusted: boolean }) => {
-    setMcpTrusted(input.id, input.trusted, input.trusted ? getMcpFingerprint(input.id) : '')
+    setMcpTrusted(input.id, input.trusted)
     await syncMcpServices()
   })
   ipcMain.handle('mcp:delete', async (_e, id: number) => {
