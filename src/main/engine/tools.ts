@@ -2,13 +2,31 @@
 // 返回四态：results / 空 results（查不到）/ error（故障）/ notice（暂时不可用）；
 // denied 是工具级闸门——第 4 次检索请求不执行，以工具结果身份告知模型收场。
 
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
 import { tool, jsonSchema } from 'ai'
 import type { Tool } from 'ai'
+import { listKbs } from '../db'
+import { estimateTokens } from '../../shared/chunker'
 import { retrieve } from '../retrieve'
 import { callMcpTool, getMcpToolList } from '../mcp/client'
 import { SEARCH_TOOL_DESCRIPTION } from './prompts'
-import { AUTH_DENIED, INTERRUPT_NOT_STARTED, ASK_INTERRUPTED, type CardQueue, type AskQuestion } from './cards'
-import { guardSingle, grepResult, readResult, FETCH_LIMIT, GREP_HEAD_LIMIT, READ_LINES_DEFAULT, type OverflowCtx } from './overflow'
+import {
+  AUTH_DENIED,
+  INTERRUPT_NOT_STARTED,
+  ASK_INTERRUPTED,
+  type CardQueue,
+  type AskQuestion
+} from './cards'
+import {
+  guardSingle,
+  grepResult,
+  readResult,
+  FETCH_LIMIT,
+  GREP_HEAD_LIMIT,
+  READ_LINES_DEFAULT,
+  type OverflowCtx
+} from './overflow'
 import { createArtifact, type ArtifactRef } from './artifact'
 import type { SourceSnapshot } from './store'
 
@@ -17,7 +35,12 @@ export const SEARCH_LIMIT_PER_TURN = 3 // 工具级闸门（软约束 3 次的�
 // 触顶步保留工具清单、toolChoice: none + 注入收尾指令；过半注入预警——见 orchestrator prepareStep
 export const TOOL_ROUND_HARD_LIMIT = 16
 export const STEP_COUNT_LIMIT = 24 // 防御性兜底步数（v0.4.0 为 10），正常永远先触发硬闸
-const RESULT_CHAR_LIMIT = 6000 // 规则 2：单次工具返回入场上限（字符，联调校准）
+// 规则 2：单次检索返回入场上限（字符）。6000 → 12000（013 Case 4）：上卷后一条可能是整篇
+// （实测最大 3741 字），两篇相关文档同时命中就破 6000，第二篇会被静默丢掉；12000 装得下
+// 三篇最大的整篇。对上卷前的形态零影响——6 片合计约 1200 字，远够不着
+const RESULT_CHAR_LIMIT = 12000
+// 整篇上卷的单篇上限（token）：超过的多为参考表类长文档（如领域模型），用户要的多半是其中一段
+const WHOLE_DOC_TOKEN_MAX = 3000
 
 export interface TurnToolContext {
   pool: SourceSnapshot[] // 本轮检索结果池：多次检索连续编号，回答结束按 [n] 反查
@@ -55,7 +78,11 @@ export function makeMcpTools(
     const name = `mcp__${t.serviceId}__${t.name}`
     const title = t.title || (typeof t.annotations?.title === 'string' ? t.annotations.title : '')
     const needsAuth = !(t.serviceTrusted && t.annotations?.readOnlyHint === true)
-    meta.set(name, { display: title || `${t.serviceName}:${t.name}`, desc: t.description, needsAuth })
+    meta.set(name, {
+      display: title || `${t.serviceName}:${t.name}`,
+      desc: t.description,
+      needsAuth
+    })
     tools[name] = tool({
       description: t.description,
       inputSchema: jsonSchema(t.inputSchema as Parameters<typeof jsonSchema>[0]),
@@ -115,11 +142,17 @@ export function makeGrepResultTool(convId: string) {
     }>({
       type: 'object',
       properties: {
-        resultId: { type: 'number', description: '结果编号（摘要里的 #N，传数字 N）。不传则搜本会话全部已存结果' },
+        resultId: {
+          type: 'number',
+          description: '结果编号（摘要里的 #N，传数字 N）。不传则搜本会话全部已存结果'
+        },
         pattern: { type: 'string', description: '正则表达式，逐行匹配；多个关键词用 | 合并' },
         '-i': { type: 'boolean', description: '忽略大小写（默认区分）' },
         context: { type: 'number', description: '命中行前后各带几行上下文（相当于 grep -C N）' },
-        head_limit: { type: 'number', description: `输出最多多少行（相当于 | head -N），默认 ${GREP_HEAD_LIMIT}` },
+        head_limit: {
+          type: 'number',
+          description: `输出最多多少行（相当于 | head -N），默认 ${GREP_HEAD_LIMIT}`
+        },
         offset: { type: 'number', description: '跳过前 N 行输出再取 head_limit 行（翻页用）' }
       },
       required: ['pattern']
@@ -136,8 +169,14 @@ export function makeReadResultTool(convId: string) {
       type: 'object',
       properties: {
         resultId: { type: 'number', description: '结果编号（摘要里的 #N，传数字 N）' },
-        offset: { type: 'number', description: '起始行号（从 1 起）。仅在内容太大一次读不完时提供' },
-        limit: { type: 'number', description: `读取行数，默认 ${READ_LINES_DEFAULT}。一次给足，不要小读多次` }
+        offset: {
+          type: 'number',
+          description: '起始行号（从 1 起）。仅在内容太大一次读不完时提供'
+        },
+        limit: {
+          type: 'number',
+          description: `读取行数，默认 ${READ_LINES_DEFAULT}。一次给足，不要小读多次`
+        }
       },
       required: ['resultId']
     }),
@@ -191,7 +230,10 @@ export function makeAskTool(signal: AbortSignal, cards: CardQueue) {
                 items: {
                   type: 'object',
                   properties: {
-                    label: { type: 'string', description: '选项文字：简短明确（不超过十几个字），就是答案本身' }
+                    label: {
+                      type: 'string',
+                      description: '选项文字：简短明确（不超过十几个字），就是答案本身'
+                    }
                   },
                   required: ['label']
                 }
@@ -268,7 +310,11 @@ export function makeArtifactTool(
     inputSchema: jsonSchema<{ type: 'table'; title: string; data?: unknown; ref?: ArtifactRef }>({
       type: 'object',
       properties: {
-        type: { type: 'string', enum: ['table'], description: '制品类型，本版仅 table（数据表格）' },
+        type: {
+          type: 'string',
+          enum: ['table'],
+          description: '制品类型，本版仅 table（数据表格）'
+        },
         title: { type: 'string', description: '制品标题，用户视角命名' },
         data: { description: '直接内容：对象数组（键为列名）或规整分隔文本。与 ref 二选一' },
         ref: {
@@ -313,7 +359,9 @@ export function makeSearchTool(ctx: TurnToolContext) {
     execute: async ({ query }) => {
       // 入参校验：模型偶发空参数调用，空检索词不进链路、不耗次数，回一条它能自我纠正的说明
       if (typeof query !== 'string' || !query.trim()) {
-        return { invalid: '缺少检索词：请把要查的内容写成自包含的检索短语，通过 query 参数重新调用' }
+        return {
+          invalid: '缺少检索词：请把要查的内容写成自包含的检索短语，通过 query 参数重新调用'
+        }
       }
       if (ctx.searches >= SEARCH_LIMIT_PER_TURN) {
         return { denied: '已达检索上限，请基于已有结果作答' }
@@ -340,16 +388,73 @@ export function makeSearchTool(ctx: TurnToolContext) {
         }))
         ctx.pool.push(...numbered)
 
-        // 入场截断：超出上限的条目不进模型上下文，并向模型标注（不误把部分当全量）
-        const results: { n: number; file: string; heading: string; content: string }[] = []
-        let used = 0
+        // 按文档上卷（013 Case 4）：同一篇命中 2 片以上，用整篇原文替换这几片——命中多片
+        // 说明整篇就是用户要找的，而未命中的邻段（如「入口与角色」）往往正是缺的那块答案。
+        // 整篇直接读磁盘，不从片拼（切块丢了空行与文件头、超长表格切片带合成表头，拼不回原文）；
+        // 读不到（文件被删改）或整篇超限则保持原片。分组键带库：多库可能有同名同路径文档。
+        // 做在 TOP_SOURCES 截断之后：先截再合，腾出的位置不补——第 7 名之后本就是重排
+        // 判定不够相关的。来源池 pool 保持逐片快照，侧板高亮机制不变
+        type Entry = (typeof numbered)[number] & { whole?: boolean }
+        const groups = new Map<string, typeof numbered>()
         for (const s of numbered) {
-          if (results.length && used + s.content.length > RESULT_CHAR_LIMIT) continue
-          used += s.content.length
-          results.push({ n: s.n, file: s.filePath, heading: s.headingPath, content: s.content })
+          const k = `${s.kbId}:${s.filePath}`
+          const g = groups.get(k)
+          if (g) g.push(s)
+          else groups.set(k, [s])
         }
-        return results.length < numbered.length
-          ? { results, truncated: `已截断，完整结果共 ${numbered.length} 条` }
+        let display: Entry[] = numbered
+        if ([...groups.values()].some((g) => g.length >= 2)) {
+          const roots = new Map(listKbs().map((k) => [k.id, k.rootPath]))
+          const merged: Entry[] = []
+          const seen = new Set<string>()
+          for (const s of numbered) {
+            const k = `${s.kbId}:${s.filePath}`
+            const g = groups.get(k)!
+            if (g.length < 2) {
+              merged.push(s)
+              continue
+            }
+            if (seen.has(k)) continue
+            seen.add(k)
+            let whole: string | null = null
+            const root = roots.get(s.kbId)
+            if (root) {
+              try {
+                const abs = resolve(root, s.filePath)
+                // 与 doc:open 相同的路径逃逸校验
+                if (abs.startsWith(resolve(root))) {
+                  const text = readFileSync(abs, 'utf8')
+                  if (estimateTokens(text) <= WHOLE_DOC_TOKEN_MAX) whole = text
+                }
+              } catch {
+                // 文件被删或被移：保持原片
+              }
+            }
+            if (whole === null) merged.push(...g)
+            else merged.push({ ...s, content: whole, whole: true })
+          }
+          display = merged
+        }
+
+        // 入场截断：超出上限的条目不进模型上下文，并向模型标注丢了什么（不误把部分当全量）
+        const results: { n: number; file: string; heading: string; content: string }[] = []
+        const dropped: string[] = []
+        let used = 0
+        for (const s of display) {
+          if (results.length && used + s.content.length > RESULT_CHAR_LIMIT) {
+            dropped.push(s.whole ? `《${s.filePath}》（整篇）` : `《${s.filePath}》的一段`)
+            continue
+          }
+          used += s.content.length
+          results.push({
+            n: s.n,
+            file: s.filePath,
+            heading: s.whole ? '〔整篇原文〕' : s.headingPath,
+            content: s.content
+          })
+        }
+        return dropped.length
+          ? { results, truncated: `因篇幅上限未能放入：${[...new Set(dropped)].join('、')}` }
           : { results }
       } catch (e) {
         return { error: `检索发生故障：${(e as Error).message.slice(0, 120)}` }

@@ -56,7 +56,7 @@ export const SEARCH_TOOL_DESCRIPTION = `检索本会话关联的知识库（业�
 - query 写成自包含的检索短语：补全对话中的代词和省略（「那 B 项目呢」→「B 项目 授权规则」）
 - query 用文档里会写的业务概念词，不要用「排查步骤」「故障诊断」「怎么处理」这类提问式说法。用户描述一个故障时，把它拆成几种可能的成因，每种用该业务的概念词单独检索一次
 - 第一次结果不足以回答时，换关键词或角度再查；同一轮最多 3 次
-- 每条结果含资料编号、原文片段、来源坐标；回答中用 [编号] 标注引用
+- 每条结果含资料编号、原文片段、来源坐标；回答中用 [编号] 标注引用。同一篇文档命中多处时，该条直接给出整篇原文，来源坐标标〔整篇原文〕——不必为看上下文再检索这一篇
 
 返回语义：
 - 空列表 = 检索正常但知识库中没有相关内容，按「查不到」规则回应
@@ -83,7 +83,8 @@ export function buildSystemPrompt(
   const d = new Date()
   const envLines: string[] = []
   if (kb)
-    for (const lib of kb.libraries) envLines.push(`知识库：${lib.name}（${lib.docCount} 篇文档）——${lib.intro}`)
+    for (const lib of kb.libraries)
+      envLines.push(`知识库：${lib.name}（${lib.docCount} 篇文档）——${lib.intro}`)
   envLines.push(`当前日期：${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`)
 
   const parts = [TRUNK]
@@ -91,7 +92,9 @@ export function buildSystemPrompt(
   if (kb) parts.push(KB_SECTION)
   if (mcpInstructions.length) {
     const blocks = mcpInstructions.map((m) => `## ${m.name}\n${m.instructions}`)
-    parts.push(`# 已连接服务说明\n以下说明由各 MCP 服务自己提供，仅用于理解其工具的使用方式。\n\n${blocks.join('\n\n')}`)
+    parts.push(
+      `# 已连接服务说明\n以下说明由各 MCP 服务自己提供，仅用于理解其工具的使用方式。\n\n${blocks.join('\n\n')}`
+    )
   }
   parts.push(`# 环境信息\n${envLines.join('\n')}`)
   return parts.join('\n\n')
