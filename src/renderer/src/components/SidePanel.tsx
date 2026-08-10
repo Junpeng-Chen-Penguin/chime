@@ -8,27 +8,32 @@ import type { SourceRef } from '../../../preload/index.d'
 
 // 侧板 = 通用容器 + 内容（v0.3.0 架构预留：容器管标题栏 / 关闭 / 动效，内容自行渲染）。
 // 本版两种内容：来源文档阅读（DocContent）/ 制品表格（ArtifactContent，独立文件）。
+// 内容区放开文本选中（013 Case 1）：body 全局 user-select:none，这里整板放开、标题栏单独收回——
+// 在容器上加一次，两种内容与将来新增的内容都自动继承，不必逐个内容组件放开
 export default function SidePanel({
   icon,
   title,
   subtitle,
+  actions,
   onClose,
   children
 }: {
   icon?: React.ReactNode
   title: string
   subtitle?: string
+  actions?: React.ReactNode // 标题栏右侧、关闭按钮左边的操作位（013 Case 3：制品导出）
   onClose: () => void
   children: React.ReactNode
 }): React.JSX.Element {
   return (
-    <div className="animate-in slide-in-from-right-4 flex h-full flex-1 flex-col overflow-hidden rounded-[12px] border border-border bg-background shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)] duration-300 min-w-[380px]">
-      <header className="flex h-[44px] flex-none items-center gap-2.5 border-b border-border px-4">
+    <div className="animate-in slide-in-from-right-4 flex h-full flex-1 flex-col overflow-hidden rounded-[12px] border border-border bg-background shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)] duration-300 min-w-[380px] select-text">
+      <header className="flex h-[44px] flex-none items-center gap-2.5 border-b border-border px-4 select-none">
         {icon}
         <div className="min-w-0 flex-1">
           <div className="truncate text-[15px] leading-tight font-semibold">{title}</div>
           {subtitle && <div className="truncate text-[11px] text-muted-foreground">{subtitle}</div>}
         </div>
+        {actions}
         <button
           onClick={onClose}
           title="关闭"
@@ -50,7 +55,7 @@ export interface DocPanelData {
 }
 
 // ── Mermaid：动态加载 + 串行渲染队列（render 不可并发） ──
-let mermaidP: Promise<typeof import('mermaid')['default']> | null = null
+let mermaidP: Promise<(typeof import('mermaid'))['default']> | null = null
 let mermaidSeq = 0
 let mermaidQueue: Promise<unknown> = Promise.resolve()
 
@@ -70,7 +75,13 @@ function renderMermaid(code: string): Promise<string> {
   return job
 }
 
-function MermaidBlock({ code, onSettled }: { code: string; onSettled: () => void }): React.JSX.Element {
+function MermaidBlock({
+  code,
+  onSettled
+}: {
+  code: string
+  onSettled: () => void
+}): React.JSX.Element {
   const [svg, setSvg] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   useEffect(() => {
@@ -99,7 +110,12 @@ function MermaidBlock({ code, onSettled }: { code: string; onSettled: () => void
     )
   }
   if (!svg) return <div className="my-3 text-[12px] text-muted-foreground">图表渲染中…</div>
-  return <div className="my-3 flex justify-center overflow-x-auto" dangerouslySetInnerHTML={{ __html: svg }} />
+  return (
+    <div
+      className="my-3 flex justify-center overflow-x-auto"
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  )
 }
 
 // 源文件读不到（被删 / 库已移除）但消息里存有片段快照：降级显示片段，说明缘由。
@@ -109,7 +125,8 @@ export function FallbackChunks({ doc }: { doc: DocPanelData }): React.JSX.Elemen
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
       <div className="mb-4 rounded-lg border border-border bg-muted/40 px-3.5 py-2.5 text-[12px] leading-[1.7] text-muted-foreground">
-        {doc.error === 'no-kb' ? '该来源所属的知识库已移除' : '源文件已不在原位置'}，以下是回答当时引用的片段原文。
+        {doc.error === 'no-kb' ? '该来源所属的知识库已移除' : '源文件已不在原位置'}
+        ，以下是回答当时引用的片段原文。
       </div>
       {withContent.map((s) => (
         <div key={s.chunkId} className="mb-4 rounded-lg border border-border p-3.5">
@@ -164,7 +181,8 @@ export function DocContent({ doc }: { doc: DocPanelData }): React.JSX.Element {
   // 块级元素统一包装：按源码行区间判定高亮；嵌套重复上色由 CSS 后代选择器抵消
   const block = (Tag: string) =>
     function Block(props: Record<string, unknown>): React.JSX.Element {
-      const node = props.node as { position?: { start: { line: number }; end: { line: number } } } | undefined
+      const node = props.node as
+        { position?: { start: { line: number }; end: { line: number } } } | undefined
       const pos = node?.position
       const hit = !!pos && ranges.some((r) => pos.start.line <= r.end && pos.end.line >= r.start)
       const { node: _n, ...rest } = props
@@ -179,73 +197,83 @@ export function DocContent({ doc }: { doc: DocPanelData }): React.JSX.Element {
     }
 
   if (doc.error) {
-    if (doc.error !== 'busy' && doc.sources.some((x) => x.content)) return <FallbackChunks doc={doc} />
+    if (doc.error !== 'busy' && doc.sources.some((x) => x.content))
+      return <FallbackChunks doc={doc} />
     return <PanelEmpty error={doc.error} />
   }
   return (
     <div ref={scrollRef} className="doc-md flex-1 overflow-y-auto px-6 py-5">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={{
-          p: block('p'),
-          h1: block('h1'),
-          h2: block('h2'),
-          h3: block('h3'),
-          h4: block('h4'),
-          h5: block('h5'),
-          h6: block('h6'),
-          ul: block('ul'),
-          ol: block('ol'),
-          table: block('table'),
-          blockquote: block('blockquote'),
-          hr: block('hr'),
-          pre: (props) => {
-            // 拦截 mermaid 围栏块 → 渲染为图；其余照常
-            const node = props.node as unknown as {
-              position?: { start: { line: number }; end: { line: number } }
-              children?: { tagName?: string; properties?: { className?: string[] }; children?: { value?: string }[] }[]
-            }
-            const codeNode = node?.children?.[0]
-            const lang = codeNode?.properties?.className?.find((c) => c.startsWith('language-'))
-            const codeText = codeNode?.children?.[0]?.value ?? ''
-            const pos = node?.position
-            const hit = !!pos && ranges.some((r) => pos.start.line <= r.end && pos.end.line >= r.start)
-            const ref = (el: HTMLElement | null): void => {
-              if (el && hit && !anchorTakenRef.current) {
-                anchorTakenRef.current = true
-                anchorRef.current = el
+        components={
+          {
+            p: block('p'),
+            h1: block('h1'),
+            h2: block('h2'),
+            h3: block('h3'),
+            h4: block('h4'),
+            h5: block('h5'),
+            h6: block('h6'),
+            ul: block('ul'),
+            ol: block('ol'),
+            table: block('table'),
+            blockquote: block('blockquote'),
+            hr: block('hr'),
+            pre: (props) => {
+              // 拦截 mermaid 围栏块 → 渲染为图；其余照常
+              const node = props.node as unknown as {
+                position?: { start: { line: number }; end: { line: number } }
+                children?: {
+                  tagName?: string
+                  properties?: { className?: string[] }
+                  children?: { value?: string }[]
+                }[]
               }
-            }
-            if (lang === 'language-mermaid') {
+              const codeNode = node?.children?.[0]
+              const lang = codeNode?.properties?.className?.find((c) => c.startsWith('language-'))
+              const codeText = codeNode?.children?.[0]?.value ?? ''
+              const pos = node?.position
+              const hit =
+                !!pos && ranges.some((r) => pos.start.line <= r.end && pos.end.line >= r.start)
+              const ref = (el: HTMLElement | null): void => {
+                if (el && hit && !anchorTakenRef.current) {
+                  anchorTakenRef.current = true
+                  anchorRef.current = el
+                }
+              }
+              if (lang === 'language-mermaid') {
+                return (
+                  <div ref={ref} className={cn(hit && 'doc-hl')}>
+                    <MermaidBlock code={codeText} onSettled={settle} />
+                  </div>
+                )
+              }
+              const { node: _n, ...rest } = props
               return (
-                <div ref={ref} className={cn(hit && 'doc-hl')}>
-                  <MermaidBlock code={codeText} onSettled={settle} />
-                </div>
+                <pre ref={ref as never} className={cn(hit && 'doc-hl')} {...(rest as object)} />
               )
-            }
-            const { node: _n, ...rest } = props
-            return <pre ref={ref as never} className={cn(hit && 'doc-hl')} {...(rest as object)} />
-          },
-          img: (props) => {
-            const src = String(props.src ?? '')
-            const isAbs = /^(https?:|data:|file:|chime-doc:)/.test(src)
-            const url = isAbs
-              ? src
-              : `chime-doc://img/?kb=${doc.sources[0]?.kbId ?? 0}&doc=${encodeURIComponent(doc.file)}&src=${encodeURIComponent(src)}`
-            return <img src={url} alt={String(props.alt ?? '')} loading="lazy" onLoad={settle} />
-          },
-          a: (props) => (
-            // 只读视图：外链交系统浏览器，内链不跳转
-            <a
-              {...props}
-              onClick={(e) => {
-                e.preventDefault()
-                const href = String(props.href ?? '')
-                if (/^https?:/.test(href)) window.open(href)
-              }}
-            />
-          )
-        } as Components}
+            },
+            img: (props) => {
+              const src = String(props.src ?? '')
+              const isAbs = /^(https?:|data:|file:|chime-doc:)/.test(src)
+              const url = isAbs
+                ? src
+                : `chime-doc://img/?kb=${doc.sources[0]?.kbId ?? 0}&doc=${encodeURIComponent(doc.file)}&src=${encodeURIComponent(src)}`
+              return <img src={url} alt={String(props.alt ?? '')} loading="lazy" onLoad={settle} />
+            },
+            a: (props) => (
+              // 只读视图：外链交系统浏览器，内链不跳转
+              <a
+                {...props}
+                onClick={(e) => {
+                  e.preventDefault()
+                  const href = String(props.href ?? '')
+                  if (/^https?:/.test(href)) window.open(href)
+                }}
+              />
+            )
+          } as Components
+        }
       >
         {doc.content ?? ''}
       </ReactMarkdown>
@@ -268,7 +296,13 @@ function PanelEmpty({ error }: { error: NonNullable<DocPanelData['error']> }): R
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-10 text-center">
       <div className="grid size-12 place-items-center rounded-2xl bg-muted">
-        <Icon className={error === 'busy' ? 'size-[18px] animate-spin text-muted-foreground' : 'size-[18px] text-muted-foreground'} />
+        <Icon
+          className={
+            error === 'busy'
+              ? 'size-[18px] animate-spin text-muted-foreground'
+              : 'size-[18px] text-muted-foreground'
+          }
+        />
       </div>
       <div className="text-[14px] font-semibold">{title}</div>
       <div className="max-w-[300px] text-[12px] leading-[1.7] text-muted-foreground">{desc}</div>

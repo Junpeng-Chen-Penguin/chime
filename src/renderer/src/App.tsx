@@ -5,7 +5,7 @@ import SettingsDialog from './components/SettingsDialog'
 import SidePanel, { DocContent, type DocPanelData } from './components/SidePanel'
 import { ArtifactContent } from './components/ArtifactPanel'
 import ConfirmDialog from './components/ConfirmDialog'
-import { Table2 } from 'lucide-react'
+import { Download, Table2 } from 'lucide-react'
 import { useChat, type Msg, type MsgStatus } from './hooks/useChat'
 import type { Conversation, PersistedMessage } from './types'
 import type { SourceRef, TurnItem, ArtifactView } from '../../preload/index.d'
@@ -39,14 +39,18 @@ function App(): React.JSX.Element {
   // 每个会话各自的输入草稿
   const [inputs, setInputs] = useState<Record<string, string>>({})
   // 知识库：可选库清单 + 草稿会话的勾选意向（发首条消息时定性）
-  const [kbOptions, setKbOptions] = useState<{ id: number; name: string; ready: boolean; building: boolean; folderMissing: boolean }[]>([])
+  const [kbOptions, setKbOptions] = useState<
+    { id: number; name: string; ready: boolean; building: boolean; folderMissing: boolean }[]
+  >([])
   // 侧板：一个容器、单一内容位（来源文档阅读 / 制品表格查看，结构上互斥）
   const [panel, setPanel] = useState<
     { kind: 'doc'; doc: DocPanelData } | { kind: 'artifact'; artifact: ArtifactView } | null
   >(null)
   const [kbDraftSel, setKbDraftSel] = useState<Record<string, { id: number; name: string }[]>>({})
   // 服务连接状态（输入框工具菜单用）：启动加载 + mcp:status 事件刷新
-  const [services, setServices] = useState<{ id: number; name: string; status: 'connected' | 'auth' | 'error' }[]>([])
+  const [services, setServices] = useState<
+    { id: number; name: string; status: 'connected' | 'auth' | 'error' }[]
+  >([])
   // 会话选用的 MCP 服务（Case 8）：按会话缓存，真实会话首次激活时从库读，草稿只在内存
   const [mcpSel, setMcpSel] = useState<Record<string, number[]>>({})
 
@@ -67,7 +71,11 @@ function App(): React.JSX.Element {
       setServices(
         list
           .filter((s) => s.enabled)
-          .map((s) => ({ id: s.id, name: s.name, status: (s.status ?? 'error') as 'connected' | 'auth' | 'error' }))
+          .map((s) => ({
+            id: s.id,
+            name: s.name,
+            status: (s.status ?? 'error') as 'connected' | 'auth' | 'error'
+          }))
       )
     })
   }, [])
@@ -80,7 +88,9 @@ function App(): React.JSX.Element {
   // 激活真实会话时补读它的选用清单（草稿会话默认空、只在内存）
   useEffect(() => {
     if (!activeId || activeId === draftId || activeId in mcpSel) return
-    window.api.getConversationMcpSelection(activeId).then((ids) => setMcpSel((m) => ({ ...m, [activeId]: ids })))
+    window.api
+      .getConversationMcpSelection(activeId)
+      .then((ids) => setMcpSel((m) => ({ ...m, [activeId]: ids })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, draftId])
 
@@ -105,7 +115,9 @@ function App(): React.JSX.Element {
       // 点来源永远打开侧板；异常时由侧板内容区呈现空态（不再用 toast 原地拦截）
       setPanel({
         kind: 'doc',
-        doc: r.ok ? { file, content: r.content, sources } : { file, content: null, sources, error: r.reason }
+        doc: r.ok
+          ? { file, content: r.content, sources }
+          : { file, content: null, sources, error: r.reason }
       })
       setCollapsed(true) // 侧板打开 → 侧边栏自动收起
     },
@@ -188,7 +200,8 @@ function App(): React.JSX.Element {
       if (kbChosen.length) await window.api.setConversationKbSel({ id: activeId, sel: kbChosen })
       // 草稿期勾选的服务随会话落库（Case 8）
       const sel = mcpSel[activeId]
-      if (sel?.length) await window.api.setConversationMcpSelection({ id: activeId, serviceIds: sel })
+      if (sel?.length)
+        await window.api.setConversationMcpSelection({ id: activeId, serviceIds: sel })
       setConversations((cs) => [{ ...c, kbSelection: kbChosen }, ...cs])
       setDraftId(null)
     }
@@ -249,7 +262,9 @@ function App(): React.JSX.Element {
           if (kbLocked) return
           setKbDraftSel((m) => {
             const cur = m[activeId] ?? []
-            const next = cur.some((e) => e.id === id) ? cur.filter((e) => e.id !== id) : [...cur, { id, name }]
+            const next = cur.some((e) => e.id === id)
+              ? cur.filter((e) => e.id !== id)
+              : [...cur, { id, name }]
             return { ...m, [activeId]: next }
           })
         }}
@@ -260,7 +275,8 @@ function App(): React.JSX.Element {
           const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
           setMcpSel((m) => ({ ...m, [activeId]: next }))
           // 真实会话立即持久化；草稿会话等发首条消息时随会话落库
-          if (activeId !== draftId) window.api.setConversationMcpSelection({ id: activeId, serviceIds: next })
+          if (activeId !== draftId)
+            window.api.setConversationMcpSelection({ id: activeId, serviceIds: next })
         }}
         onRetryServices={() => {
           window.api.mcpRetry().then(reloadServices)
@@ -285,14 +301,35 @@ function App(): React.JSX.Element {
 
       {panel && (
         <SidePanel
-          icon={panel.kind === 'artifact' ? <Table2 className="size-4 flex-none text-muted-foreground" /> : undefined}
+          icon={
+            panel.kind === 'artifact' ? (
+              <Table2 className="size-4 flex-none text-muted-foreground" />
+            ) : undefined
+          }
           title={
-            panel.kind === 'doc' ? (panel.doc.file.split('/').pop() ?? '').replace(/\.md$/, '') : panel.artifact.title
+            panel.kind === 'doc'
+              ? (panel.doc.file.split('/').pop() ?? '').replace(/\.md$/, '')
+              : panel.artifact.title
           }
           subtitle={panel.kind === 'doc' ? panel.doc.file : `${panel.artifact.totalRows} 行`}
+          actions={
+            panel.kind === 'artifact' ? (
+              <button
+                onClick={() => void window.api.exportArtifact(panel.artifact.id)}
+                title="导出 CSV（完整数据）"
+                className="grid size-8 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Download className="size-[18px]" />
+              </button>
+            ) : undefined
+          }
           onClose={() => setPanel(null)}
         >
-          {panel.kind === 'doc' ? <DocContent doc={panel.doc} /> : <ArtifactContent artifact={panel.artifact} />}
+          {panel.kind === 'doc' ? (
+            <DocContent doc={panel.doc} />
+          ) : (
+            <ArtifactContent artifact={panel.artifact} />
+          )}
         </SidePanel>
       )}
 

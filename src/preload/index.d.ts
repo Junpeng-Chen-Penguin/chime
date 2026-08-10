@@ -26,8 +26,7 @@ export interface SourceRef {
 }
 
 export type DocOpenResult =
-  | { ok: true; content: string }
-  | { ok: false; reason: 'no-kb' | 'busy' | 'missing' }
+  { ok: true; content: string } | { ok: false; reason: 'no-kb' | 'busy' | 'missing' }
 
 // 检索工具的返回（进 items 的 tool.result）：四态 + 截断标注
 export interface SearchToolResult {
@@ -42,12 +41,12 @@ export interface SearchToolResult {
 
 // 通用工具（MCP 等）的返回：成功为纯文本，失败为 { error }，
 // 拒绝授权为 { denied }，被打断为 { interrupted }（三级文案）
-export type GenericToolResult = string | { error: string } | { denied: string } | { interrupted: string }
+export type GenericToolResult =
+  string | { error: string } | { denied: string } | { interrupted: string }
 
 // 提问卡回应（作答 / 放弃整卡；停止与打字中断走全局停止通道）
 export type AskOutcomePayload =
-  | { kind: 'answers'; answers: { question: string; answer: string | null }[] }
-  | { kind: 'declined' }
+  { kind: 'answers'; answers: { question: string; answer: string | null }[] } | { kind: 'declined' }
 
 // 提问卡的问题结构（询问用户工具的 args.questions）
 export interface AskQuestionSpec {
@@ -243,8 +242,16 @@ export interface ChimeApi {
   sendChat: (payload: { streamId: string; convId: string; text: string; model: string }) => void
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
-  cardRespond: (payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' }) => void
-  askRespond: (payload: { streamId: string; toolCallId: string; outcome: AskOutcomePayload }) => void
+  cardRespond: (payload: {
+    streamId: string
+    toolCallId: string
+    decision: 'approved' | 'denied'
+  }) => void
+  askRespond: (payload: {
+    streamId: string
+    toolCallId: string
+    outcome: AskOutcomePayload
+  }) => void
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
   onFullscreen: (cb: (v: boolean) => void) => () => void
   mcpList: () => Promise<McpServiceInfo[]>
@@ -268,14 +275,26 @@ export interface ChimeApi {
   onMcpStatus: (cb: () => void) => () => void
   getKb: () => Promise<KbInfo>
   kbList: () => Promise<KbCard[]>
-  kbAdd: (input: { name: string; intro: string; path: string }) => Promise<{ ok: boolean; error?: string; id?: number }>
-  kbUpdate: (
-    input: { id: number; name: string; intro: string; path: string }
-  ) => Promise<{ ok: boolean; error?: string; rebuilt?: boolean }>
+  kbAdd: (input: {
+    name: string
+    intro: string
+    path: string
+  }) => Promise<{ ok: boolean; error?: string; id?: number }>
+  kbUpdate: (input: {
+    id: number
+    name: string
+    intro: string
+    path: string
+  }) => Promise<{ ok: boolean; error?: string; rebuilt?: boolean }>
   kbRemove: (id: number) => Promise<{ ok: boolean; error?: string }>
-  kbBuild: (
-    input: { id: number; force?: boolean }
-  ) => Promise<{ ok: boolean; error?: string; confirmRequired?: { deleted: number; kept: number } }>
+  kbBuild: (input: {
+    id: number
+    force?: boolean
+  }) => Promise<{
+    ok: boolean
+    error?: string
+    confirmRequired?: { deleted: number; kept: number }
+  }>
   kbPickFolder: () => Promise<string | null>
   setConversationKbSel: (input: { id: string; sel: KbSelEntry[] }) => Promise<void>
   getConversationKbSel: (id: string) => Promise<KbSelEntry[]>
@@ -289,13 +308,16 @@ export interface ChimeApi {
     extraParams?: Record<string, unknown>
   }) => Promise<void>
   providerDetect: (input: { vendor: string; apiKey: string | null }) => Promise<DetectResult>
-  providerFetchModels: (vendor: string) => Promise<{ ok: boolean; error?: string; models?: VendorModel[] }>
+  providerFetchModels: (
+    vendor: string
+  ) => Promise<{ ok: boolean; error?: string; models?: VendorModel[] }>
   providerPickModel: (input: { vendor: string; id: string; picked: boolean }) => Promise<void>
   providerGetDefault: () => Promise<string>
   providerSetDefault: (ref: string) => Promise<void>
   providerMenu: () => Promise<VendorMenuGroup[]>
   openDoc: (input: { kbId: number; filePath: string }) => Promise<DocOpenResult>
   getArtifact: (id: number) => Promise<ArtifactView | null>
+  exportArtifact: (id: number) => Promise<{ ok: boolean }>
   onKbProgress: (cb: (p: KbProgress) => void) => () => void
 }
 

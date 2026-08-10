@@ -20,10 +20,12 @@ function fromStructured(data: unknown): Table | null {
     ? data
     : data && typeof data === 'object'
       ? // 单对象一行成表；对象内首个数组字段视为行集（MCP structuredContent 常见形状 { 字段: [...] }）
-        (Object.values(data).find((v) => Array.isArray(v)) as unknown[] | undefined) ?? [data]
+        ((Object.values(data).find((v) => Array.isArray(v)) as unknown[] | undefined) ?? [data])
       : null
   if (!arr?.length) return null
-  const objs = arr.filter((r): r is Record<string, unknown> => !!r && typeof r === 'object' && !Array.isArray(r))
+  const objs = arr.filter(
+    (r): r is Record<string, unknown> => !!r && typeof r === 'object' && !Array.isArray(r)
+  )
   if (!objs.length) return null
   const keys = [...new Set(objs.flatMap((o) => Object.keys(o)))]
   if (!keys.length) return null
@@ -42,11 +44,18 @@ function fromText(text: string): Table | null {
       // 不是 JSON，继续走分隔文本
     }
   }
-  const lines = t.split('\n').map((l) => l.trim()).filter(Boolean)
+  const lines = t
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
   if (lines.length < 2) return null
   const delim = ['|', '\t', ','].find((d) => lines[0].includes(d) && lines[1].includes(d))
   if (!delim) return null
-  const split = (l: string): string[] => l.split(delim).map((c) => c.trim()).filter((c) => c !== '')
+  const split = (l: string): string[] =>
+    l
+      .split(delim)
+      .map((c) => c.trim())
+      .filter((c) => c !== '')
   const first = split(lines[0])
   if (first.length < 2) return null
   // 「标签 值」逐格标注（如 `租户 A公司 | 周期 2026-06`）：每格以同一批标签开头 → 标签为列
@@ -80,7 +89,10 @@ function fromText(text: string): Table | null {
 }
 
 // 引用取数：按结果编号取内容（可带位置范围 / 关键词行筛选），与查结果集共用结果库读取
-function resolveRef(convId: string, ref: ArtifactRef): { structured?: unknown; text?: string } | { error: string } {
+function resolveRef(
+  convId: string,
+  ref: ArtifactRef
+): { structured?: unknown; text?: string } | { error: string } {
   const id = Number(ref.resultId)
   if (!Number.isInteger(id)) return { error: '数据引用缺少 resultId' }
   const row = getToolResult(id, convId)
@@ -96,7 +108,10 @@ function resolveRef(convId: string, ref: ArtifactRef): { structured?: unknown; t
   let text = row.content
   if (ref.keyword) {
     const kw = String(ref.keyword)
-    text = text.split('\n').filter((l) => l.includes(kw)).join('\n')
+    text = text
+      .split('\n')
+      .filter((l) => l.includes(kw))
+      .join('\n')
     if (!text) return { error: `结果 #${id} 中没有包含「${kw}」的行` }
   } else if (ref.start !== undefined || ref.length !== undefined) {
     const start = Math.max(0, Number(ref.start ?? 0) || 0)
@@ -104,6 +119,23 @@ function resolveRef(convId: string, ref: ArtifactRef): { structured?: unknown; t
     text = text.slice(start, start + len)
   }
   return { text }
+}
+
+// CSV 导出（013 Case 3）：开头加 BOM 让 Excel 按 UTF-8 解，否则中文乱码；
+// 值含逗号/引号/换行的按 CSV 标准加引号转义，引号写两遍。
+// Excel 对数字的自作主张（吃前导零、超 15 位变科学计数法）不处理，值原样输出——
+// 处理它（写成 ="007"）会让所有其他软件里的数据都变脏，理由见产品方案
+export function artifactCsv(
+  columns: { key: string; label: string }[],
+  rows: Record<string, unknown>[]
+): string {
+  const esc = (v: unknown): string => {
+    const s = v === undefined || v === null ? '' : String(v)
+    return /[",\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s
+  }
+  const lines = [columns.map((c) => esc(c.label)).join(',')]
+  for (const row of rows) lines.push(columns.map((c) => esc(row[c.key])).join(','))
+  return '\uFEFF' + lines.join('\r\n') + '\r\n'
 }
 
 // 生成制品：解析成功 → 物化落库，返回制品信息；解析不动 → 不生成（错误交回模型换路）。
@@ -124,6 +156,11 @@ export function createArtifact(
     return { error: '缺少数据：data（直接内容）或 ref（数据引用）必须提供一个' }
   }
   if (!table) return { error: '数据无法解析为表格，未生成制品' }
-  const id = insertArtifact({ conversationId: convId, title, columns: table.columns, rows: table.rows })
+  const id = insertArtifact({
+    conversationId: convId,
+    title,
+    columns: table.columns,
+    rows: table.rows
+  })
   return { id, title, rowCount: table.rows.length }
 }

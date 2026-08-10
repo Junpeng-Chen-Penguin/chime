@@ -2,7 +2,14 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 // 统一事件通道 chat:event：一轮 = turn-start → item-* 序列 → turn-done（结构见主进程 engine）
 interface ChatEvent {
-  type: 'turn-start' | 'item-start' | 'item-delta' | 'item-done' | 'item-update' | 'turn-done' | 'notice'
+  type:
+    | 'turn-start'
+    | 'item-start'
+    | 'item-delta'
+    | 'item-done'
+    | 'item-update'
+    | 'turn-done'
+    | 'notice'
   streamId: string
   [k: string]: unknown
 }
@@ -17,7 +24,8 @@ const api = {
     enabled?: boolean
     extraParams?: Record<string, unknown>
   }) => ipcRenderer.invoke('provider:save', input),
-  providerDetect: (input: { vendor: string; apiKey: string | null }) => ipcRenderer.invoke('provider:detect', input),
+  providerDetect: (input: { vendor: string; apiKey: string | null }) =>
+    ipcRenderer.invoke('provider:detect', input),
   providerFetchModels: (vendor: string) => ipcRenderer.invoke('provider:fetchModels', vendor),
   providerPickModel: (input: { vendor: string; id: string; picked: boolean }) =>
     ipcRenderer.invoke('provider:pickModel', input),
@@ -42,15 +50,19 @@ const api = {
     ipcRenderer.send('chat:retry', payload),
   stopChat: (streamId: string) => ipcRenderer.send('chat:stop', streamId),
   // 授权卡回应（同意 / 拒绝）
-  cardRespond: (payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' }) =>
-    ipcRenderer.send('chat:card-response', payload),
+  cardRespond: (payload: {
+    streamId: string
+    toolCallId: string
+    decision: 'approved' | 'denied'
+  }) => ipcRenderer.send('chat:card-response', payload),
   // 提问卡回应（作答 / 直接打字 / 放弃整卡）
   askRespond: (payload: { streamId: string; toolCallId: string; outcome: unknown }) =>
     ipcRenderer.send('chat:ask-response', payload),
 
   // MCP 服务：mcp:status 为无载荷提醒，收到后重新拉列表即可
   mcpList: () => ipcRenderer.invoke('mcp:list'),
-  mcpSetTrusted: (input: { id: number; trusted: boolean }) => ipcRenderer.invoke('mcp:setTrusted', input),
+  mcpSetTrusted: (input: { id: number; trusted: boolean }) =>
+    ipcRenderer.invoke('mcp:setTrusted', input),
   mcpRetry: () => ipcRenderer.invoke('mcp:retry'),
   mcpSave: (input: {
     id?: number
@@ -70,8 +82,10 @@ const api = {
 
   getKb: () => ipcRenderer.invoke('kb:get'),
   kbList: () => ipcRenderer.invoke('kb:list'),
-  kbAdd: (input: { name: string; intro: string; path: string }) => ipcRenderer.invoke('kb:add', input),
-  kbUpdate: (input: { id: number; name: string; intro: string; path: string }) => ipcRenderer.invoke('kb:update', input),
+  kbAdd: (input: { name: string; intro: string; path: string }) =>
+    ipcRenderer.invoke('kb:add', input),
+  kbUpdate: (input: { id: number; name: string; intro: string; path: string }) =>
+    ipcRenderer.invoke('kb:update', input),
   kbRemove: (id: number) => ipcRenderer.invoke('kb:remove', id),
   kbBuild: (input: { id: number; force?: boolean }) => ipcRenderer.invoke('kb:build', input),
   kbPickFolder: () => ipcRenderer.invoke('kb:pickFolder'),
@@ -85,6 +99,7 @@ const api = {
     ipcRenderer.invoke('conv:getMcpSel', id),
   openDoc: (input: { kbId: number; filePath: string }) => ipcRenderer.invoke('doc:open', input),
   getArtifact: (id: number) => ipcRenderer.invoke('artifact:get', id),
+  exportArtifact: (id: number) => ipcRenderer.invoke('artifact:export', id),
   onKbProgress: (cb: (p: unknown) => void): (() => void) => {
     const h = (_e: IpcRendererEvent, p: unknown): void => cb(p)
     ipcRenderer.on('kb:progress', h)

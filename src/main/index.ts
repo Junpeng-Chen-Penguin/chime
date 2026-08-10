@@ -154,14 +154,21 @@ app.whenReady().then(() => {
         let kbs: { name: string; ready: boolean }[] = []
         // url/headers（明文）供 Tuner 直调工具通道使用（011 Case 8：reset/setup/重放不经模型）——
         // Tuner 与 Chime 同机同用户，凭据本就经 --report 的 vendors 明文交给 Tuner（Case 13 同一信任边界）
-        let mcpServices: { name: string; enabled: boolean; url?: string; headers?: Record<string, string> }[] = []
+        let mcpServices: {
+          name: string
+          enabled: boolean
+          url?: string
+          headers?: Record<string, string>
+        }[] = []
         try {
           const rdb = new Database(join(app.getPath('userData'), 'chime.db'), {
             readonly: true,
             fileMustExist: true
           })
           try {
-            const rows = rdb.prepare('SELECT vendor, api_key, base_url, enabled, models FROM provider').all() as {
+            const rows = rdb
+              .prepare('SELECT vendor, api_key, base_url, enabled, models FROM provider')
+              .all() as {
               vendor: string
               api_key: string
               base_url: string
@@ -171,22 +178,35 @@ app.whenReady().then(() => {
             vendors = rows.map((r) => {
               let picked: string[] = []
               try {
-                picked = (JSON.parse(r.models) as { id: string; picked: boolean }[]).filter((m) => m.picked).map((m) => m.id)
+                picked = (JSON.parse(r.models) as { id: string; picked: boolean }[])
+                  .filter((m) => m.picked)
+                  .map((m) => m.id)
               } catch {
                 // 坏数据按空
               }
               // 这里绕开 db.ts 直读只读连接，解密要自己来
-              return { vendor: r.vendor, apiKey: unseal(r.api_key) || null, baseUrl: r.base_url, enabled: !!r.enabled, models: picked }
+              return {
+                vendor: r.vendor,
+                apiKey: unseal(r.api_key) || null,
+                baseUrl: r.base_url,
+                enabled: !!r.enabled,
+                models: picked
+              }
             })
-            const dm = rdb.prepare("SELECT value FROM settings WHERE key = 'default_model'").get() as { value: string } | undefined
+            const dm = rdb
+              .prepare("SELECT value FROM settings WHERE key = 'default_model'")
+              .get() as { value: string } | undefined
             defaultModel = dm?.value ?? null
           } catch {
             // 旧库结构：按未配置处理
           }
           try {
-            kbs = (rdb.prepare('SELECT name, indexed_at FROM kb').all() as { name: string; indexed_at: number | null }[]).map(
-              (k) => ({ name: k.name, ready: !!k.indexed_at })
-            )
+            kbs = (
+              rdb.prepare('SELECT name, indexed_at FROM kb').all() as {
+                name: string
+                indexed_at: number | null
+              }[]
+            ).map((k) => ({ name: k.name, ready: !!k.indexed_at }))
           } catch {
             // 旧库无多库表
           }
@@ -224,7 +244,9 @@ app.whenReady().then(() => {
           }
         }
         // 旧字段兼容（Tuner 换版期）：以默认模型所属服务商拼单套形状
-        const defVendor = defaultModel?.includes(':') ? defaultModel.slice(0, defaultModel.indexOf(':')) : 'deepseek'
+        const defVendor = defaultModel?.includes(':')
+          ? defaultModel.slice(0, defaultModel.indexOf(':'))
+          : 'deepseek'
         const defRow = vendors.find((v) => v.vendor === defVendor) ?? vendors[0]
         process.stdout.write(
           JSON.stringify({
@@ -270,7 +292,11 @@ app.whenReady().then(() => {
           stopAfterMs?: number // 停止路径自测：每轮开跑后定时触发停止（同用户点停止）
           // 前置条件与策略（v1.1.1）：授权按策略消费（缺省全通过），提问按应答档案作答（缺省整卡跳过）
           policy?: {
-            auth?: 'approve_all' | 'deny_all' | { approve: string[] } | { deny: { tool?: string; nth?: number }[] }
+            auth?:
+              | 'approve_all'
+              | 'deny_all'
+              | { approve: string[] }
+              | { deny: { tool?: string; nth?: number }[] }
           }
           // agent 应答（011 Case 7）：messages 只含 opening 一条，消费完转 stdin 逐轮取下一句；
           // 提问卡经 ask-request 事件转模拟用户作答；EOF＝结束信号
@@ -283,7 +309,9 @@ app.whenReady().then(() => {
         // 带 url 且库内无同名服务时新建（旧对象写法兼容）
         type McpDecl = { name: string; url?: string; headers?: Record<string, string> }
         const mcpDecls: McpDecl[] | null = Array.isArray(spec.mcp)
-          ? (spec.mcp as unknown[]).map((x) => (typeof x === 'string' ? { name: x } : (x as McpDecl)))
+          ? (spec.mcp as unknown[]).map((x) =>
+              typeof x === 'string' ? { name: x } : (x as McpDecl)
+            )
           : null
         {
           const existing = listMcpServices()
@@ -298,7 +326,12 @@ app.whenReady().then(() => {
                   app.exit(1)
                   return
                 }
-                saveMcpService({ name: s.name, url: s.url, headers: s.headers ?? {}, enabled: true })
+                saveMcpService({
+                  name: s.name,
+                  url: s.url,
+                  headers: s.headers ?? {},
+                  enabled: true
+                })
                 continue
               }
               if (!found.enabled && !s.url && !s.headers) {
@@ -308,7 +341,9 @@ app.whenReady().then(() => {
               }
               // headers 声明即覆盖（同一快照先后跑不同身份不能串）；url 缺省取原值；headers 传 null 保持现值
               const needsUpdate =
-                (s.url !== undefined && found.url !== s.url) || !found.enabled || s.headers !== undefined
+                (s.url !== undefined && found.url !== s.url) ||
+                !found.enabled ||
+                s.headers !== undefined
               if (needsUpdate) {
                 saveMcpService({
                   id: found.id,
@@ -322,7 +357,14 @@ app.whenReady().then(() => {
           } else if (!spec.mcp) {
             // 没声明就停用全部服务：前一用例注册的服务不能泄漏进「无手段」类用例
             for (const e of existing) {
-              if (e.enabled) saveMcpService({ id: e.id, name: e.name, url: e.url, headers: null, enabled: false })
+              if (e.enabled)
+                saveMcpService({
+                  id: e.id,
+                  name: e.name,
+                  url: e.url,
+                  headers: null,
+                  enabled: false
+                })
             }
           }
         }
@@ -356,7 +398,9 @@ app.whenReady().then(() => {
           }
           const { EMBED_MODEL_ID } = await import('./model')
           if (pool.some((k) => k.embedModel && k.embedModel !== EMBED_MODEL_ID)) {
-            process.stderr.write('[eval] ERROR 知识库索引与当前 embed 模型不匹配，请在正式 Chime 重建索引\n')
+            process.stderr.write(
+              '[eval] ERROR 知识库索引与当前 embed 模型不匹配，请在正式 Chime 重建索引\n'
+            )
             app.exit(1)
             return
           }
@@ -397,7 +441,10 @@ app.whenReady().then(() => {
         // 轮中到达，共用一条 stdin；轮间才读会把轮中的提问卡回填堵死，必须常驻按 type 路由。
         // 结束信号＝Tuner 关闭 stdin（EOF）；Tuner 崩溃同样是 EOF，一条路管到底
         const agentMode = spec.driver === 'agent'
-        type AskAnswerMsg = { answers?: { question: string; answer: string | null }[]; skip?: boolean }
+        type AskAnswerMsg = {
+          answers?: { question: string; answer: string | null }[]
+          skip?: boolean
+        }
         const askWaiters = new Map<string, (m: AskAnswerMsg) => void>()
         const msgQueue: (string | null)[] = []
         let msgWaiter: ((m: string | null) => void) | null = null
@@ -416,7 +463,11 @@ app.whenReady().then(() => {
           rl.on('line', (line) => {
             if (!line.trim().startsWith('{')) return
             try {
-              const m = JSON.parse(line) as { type?: string; text?: string; toolCallId?: string } & AskAnswerMsg
+              const m = JSON.parse(line) as {
+                type?: string
+                text?: string
+                toolCallId?: string
+              } & AskAnswerMsg
               if (m.type === 'user-message' && typeof m.text === 'string') pushMsg(m.text)
               else if (m.type === 'ask-answer' && m.toolCallId) {
                 const w = askWaiters.get(m.toolCallId)
@@ -469,17 +520,39 @@ app.whenReady().then(() => {
               return new Promise((resolveAsk) => {
                 askWaiters.set(toolCallId, (m) => {
                   if (!m.answers?.length || m.skip) {
-                    emit({ type: 'card-answered', streamId: sid, kind, toolCallId, action: 'skip', source: 'sim-user' })
+                    emit({
+                      type: 'card-answered',
+                      streamId: sid,
+                      kind,
+                      toolCallId,
+                      action: 'skip',
+                      source: 'sim-user'
+                    })
                     resolveAsk({ kind: 'declined' })
                   } else {
-                    emit({ type: 'card-answered', streamId: sid, kind, toolCallId, action: 'answer', source: 'sim-user', detail: m.answers })
+                    emit({
+                      type: 'card-answered',
+                      streamId: sid,
+                      kind,
+                      toolCallId,
+                      action: 'answer',
+                      source: 'sim-user',
+                      detail: m.answers
+                    })
                     resolveAsk({ kind: 'answers', answers: m.answers })
                   }
                 })
               })
             }
             // 脚本模式（011 Case 11 应答档案下线）：提问卡一律整卡跳过，助手按"未回答"继续
-            emit({ type: 'card-answered', streamId: currentStreamId, kind, toolCallId, action: 'skip', source: 'policy' })
+            emit({
+              type: 'card-answered',
+              streamId: currentStreamId,
+              kind,
+              toolCallId,
+              action: 'skip',
+              source: 'policy'
+            })
             return { kind: 'declined' }
           })
         }
@@ -489,15 +562,24 @@ app.whenReady().then(() => {
           createConversation(convId, model, Date.now())
           // 环境快照（kb === true）：选中全部已构建的库；string[] 按名选中；对象形式按名选中该库
           if (spec.kb === true) {
-            setConversationKbSelection(convId, listKbsDb().filter((k) => k.indexedAt).map((k) => ({ id: k.id, name: k.name })))
+            setConversationKbSelection(
+              convId,
+              listKbsDb()
+                .filter((k) => k.indexedAt)
+                .map((k) => ({ id: k.id, name: k.name }))
+            )
           } else if (Array.isArray(spec.kb)) {
             const names = spec.kb as string[]
             setConversationKbSelection(
               convId,
-              listKbsDb().filter((k) => names.includes(k.name)).map((k) => ({ id: k.id, name: k.name }))
+              listKbsDb()
+                .filter((k) => names.includes(k.name))
+                .map((k) => ({ id: k.id, name: k.name }))
             )
           } else if (spec.kb) {
-            const named = listKbsDb().find((k) => k.name === (spec.kb as unknown as { name: string }).name)
+            const named = listKbsDb().find(
+              (k) => k.name === (spec.kb as unknown as { name: string }).name
+            )
             setConversationKbSelection(convId, named ? [{ id: named.id, name: named.name }] : [])
           } else {
             setConversationKbSelection(convId, [])
@@ -533,19 +615,34 @@ app.whenReady().then(() => {
             const step = spec.setup[i]
             // 工具名写法与用例断言一致（Case 4）：MCP 工具「服务名:工具名」
             const [svcName, toolName] = step.tool.includes(':')
-              ? [step.tool.slice(0, step.tool.indexOf(':')), step.tool.slice(step.tool.indexOf(':') + 1)]
+              ? [
+                  step.tool.slice(0, step.tool.indexOf(':')),
+                  step.tool.slice(step.tool.indexOf(':') + 1)
+                ]
               : ['', step.tool]
-            const found = tools.find((t) => t.name === toolName && (svcName === '' || t.serviceName === svcName))
+            const found = tools.find(
+              (t) => t.name === toolName && (svcName === '' || t.serviceName === svcName)
+            )
             if (!found) {
-              emit({ type: 'setup-failed', step: i + 1, tool: step.tool, error: '工具不存在或所属服务未连接' })
-              process.stderr.write(`[eval] SETUP-FAILED 第${i + 1}步 ${step.tool}: 工具不存在或所属服务未连接\n`)
+              emit({
+                type: 'setup-failed',
+                step: i + 1,
+                tool: step.tool,
+                error: '工具不存在或所属服务未连接'
+              })
+              process.stderr.write(
+                `[eval] SETUP-FAILED 第${i + 1}步 ${step.tool}: 工具不存在或所属服务未连接\n`
+              )
               app.exit(1)
               return
             }
             try {
               const r = await callMcpTool(found.serviceId, found.name, step.args ?? {})
               if (r.isError) {
-                const text = typeof r.content === 'string' ? r.content : JSON.stringify(r.content).slice(0, 300)
+                const text =
+                  typeof r.content === 'string'
+                    ? r.content
+                    : JSON.stringify(r.content).slice(0, 300)
                 emit({ type: 'setup-failed', step: i + 1, tool: step.tool, error: text })
                 process.stderr.write(`[eval] SETUP-FAILED 第${i + 1}步 ${step.tool}: ${text}\n`)
                 app.exit(1)
@@ -553,7 +650,12 @@ app.whenReady().then(() => {
               }
               emit({ type: 'setup-call', step: i + 1, tool: step.tool, ok: true })
             } catch (e) {
-              emit({ type: 'setup-failed', step: i + 1, tool: step.tool, error: String(e).slice(0, 300) })
+              emit({
+                type: 'setup-failed',
+                step: i + 1,
+                tool: step.tool,
+                error: String(e).slice(0, 300)
+              })
               process.stderr.write(`[eval] SETUP-FAILED 第${i + 1}步 ${step.tool}: ${String(e)}\n`)
               app.exit(1)
               return
@@ -603,13 +705,21 @@ app.whenReady().then(() => {
           if (!cond) process.exitCode = 1
         }
         // 单结果闸：超限落库换摘要
-        const ctx: import('./engine/overflow').OverflowCtx = { convId: conv, refs: new Map(), turnFullChars: 0 }
+        const ctx: import('./engine/overflow').OverflowCtx = {
+          convId: conv,
+          refs: new Map(),
+          turnFullChars: 0
+        }
         const big = 'x'.repeat(ov.RESULT_LIMIT + 5)
         const s1 = ov.guardSingle(ctx, 'c1', 'tool_a', big)
         assert(s1.includes('结果编号 #') && s1.length < 3000, '单结果闸：超限换摘要')
         assert(ov.guardSingle(ctx, 'c2', 'tool_a', 'short') === 'short', '单结果闸：未超限原样放行')
         // 总量闸：批内从大到小落库至回线内，PRD 例：基线 4 万 + 批 [B=5万, C=3万]，上限 10 万 → 落 B、C 放行
-        const ctx2: import('./engine/overflow').OverflowCtx = { convId: conv, refs: new Map(), turnFullChars: 0 }
+        const ctx2: import('./engine/overflow').OverflowCtx = {
+          convId: conv,
+          refs: new Map(),
+          turnFullChars: 0
+        }
         const batch = [
           { toolCallId: 'b', toolName: 'tool_b', text: 'b'.repeat(50_000) },
           { toolCallId: 'c', toolName: 'tool_c', text: 'c'.repeat(30_000) }
@@ -620,47 +730,107 @@ app.whenReady().then(() => {
         // 取数两工具（07-13 二次修订：grep_result / read_result，形态仿 grep -n / 按行读）
         const bigId = ctx.refs.get('c1')!
         const read = ov.readResult(conv, { resultId: bigId, offset: 1, limit: 1 })
-        assert(typeof read === 'string' && read.includes('x'.repeat(20)) && read.includes('1:'), '读结果集：按行读取带行号')
+        assert(
+          typeof read === 'string' && read.includes('x'.repeat(20)) && read.includes('1:'),
+          '读结果集：按行读取带行号'
+        )
         const idB = ctx2.refs.get('b')!
         const hit = ov.grepResult(conv, { resultId: idB, pattern: 'b{10}' })
         assert(typeof hit === 'string' && hit.includes('命中'), '搜结果集：正则匹配')
         // 压缩单行 JSON：落库时格式化多行；交替正则一次搜多词，命中行冒号、上下文行连字符、块间 --
         const mini = JSON.stringify(
-          Array.from({ length: 1500 }, (_, i) => ({ 租户: `t${i}`, 负责人: i === 700 ? '陈某' : i === 900 ? '李某' : '别人' }))
+          Array.from({ length: 1500 }, (_, i) => ({
+            租户: `t${i}`,
+            负责人: i === 700 ? '陈某' : i === 900 ? '李某' : '别人'
+          }))
         )
         const s3 = ov.guardSingle(ctx, 'c3', 'tool_a', mini)
         assert(s3.includes('行。') || / \d+ 行/.test(s3), '单结果闸：摘要带行数')
         const jid = ctx.refs.get('c3')!
         const found = ov.grepResult(conv, { resultId: jid, pattern: '陈某|李某', context: 1 })
         assert(
-          typeof found === 'string' && found.includes('命中 2 处') && /\d+:.*陈某/.test(found) && /\d+-/.test(found) && found.includes('--'),
+          typeof found === 'string' &&
+            found.includes('命中 2 处') &&
+            /\d+:.*陈某/.test(found) &&
+            /\d+-/.test(found) &&
+            found.includes('--'),
           '搜结果集：交替正则多词一次搜，命中带行号、上下文连字符、块间分隔'
         )
-        const paged = ov.grepResult(conv, { resultId: jid, pattern: '别人', head_limit: 5, offset: 5 })
-        assert(typeof paged === 'string' && paged.includes('offset='), '搜结果集：head_limit/offset 翻页提示')
+        const paged = ov.grepResult(conv, {
+          resultId: jid,
+          pattern: '别人',
+          head_limit: 5,
+          offset: 5
+        })
+        assert(
+          typeof paged === 'string' && paged.includes('offset='),
+          '搜结果集：head_limit/offset 翻页提示'
+        )
         // 跨结果搜索：不传 resultId 搜全部已存结果，命中带 #编号 前缀（等价 grep 整个目录）
         const mini2 = JSON.stringify(
-          Array.from({ length: 1500 }, (_, i) => ({ 租户: `u${i}`, 负责人: i === 300 ? '陈某' : '旁人' }))
+          Array.from({ length: 1500 }, (_, i) => ({
+            租户: `u${i}`,
+            负责人: i === 300 ? '陈某' : '旁人'
+          }))
         )
         ov.guardSingle(ctx, 'c4', 'tool_a', mini2)
         const jid2 = ctx.refs.get('c4')!
         const across = ov.grepResult(conv, { pattern: '陈某' })
         assert(
-          typeof across === 'string' && across.includes(`#${jid}:`) && across.includes(`#${jid2}:`) && across.includes('全部已存结果'),
+          typeof across === 'string' &&
+            across.includes(`#${jid}:`) &&
+            across.includes(`#${jid2}:`) &&
+            across.includes('全部已存结果'),
           '搜结果集：跨结果搜索带编号前缀'
         )
-        assert(typeof ov.readResult(conv, { resultId: 9999 }) === 'object', '读结果集：无效编号报错')
-        assert(typeof ov.readResult('other-conv', { resultId: bigId }) === 'object', '读结果集：跨会话不可用')
+        assert(
+          typeof ov.readResult(conv, { resultId: 9999 }) === 'object',
+          '读结果集：无效编号报错'
+        )
+        assert(
+          typeof ov.readResult('other-conv', { resultId: bigId }) === 'object',
+          '读结果集：跨会话不可用'
+        )
         // 制品解析三层
         const art = await import('./engine/artifact')
-        const a1 = art.createArtifact(conv, { title: 'T1', data: [{ 租户: 'A', 金额: 1 }, { 租户: 'B', 金额: 2 }] })
+        const a1 = art.createArtifact(conv, {
+          title: 'T1',
+          data: [
+            { 租户: 'A', 金额: 1 },
+            { 租户: 'B', 金额: 2 }
+          ]
+        })
         assert('id' in a1 && a1.rowCount === 2, '制品：结构化数组直接成表')
         const a2 = art.createArtifact(conv, { title: 'T2', data: '租户,金额\nA,1\nB,2\nC,3' })
         assert('id' in a2 && a2.rowCount === 3, '制品：首行表头分隔文本尽力解析')
-        const a3 = art.createArtifact(conv, { title: 'T3', data: '账单 001 | 租户 A公司 | 金额 100 元\n账单 002 | 租户 B公司 | 金额 200 元' })
+        const a3 = art.createArtifact(conv, {
+          title: 'T3',
+          data: '账单 001 | 租户 A公司 | 金额 100 元\n账单 002 | 租户 B公司 | 金额 200 元'
+        })
         assert('id' in a3 && a3.rowCount === 2 && 'id' in a3, '制品：逐格标注分隔文本尽力解析')
-        assert('error' in art.createArtifact(conv, { title: 'T4', data: '这是一段散文，没有行列结构可言。' }), '制品：解析不动不生成')
-        const refArt = art.createArtifact(conv, { title: 'T5', ref: { resultId: ctx2.refs.get('b')! } })
+        assert(
+          'error' in
+            art.createArtifact(conv, { title: 'T4', data: '这是一段散文，没有行列结构可言。' }),
+          '制品：解析不动不生成'
+        )
+        // CSV 导出（013 Case 3）：BOM、转义、空值三件事各验一条
+        const csv = art.artifactCsv(
+          [
+            { key: 'a', label: '名称' },
+            { key: 'b', label: '备注' }
+          ],
+          [
+            { a: '有,逗号', b: '带"引号"' },
+            { a: null, b: '换\n行' }
+          ]
+        )
+        assert(csv.startsWith('\uFEFF名称,备注\r\n'), 'CSV：BOM 开头、表头在首行')
+        assert(csv.includes('"有,逗号","带""引号"""'), 'CSV：逗号与引号按标准转义')
+        assert(csv.includes('\r\n,"换\n行"'), 'CSV：空值导出为空、换行加引号')
+        const refArt = art.createArtifact(conv, {
+          title: 'T5',
+          ref: { resultId: ctx2.refs.get('b')! }
+        })
         assert('error' in refArt || 'id' in refArt, '制品：引用取数不抛异常')
         // 删会话清结果与制品
         db.deleteConversation(conv)
@@ -753,7 +923,8 @@ app.whenReady().then(() => {
           assistants
             .slice(0, 2)
             .every(
-              (r) => r.status === 'done' && r.content.trim() && Array.isArray(JSON.parse(r.items ?? ''))
+              (r) =>
+                r.status === 'done' && r.content.trim() && Array.isArray(JSON.parse(r.items ?? ''))
             ) &&
           stoppedRow?.status === 'stopped' &&
           events.filter((t) => t === 'turn-done').length === 3
@@ -787,19 +958,34 @@ app.whenReady().then(() => {
         const { listKbs: lk, createKb: ck } = await import('./db')
         let ttRow = lk().find((k) => k.name === '计费系统')
         if (!ttRow) {
-          const r = ck('计费系统', '本库收录计费、退款、发票等业务规则与流程说明', process.env.CHIME_TOOL_TEST!)
+          const r = ck(
+            '计费系统',
+            '本库收录计费、退款、发票等业务规则与流程说明',
+            process.env.CHIME_TOOL_TEST!
+          )
           if (r.ok) ttRow = lk().find((k) => k.id === r.id)
         }
         await kb.runIndexJob(null, ttRow!.id, true)
 
         const convId = `tool-test-${Date.now()}`
         createConversation(convId, model, Date.now())
-        setConversationKbSelection(convId, listKbsDb().filter((k) => k.indexedAt).map((k) => ({ id: k.id, name: k.name })))
+        setConversationKbSelection(
+          convId,
+          listKbsDb()
+            .filter((k) => k.indexedAt)
+            .map((k) => ({ id: k.id, name: k.name }))
+        )
         const emit = (e: { type: string }): void => {
           console.log('[tool-test]', JSON.stringify(e).slice(0, 200))
         }
         await runTurn({ streamId: 't1', convId, text: '按天计费是怎么算的？', model, emit })
-        await runTurn({ streamId: 't2', convId, text: '帮我把这句话改通顺：今天天气很好我们去公园玩。', model, emit })
+        await runTurn({
+          streamId: 't2',
+          convId,
+          text: '帮我把这句话改通顺：今天天气很好我们去公园玩。',
+          model,
+          emit
+        })
         // 追问旧话题：不能吃历史老本，须本轮重新检索、带来源（行为规则回归点）
         await runTurn({ streamId: 't3', convId, text: '那暂停服务的天数收费吗？', model, emit })
         // 停止键（工具执行中）：检索一开始就停，验「等本步算完即收场、标 stopped」
@@ -826,9 +1012,11 @@ app.whenReady().then(() => {
         const bizSearched = items1.some((i) => i.t === 'tool')
         const bizSourced = items1.some((i) => i.t === 'sources')
         const chatClean = !items2.some((i) => i.t === 'tool')
-        const followupSearched = items3.some((i) => i.t === 'tool') && items3.some((i) => i.t === 'sources')
+        const followupSearched =
+          items3.some((i) => i.t === 'tool') && items3.some((i) => i.t === 'sources')
         const stopRow = rows[3]
-        const stopKept = stopRow?.status === 'stopped' && Array.isArray(JSON.parse(stopRow?.items ?? ''))
+        const stopKept =
+          stopRow?.status === 'stopped' && Array.isArray(JSON.parse(stopRow?.items ?? ''))
 
         // 闸门（工具级计数）：第 4 次检索请求应被拒绝、不执行
         const ctx = { pool: [], searches: 0, kbIds: [1], kbNames: new Map([[1, '测试库']]) }
@@ -840,13 +1028,22 @@ app.whenReady().then(() => {
         // 空检索词自愈：不执行、不耗次数、回自纠说明
         const blank = await call({ query: '  ' }, { toolCallId: 'g', messages: [] })
         const blankHealed = 'invalid' in blank && ctx.searches === 0
-        for (let i = 0; i < 3; i++) await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] })
-        const gate = 'denied' in (await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] }))
+        for (let i = 0; i < 3; i++)
+          await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] })
+        const gate =
+          'denied' in (await call({ query: '按天计费' }, { toolCallId: 'g', messages: [] }))
 
         console.log(
           `[tool-test] 业务问题走检索=${bizSearched} 出来源=${bizSourced} 闲聊不检索=${chatClean} 追问重查带来源=${followupSearched} 工具中停止留痕=${stopKept} 空检索词自愈=${blankHealed} 闸门拒绝=${gate}`
         )
-        const ok = bizSearched && bizSourced && chatClean && followupSearched && stopKept && blankHealed && gate
+        const ok =
+          bizSearched &&
+          bizSourced &&
+          chatClean &&
+          followupSearched &&
+          stopKept &&
+          blankHealed &&
+          gate
         console.log(ok ? '[tool-test] OK' : '[tool-test] FAIL')
         app.exit(ok ? 0 : 1)
       } catch (e) {
@@ -949,8 +1146,14 @@ app.whenReady().then(() => {
         }
         console.log('[kb-test] build')
         await kb.runIndexJob(win.webContents, row!.id, true)
-        fs.appendFileSync(join(repo, '退款流程.md'), '\n## 特殊情形\n预付订单退款需人工审核，三个工作日内处理。\n')
-        fs.writeFileSync(join(repo, '新增文档.md'), '# 发票\n\n## 开具\n发票在订单完成后可在设置页自助开具，支持增值税普通发票。\n')
+        fs.appendFileSync(
+          join(repo, '退款流程.md'),
+          '\n## 特殊情形\n预付订单退款需人工审核，三个工作日内处理。\n'
+        )
+        fs.writeFileSync(
+          join(repo, '新增文档.md'),
+          '# 发票\n\n## 开具\n发票在订单完成后可在设置页自助开具，支持增值税普通发票。\n'
+        )
         console.log('[kb-test] refresh (1 modified + 1 untracked)')
         await kb.runIndexJob(win.webContents, row!.id, false)
         app.exit(0)

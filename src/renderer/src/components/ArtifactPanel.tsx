@@ -44,7 +44,8 @@ export function ArtifactContent({ artifact }: { artifact: ArtifactView }): React
       </table>
       {artifact.totalRows > artifact.rows.length && (
         <div className="py-3 text-center text-[12px] text-muted-foreground">
-          仅显示前 {artifact.rows.length.toLocaleString()} 行（共 {artifact.totalRows.toLocaleString()} 行，数据完整保存）
+          仅显示前 {artifact.rows.length.toLocaleString()} 行（共{' '}
+          {artifact.totalRows.toLocaleString()} 行）——完整数据可从右上角导出 CSV
         </div>
       )}
     </div>

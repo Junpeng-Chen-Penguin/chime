@@ -17,10 +17,21 @@ import {
 } from 'lucide-react'
 import { cn, stripCitations } from '@/lib/utils'
 import type { Msg } from '@/hooks/useChat'
-import type { SourceRef, TurnItem, SearchToolResult, AskOutcomePayload, AskQuestionSpec } from '../../../preload/index.d'
+import type {
+  SourceRef,
+  TurnItem,
+  SearchToolResult,
+  AskOutcomePayload,
+  AskQuestionSpec
+} from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { Markdown } from './Markdown'
-import Composer, { type KbOption, type KbSelEntry, type ModelGroup, type ServiceStatus } from './Composer'
+import Composer, {
+  type KbOption,
+  type KbSelEntry,
+  type ModelGroup,
+  type ServiceStatus
+} from './Composer'
 
 // 规则 5：单条消息上限（字符），发送前就地拦下；与主进程常量同值（engine/budget SEND_CHAR_LIMIT）
 const SEND_CHAR_LIMIT = 30000
@@ -300,7 +311,18 @@ function UserMsg({ children }: { children: ReactNode }): React.JSX.Element {
 }
 
 // 整轮进度指示：轻趣味中文词表轮播（多数中性、偶穿轻俏词），几秒一换
-const PROGRESS_WORDS = ['梳理中', '翻查中', '琢磨中', '核对中', '斟酌中', '串联中', '查证中', '整理中', '推敲中', '落笔中']
+const PROGRESS_WORDS = [
+  '梳理中',
+  '翻查中',
+  '琢磨中',
+  '核对中',
+  '斟酌中',
+  '串联中',
+  '查证中',
+  '整理中',
+  '推敲中',
+  '落笔中'
+]
 
 function ProgressIndicator(): React.JSX.Element {
   const [idx, setIdx] = useState(() => Math.floor(Math.random() * PROGRESS_WORDS.length))
@@ -345,9 +367,12 @@ function AssistantMsg({
   const items = m.items ?? []
   // 卡片排队（授权 + 提问共用一条队列）：队首是授权卡时挂在调用行下方；队首是提问卡时悬浮于输入框上方（由 ChatArea 渲染）
   const pendingIdx = streaming
-    ? items.findIndex((it) => it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending'))
+    ? items.findIndex(
+        (it) => it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending')
+      )
     : -1
-  const pendingIsAuth = pendingIdx >= 0 && (items[pendingIdx] as Extract<TurnItem, { t: 'tool' }>).auth === 'pending'
+  const pendingIsAuth =
+    pendingIdx >= 0 && (items[pendingIdx] as Extract<TurnItem, { t: 'tool' }>).auth === 'pending'
 
   // 位置即语义：末位非空 text 为最终回答，之前的 text 为意图叙述
   const lastTextIdx = useMemo(() => {
@@ -378,7 +403,9 @@ function AssistantMsg({
           case 'text':
             // 模型的话一律正文样式（Markdown），不因后续步骤回溯降级——中途回复也是给用户看的内容，
             // 过程行样式只留给工具步骤与状态标记（对齐 Claude：文本与工具行交替、样式稳定）
-            return <AnswerRow key={i} text={it.text} streaming={streaming && i === items.length - 1} />
+            return (
+              <AnswerRow key={i} text={it.text} streaming={streaming && i === items.length - 1} />
+            )
           case 'tool':
             return (
               <div key={i} className="flex flex-col gap-2">
@@ -401,7 +428,9 @@ function AssistantMsg({
                   <Table className="size-[18px] text-primary" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] font-medium text-foreground">{it.title}</span>
+                  <span className="block truncate text-[14px] font-medium text-foreground">
+                    {it.title}
+                  </span>
                   {/* 类型由图标表达，文字只补图标说不了的信息（规模） */}
                   <span className="block text-[12px] text-muted-foreground">{it.rowCount} 行</span>
                 </span>
@@ -445,7 +474,11 @@ function AssistantMsg({
 const PROCESS_ROW = 'text-[14px] leading-[1.7] text-muted-foreground'
 
 // 元素行首的圆点。tone：单步状态点 + 中性缺省（对齐 14px 首行光学中心）；queued = 空心（排队中）
-function Dot({ tone = 'neutral' }: { tone?: 'neutral' | 'running' | 'error' | 'queued' }): React.JSX.Element {
+function Dot({
+  tone = 'neutral'
+}: {
+  tone?: 'neutral' | 'running' | 'error' | 'queued'
+}): React.JSX.Element {
   return (
     <span
       className={cn(
@@ -537,7 +570,9 @@ function AskToolRow({
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const ask = item.ask!
-  const questions = ((item.args as { questions?: AskQuestionSpec[] }).questions ?? []).map((q) => q.question)
+  const questions = ((item.args as { questions?: AskQuestionSpec[] }).questions ?? []).map(
+    (q) => q.question
+  )
   const waiting = ask.state === 'pending'
   const summary = waiting
     ? active
@@ -609,11 +644,16 @@ function fetchArgLabel(name: string | undefined, k: string): string {
   return labels[k] ?? k
 }
 function fetchArgValue(name: string | undefined, k: string, v: unknown): string {
-  if (k === 'mode') return v === 'search' ? '按关键词搜索' : v === 'read' ? '按行读取' : '按位置读取'
+  if (k === 'mode')
+    return v === 'search' ? '按关键词搜索' : v === 'read' ? '按行读取' : '按位置读取'
   if (k === 'resultId') return `#${v}`
-  if (k === 'offset') return name === 'read_result' ? `第 ${Number(v).toLocaleString()} 行起` : `跳过前 ${Number(v)} 行`
+  if (k === 'offset')
+    return name === 'read_result'
+      ? `第 ${Number(v).toLocaleString()} 行起`
+      : `跳过前 ${Number(v)} 行`
   if (k === 'startLine') return `第 ${Number(v).toLocaleString()} 行起`
-  if (k === 'lines' || k === 'limit' || k === 'head_limit') return `${Number(v).toLocaleString()} 行`
+  if (k === 'lines' || k === 'limit' || k === 'head_limit')
+    return `${Number(v).toLocaleString()} 行`
   if (k === 'context') return `前后 ${Number(v)} 行`
   if (k === '-i') return v ? '忽略' : '区分'
   if (k === 'fromHit') return `跳过前 ${Number(v)} 处命中`
@@ -637,14 +677,16 @@ function GenericToolRow({
   active: boolean
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const r = item.result as string | { error?: string; denied?: string; interrupted?: string } | undefined
+  const r = item.result as
+    string | { error?: string; denied?: string; interrupted?: string } | undefined
   const waiting = item.auth === 'pending' // 等待授权（active）或排队中
   const running = r === undefined && !waiting
   const failed = typeof r === 'object' && !!r?.error
   const interrupted = typeof r === 'object' && !!r?.interrupted
   const args = Object.entries(item.args ?? {})
   // fetch_tool_result 为退役工具名，仅历史会话的旧调用行
-  const isFetch = item.name === 'fetch_tool_result' || item.name === 'grep_result' || item.name === 'read_result'
+  const isFetch =
+    item.name === 'fetch_tool_result' || item.name === 'grep_result' || item.name === 'read_result'
   // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")；取数工具用人话概要
   const firstArg = args.length ? args[0][1] : undefined
   const argPreview = isFetch
@@ -657,10 +699,12 @@ function GenericToolRow({
           startLine?: number
           offset?: number
         }
-        if (item.name === 'grep_result') return `${a.resultId != null ? `#${a.resultId}` : '全部结果'} 搜"${a.pattern ?? ''}"`
+        if (item.name === 'grep_result')
+          return `${a.resultId != null ? `#${a.resultId}` : '全部结果'} 搜"${a.pattern ?? ''}"`
         if (item.name === 'read_result') return `#${a.resultId} 读第 ${a.offset ?? 1} 行起`
         if (a.mode === 'search') return `#${a.resultId} 搜"${a.pattern ?? a.keyword ?? ''}"`
-        if (a.startLine !== undefined || a.mode === 'read') return `#${a.resultId} 读第 ${a.startLine ?? 1} 行起`
+        if (a.startLine !== undefined || a.mode === 'read')
+          return `#${a.resultId} 读第 ${a.startLine ?? 1} 行起`
         return `#${a.resultId} 按位置读取` // 历史轮的旧参数形态
       })()
     : firstArg === undefined
@@ -704,7 +748,19 @@ function GenericToolRow({
   }, [r])
   return (
     <div className="flex gap-2.5">
-      <Dot tone={waiting && active ? 'running' : waiting ? 'queued' : running ? 'running' : failed ? 'error' : 'neutral'} />
+      <Dot
+        tone={
+          waiting && active
+            ? 'running'
+            : waiting
+              ? 'queued'
+              : running
+                ? 'running'
+                : failed
+                  ? 'error'
+                  : 'neutral'
+        }
+      />
       <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
         <div className="truncate">
           {prefix}
@@ -720,7 +776,9 @@ function GenericToolRow({
           >
             <span className={cn('text-muted-foreground/50', failed && 'text-destructive')}>⎿</span>
             <span className={cn(failed && 'font-medium text-destructive')}>{summary}</span>
-            {expandable && <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />}
+            {expandable && (
+              <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+            )}
           </button>
         )}
         {waiting && active && args.length > 0 && (
@@ -728,13 +786,16 @@ function GenericToolRow({
             {args.map(([k, v]) => (
               <div key={k} className="flex gap-3 text-[13px]">
                 <span className="w-[120px] flex-none truncate text-muted-foreground">{k}</span>
-                <span className="min-w-0 break-all">{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                <span className="min-w-0 break-all">
+                  {typeof v === 'string' ? v : JSON.stringify(v)}
+                </span>
               </div>
             ))}
           </div>
         )}
         {open && expandable && (
-          <div className="mt-1.5 ml-5 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+          // 入参与返回放开文本选中（013 Case 1）：排障时要能把这两块复制出去，不再对着屏幕手打
+          <div className="mt-1.5 ml-5 rounded-lg border border-border bg-muted/30 px-3 py-2.5 select-text">
             {args.length > 0 && (
               <>
                 <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">参数</div>
@@ -745,7 +806,11 @@ function GenericToolRow({
                         {isFetch ? fetchArgLabel(item.name, k) : k}
                       </span>
                       <span className="min-w-0 break-all">
-                        {isFetch ? fetchArgValue(item.name, k, v) : typeof v === 'string' ? v : JSON.stringify(v)}
+                        {isFetch
+                          ? fetchArgValue(item.name, k, v)
+                          : typeof v === 'string'
+                            ? v
+                            : JSON.stringify(v)}
                       </span>
                     </div>
                   ))}
@@ -754,7 +819,9 @@ function GenericToolRow({
               </>
             )}
             <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">结果</div>
-            <div className="max-h-[240px] overflow-y-auto text-[13px] whitespace-pre-wrap">{resultText}</div>
+            <div className="max-h-[240px] overflow-y-auto text-[13px] whitespace-pre-wrap">
+              {resultText}
+            </div>
           </div>
         )}
       </div>
@@ -902,7 +969,9 @@ function AskCard({
                   disabled={!!other}
                   onClick={() => {
                     if (q.multiSelect) {
-                      const set = picked ? multiPicked.filter((x) => x !== op.label) : [...multiPicked, op.label]
+                      const set = picked
+                        ? multiPicked.filter((x) => x !== op.label)
+                        : [...multiPicked, op.label]
                       const next = [...answers]
                       next[qIdx] = set
                       setAnswers(next)
@@ -921,16 +990,26 @@ function AskCard({
                       'grid size-5 flex-none place-items-center text-[12px]',
                       q.multiSelect ? 'rounded-md' : 'rounded-full',
                       // 悬停时行底变灰，徽标换白底避免融进背景
-                      picked ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground group-hover:bg-background'
+                      picked
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground group-hover:bg-background'
                     )}
                   >
-                    {q.multiSelect && picked ? <Check className="size-3.5" strokeWidth={3} /> : i + 1}
+                    {q.multiSelect && picked ? (
+                      <Check className="size-3.5" strokeWidth={3} />
+                    ) : (
+                      i + 1
+                    )}
                   </span>
                   <span className="min-w-0 flex-1 text-[14px] text-foreground">{op.label}</span>
                   {!q.multiSelect && !other && (
                     // 悬停提示点击后的去向：非末题 → 进下一题；末题 ↵ 提交
                     <span className="flex-none text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
-                      {last ? <CornerDownLeft className="size-4" /> : <ArrowRight className="size-4" />}
+                      {last ? (
+                        <CornerDownLeft className="size-4" />
+                      ) : (
+                        <ArrowRight className="size-4" />
+                      )}
                     </span>
                   )}
                 </button>
@@ -1021,7 +1100,13 @@ function SearchToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): Re
               ? '已中断'
               : '检索出错'
   const detail = r?.results?.length
-    ? [...new Set(r.results.map((x) => `${x.file.replace(/\.md$/, '')}${x.heading ? ' › ' + x.heading : ''}`))]
+    ? [
+        ...new Set(
+          r.results.map(
+            (x) => `${x.file.replace(/\.md$/, '')}${x.heading ? ' › ' + x.heading : ''}`
+          )
+        )
+      ]
     : r?.error
       ? [r.error]
       : r?.denied
@@ -1162,11 +1247,19 @@ function MessageActions({
 }
 
 // 本轮用量（PRD Case 5）：按钮形态尾随复制 / 重新生成，悬停看输入（含缓存命中）与输出拆分
-function UsageChip({ usage }: { usage: { input: number; output: number; cached: number } }): React.JSX.Element {
+function UsageChip({
+  usage
+}: {
+  usage: { input: number; output: number; cached: number }
+}): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const total = usage.input + usage.output
   return (
-    <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <div
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
       <span className="grid h-8 cursor-default place-items-center rounded-md px-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted">
         {total.toLocaleString()} tokens
       </span>
@@ -1179,7 +1272,9 @@ function UsageChip({ usage }: { usage: { input: number; output: number; cached: 
           {usage.cached > 0 && (
             <div className="mt-1.5 flex justify-between gap-8">
               <span className="pl-1 text-muted-foreground">└ 缓存命中</span>
-              <span className="tabular-nums text-muted-foreground">{usage.cached.toLocaleString()}</span>
+              <span className="tabular-nums text-muted-foreground">
+                {usage.cached.toLocaleString()}
+              </span>
             </div>
           )}
           <div className="mt-1.5 flex justify-between gap-8">

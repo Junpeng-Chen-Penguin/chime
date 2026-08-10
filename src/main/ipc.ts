@@ -1,5 +1,5 @@
-import { ipcMain } from 'electron'
-import { existsSync, readFileSync } from 'fs'
+import { dialog, ipcMain } from 'electron'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join, resolve } from 'path'
 import {
   maskApiKey,
@@ -36,8 +36,15 @@ import {
 } from './db'
 import { vendorPreset } from './vendors'
 import { refreshRegistry, windowsForVendor } from './registry'
-import { listMcpServices, getMcpService, saveMcpService, deleteMcpService, getArtifact, setMcpTrusted } from './db'
-import { TABLE_RENDER_CAP } from './engine/artifact'
+import {
+  listMcpServices,
+  getMcpService,
+  saveMcpService,
+  deleteMcpService,
+  getArtifact,
+  setMcpTrusted
+} from './db'
+import { TABLE_RENDER_CAP, artifactCsv } from './engine/artifact'
 import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
 import { kbBusy, busyKbId, runIndexJob, validateRepoPath, getLastSummary, checkChanges } from './kb'
 
@@ -64,19 +71,31 @@ export function registerIpc(): void {
   })
   ipcMain.handle(
     'provider:save',
-    (_e, input: { vendor: string; apiKey?: string | null; baseUrl?: string; enabled?: boolean; extraParams?: Record<string, unknown> }) => {
+    (
+      _e,
+      input: {
+        vendor: string
+        apiKey?: string | null
+        baseUrl?: string
+        enabled?: boolean
+        extraParams?: Record<string, unknown>
+      }
+    ) => {
       saveProviderRecord(input.vendor, input)
     }
   )
   // 检测：向该服务商发一条极短消息确认能真正对话（PRD Case 6 功能点 4）
-  ipcMain.handle('provider:detect', async (_e, input: { vendor: string; apiKey: string | null }) => {
-    const p = getProviderRecord(input.vendor)
-    if (!p) return { ok: false, error: '服务商不存在' }
-    const key = input.apiKey ?? p.apiKey
-    const r = await detect(p.baseUrl, key)
-    if (r.ok) markVendorHealth(input.vendor, true) // 检测通过解除警示
-    return r
-  })
+  ipcMain.handle(
+    'provider:detect',
+    async (_e, input: { vendor: string; apiKey: string | null }) => {
+      const p = getProviderRecord(input.vendor)
+      if (!p) return { ok: false, error: '服务商不存在' }
+      const key = input.apiKey ?? p.apiKey
+      const r = await detect(p.baseUrl, key)
+      if (r.ok) markVendorHealth(input.vendor, true) // 检测通过解除警示
+      return r
+    }
+  )
   // 拉取模型清单并合并：已勾选保持勾选；消失的标已下线不自动取消；新出现的不自动勾选
   ipcMain.handle('provider:fetchModels', async (_e, vendor: string) => {
     const p = getProviderRecord(vendor)
@@ -92,7 +111,9 @@ export function registerIpc(): void {
       ]
       // 认得窗口的对话模型排前，其余按接口返回顺序
       const windows = windowsForVendor(vendor)
-      merged.sort((a, b) => (windows[b.id.toLowerCase()] ? 1 : 0) - (windows[a.id.toLowerCase()] ? 1 : 0))
+      merged.sort(
+        (a, b) => (windows[b.id.toLowerCase()] ? 1 : 0) - (windows[a.id.toLowerCase()] ? 1 : 0)
+      )
       saveProviderRecord(vendor, { models: merged })
       return { ok: true, models: merged }
     } catch (e) {
@@ -100,13 +121,16 @@ export function registerIpc(): void {
       return { ok: false, error: status ? humanize(status) : '拉取失败，请检查网络或服务地址' }
     }
   })
-  ipcMain.handle('provider:pickModel', (_e, input: { vendor: string; id: string; picked: boolean }) => {
-    const p = getProviderRecord(input.vendor)
-    if (!p) return
-    saveProviderRecord(input.vendor, {
-      models: p.models.map((m) => (m.id === input.id ? { ...m, picked: input.picked } : m))
-    })
-  })
+  ipcMain.handle(
+    'provider:pickModel',
+    (_e, input: { vendor: string; id: string; picked: boolean }) => {
+      const p = getProviderRecord(input.vendor)
+      if (!p) return
+      saveProviderRecord(input.vendor, {
+        models: p.models.map((m) => (m.id === input.id ? { ...m, picked: input.picked } : m))
+      })
+    }
+  )
   ipcMain.handle('provider:getDefault', () => getDefaultModelRef())
   ipcMain.handle('provider:setDefault', (_e, ref: string) => setDefaultModelRef(ref))
   // 会话模型菜单数据源：已启用服务商的勾选模型，按服务商分组
@@ -158,7 +182,14 @@ export function registerIpc(): void {
   // 提问卡回应（作答 / 直接打字 / 放弃整卡）
   ipcMain.on(
     'chat:ask-response',
-    (_e, payload: { streamId: string; toolCallId: string; outcome: Exclude<AskOutcome, { kind: 'aborted' }> }) => {
+    (
+      _e,
+      payload: {
+        streamId: string
+        toolCallId: string
+        outcome: Exclude<AskOutcome, { kind: 'aborted' }>
+      }
+    ) => {
       respondAskCard(payload.streamId, payload.toolCallId, payload.outcome)
     }
   )
@@ -214,20 +245,27 @@ export function registerIpc(): void {
     return { ok: true, id: r.id }
   })
   // 编辑：只改名称简介直接存；路径变了按新路径重建（PRD Case 1 功能点 2）
-  ipcMain.handle('kb:update', async (e, input: { id: number; name: string; intro: string; path: string }) => {
-    const cur = listKbs().find((k) => k.id === input.id)
-    if (!cur) return { ok: false, error: '知识库不存在' }
-    const pathChanged = input.path.trim() !== cur.rootPath
-    if (pathChanged) {
-      if (kbBusy()) return { ok: false, error: '有知识库正在构建，请稍后再试' }
-      const invalid = await validateRepoPath(input.path)
-      if (invalid) return { ok: false, error: invalid }
+  ipcMain.handle(
+    'kb:update',
+    async (e, input: { id: number; name: string; intro: string; path: string }) => {
+      const cur = listKbs().find((k) => k.id === input.id)
+      if (!cur) return { ok: false, error: '知识库不存在' }
+      const pathChanged = input.path.trim() !== cur.rootPath
+      if (pathChanged) {
+        if (kbBusy()) return { ok: false, error: '有知识库正在构建，请稍后再试' }
+        const invalid = await validateRepoPath(input.path)
+        if (invalid) return { ok: false, error: invalid }
+      }
+      const r = updateKb(input.id, {
+        name: input.name.trim(),
+        intro: input.intro.trim(),
+        rootPath: input.path.trim()
+      })
+      if (!r.ok) return r
+      if (pathChanged) void runIndexJob(e.sender, input.id, true)
+      return { ok: true, rebuilt: pathChanged }
     }
-    const r = updateKb(input.id, { name: input.name.trim(), intro: input.intro.trim(), rootPath: input.path.trim() })
-    if (!r.ok) return r
-    if (pathChanged) void runIndexJob(e.sender, input.id, true)
-    return { ok: true, rebuilt: pathChanged }
-  })
+  )
   ipcMain.handle('kb:remove', (_e, id: number) => {
     if (busyKbId() === id) return { ok: false, error: '该知识库正在构建，请稍后再试' }
     deleteKb(id)
@@ -288,7 +326,9 @@ export function registerIpc(): void {
         id: s.id,
         name: s.name,
         url: s.url,
-        headersMasked: Object.fromEntries(Object.entries(s.headers).map(([k, v]) => [k, maskApiKey(v)])),
+        headersMasked: Object.fromEntries(
+          Object.entries(s.headers).map(([k, v]) => [k, maskApiKey(v)])
+        ),
         enabled: s.enabled,
         trusted: s.trusted,
         toolsChanged: s.toolsChanged,
@@ -301,7 +341,16 @@ export function registerIpc(): void {
   // 保存（新建/编辑共用）：headers 为 null 表示沿用已存认证；保存即生效（连接/断开随 sync）
   ipcMain.handle(
     'mcp:save',
-    async (_e, input: { id?: number; name: string; url: string; headers: Record<string, string> | null; enabled: boolean }) => {
+    async (
+      _e,
+      input: {
+        id?: number
+        name: string
+        url: string
+        headers: Record<string, string> | null
+        enabled: boolean
+      }
+    ) => {
       saveMcpService(input)
       await syncMcpServices()
     }
@@ -335,6 +384,21 @@ export function registerIpc(): void {
       rows: a.rows.slice(0, TABLE_RENDER_CAP),
       totalRows: a.rows.length
     }
+  })
+
+  // 制品导出 CSV（013 Case 3）：导库里的完整行，不是渲染截断的那部分。
+  // 标题进文件名要洗掉非法字符（标题由模型自拟，什么都可能有），洗完为空退回兜底名
+  ipcMain.handle('artifact:export', async (_e, id: number) => {
+    const a = getArtifact(id)
+    if (!a) return { ok: false }
+    const name = a.title.replace(/[/\\:*?"<>|]/g, ' ').trim() || '数据表格'
+    const r = await dialog.showSaveDialog({
+      defaultPath: `${name}.csv`,
+      filters: [{ name: 'CSV', extensions: ['csv'] }]
+    })
+    if (r.canceled || !r.filePath) return { ok: false }
+    writeFileSync(r.filePath, artifactCsv(a.columns, a.rows))
+    return { ok: true }
   })
 
   // 打开来源文档（侧板阅读视图）：读磁盘现状；校验片段用消息自带的原文快照，此处不查库
