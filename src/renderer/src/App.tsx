@@ -355,6 +355,7 @@ function App(): React.JSX.Element {
             <DocContent doc={panel.doc} />
           ) : (
             <ArtifactContent
+              key={panel.artifact.id} // 按制品重建：不加 key 时 A 切 B 组件不重挂，A 的勾选会串给 B
               artifact={panel.artifact}
               referencedRows={
                 (chips[activeId] ?? []).find((c) => c.artifactId === panel.artifact.id)?.rowIndexes
