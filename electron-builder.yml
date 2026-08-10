@@ -5,7 +5,7 @@ directories:
   # 输出必须在 ~/Documents 之外：该目录在 iCloud 同步范围内，同步服务给文件打的
   # FinderInfo 标记会让 codesign 拒签（detritus），清掉也会被立刻补回（实测 .nosync 豁免无效）。
   # 历史版本安装包仍在旧 dist/ 里，2026-08-04 起新产物落这里
-  output: /Users/chenjunpeng/Library/Builds/chime
+  output: ${env.HOME}/Library/Builds/chime
 files:
   - '!**/.vscode/*'
   - '!dist' # 历史安装包存放处；输出目录移出仓库后不再被自动排除，不挡会整个打进应用

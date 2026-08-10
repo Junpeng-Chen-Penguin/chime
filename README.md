@@ -19,7 +19,7 @@ pnpm dev          # 开发模式
 pnpm build:mac    # 打包成 .app
 ```
 
-打包产物的输出目录写在 `electron-builder.yml` 的 `directories.output`，默认指向作者本机的路径，**自己用要改成你的**。
+打包产物输出到 `~/Library/Builds/chime`（不能放在 `~/Documents` 下——iCloud 给文件打的标记会让代码签名被拒）。
 
 ## 第一次用要配三样
 
