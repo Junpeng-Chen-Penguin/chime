@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { ArtifactView } from '../../../preload/index.d'
 
@@ -17,13 +17,21 @@ const REF_ROWS_MAX = 200
 export function ArtifactContent({
   artifact,
   referencedRows,
+  highlightRows,
   onAddToChat
 }: {
   artifact: ArtifactView
   referencedRows?: number[] // 该制品未发出的引用行（挂载时恢复勾选）
+  highlightRows?: number[] // 引用回看（013 Case 2）：高亮这些行并滚到第一行，不动勾选
   onAddToChat?: (rowIndexes: number[]) => void
 }): React.JSX.Element {
   const [sel, setSel] = useState<Set<number>>(() => new Set(referencedRows ?? []))
+  const hl = useMemo(() => new Set(highlightRows ?? []), [highlightRows])
+  const minHl = highlightRows?.length ? Math.min(...highlightRows) : -1
+  const firstHlRef = useRef<HTMLTableRowElement | null>(null)
+  useEffect(() => {
+    firstHlRef.current?.scrollIntoView({ block: 'center' })
+  }, [hl])
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const canPick = !!onAddToChat
   const allPicked = artifact.rows.length > 0 && sel.size === artifact.rows.length
@@ -76,7 +84,11 @@ export function ArtifactContent({
         </thead>
         <tbody>
           {artifact.rows.map((row, i) => (
-            <tr key={i} className={i % 2 === 1 ? 'bg-muted/50' : undefined}>
+            <tr
+              key={i}
+              ref={i === minHl ? firstHlRef : undefined}
+              className={hl.has(i) ? 'bg-[#f6c745]/15' : i % 2 === 1 ? 'bg-muted/50' : undefined}
+            >
               {canPick && (
                 <td className="w-9 border-b border-border py-1.5 pr-1 pl-5 align-top select-none">
                   <input

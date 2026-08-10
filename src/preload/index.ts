@@ -43,9 +43,14 @@ const api = {
   autoTitle: (input: { convId: string; userText: string; assistantText: string }) =>
     ipcRenderer.invoke('conv:autotitle', input),
 
-  // 渲染层只发「会话 + 一句话」，历史组装与落库都在主进程
-  sendChat: (payload: { streamId: string; convId: string; text: string; model: string }) =>
-    ipcRenderer.send('chat:send', payload),
+  // 渲染层只发「会话 + 一句话」，历史组装与落库都在主进程；refs 为表格行引用（013 Case 2）
+  sendChat: (payload: {
+    streamId: string
+    convId: string
+    text: string
+    model: string
+    refs?: { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }[]
+  }) => ipcRenderer.send('chat:send', payload),
   retryChat: (payload: { streamId: string; convId: string; model: string }) =>
     ipcRenderer.send('chat:retry', payload),
   stopChat: (streamId: string) => ipcRenderer.send('chat:stop', streamId),

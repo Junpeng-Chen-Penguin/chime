@@ -78,6 +78,7 @@ export type TurnItem =
     }
   | { t: 'sources'; list: SourceRef[] }
   | { t: 'artifact'; id: number; title: string; rowCount: number; result?: string } // 制品卡
+  | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] } // 表格行引用（013，user 消息专用）
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
 export type ChatEvent =
@@ -239,7 +240,13 @@ export interface ChimeApi {
     userText: string
     assistantText: string
   }) => Promise<string | null>
-  sendChat: (payload: { streamId: string; convId: string; text: string; model: string }) => void
+  sendChat: (payload: {
+    streamId: string
+    convId: string
+    text: string
+    model: string
+    refs?: { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }[]
+  }) => void
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
   cardRespond: (payload: {

@@ -150,7 +150,16 @@ export function registerIpc(): void {
   // 流式对话：渲染层只发「会话 + 一句话」，事件从统一通道 chat:event 单向推回
   ipcMain.on(
     'chat:send',
-    (e, payload: { streamId: string; convId: string; text: string; model: string }) => {
+    (
+      e,
+      payload: {
+        streamId: string
+        convId: string
+        text: string
+        model: string
+        refs?: { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }[]
+      }
+    ) => {
       const wc = e.sender
       const emit = (ev: ChatEvent): void => {
         if (!wc.isDestroyed()) wc.send('chat:event', ev)

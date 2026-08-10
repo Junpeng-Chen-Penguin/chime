@@ -24,4 +24,5 @@ export interface ChipRef {
   artifactId: number
   title: string
   rowIndexes: number[]
+  chars?: number // 展开后字数的渲染层估算（发送前长度检查用），落库前剥掉
 }

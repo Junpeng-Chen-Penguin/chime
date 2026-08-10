@@ -4,6 +4,9 @@ import type { TurnItem, AskOutcomePayload } from '../../../preload/index.d'
 // interrupted = 应用退出打断、启动修复后收场（仅出现在水合的历史消息里）
 export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error' | 'interrupted'
 
+// 表格行引用（013 Case 2）：随消息发送的 TurnItem ref 分支
+export type RefItem = Extract<TurnItem, { t: 'ref' }>
+
 export interface Usage {
   input: number
   output: number
@@ -30,12 +33,12 @@ export interface ChatHandle {
   streamingConv: string | null
   contextRatio: Record<string, number> // 每会话最近一轮的上下文用量比例（>0.7 轻提示）
   hydrate: (convId: string, msgs: Msg[]) => void
-  send: (convId: string, model: string, text: string) => void
+  send: (convId: string, model: string, text: string, refs?: RefItem[]) => void
   stop: () => void
   retry: (convId: string, model: string) => void
   respondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
   respondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
-  interruptAskAndSend: (convId: string, model: string, text: string) => void
+  interruptAskAndSend: (convId: string, model: string, text: string, refs?: RefItem[]) => void
 }
 
 // chat:event 的 items 归约器：对话历史所有权在主进程，这里只维护展示态
@@ -47,8 +50,15 @@ export function useChat(onChange?: () => void): ChatHandle {
   const routeRef = useRef<{ convId: string; msgId: string; streamId: string } | null>(null)
   const titledRef = useRef(new Set<string>())
   const onChangeRef = useRef(onChange)
-  const pendingSendRef = useRef<{ convId: string; model: string; text: string } | null>(null)
-  const sendRef = useRef<(convId: string, model: string, text: string) => void>(() => {})
+  const pendingSendRef = useRef<{
+    convId: string
+    model: string
+    text: string
+    refs?: RefItem[]
+  } | null>(null)
+  const sendRef = useRef<(convId: string, model: string, text: string, refs?: RefItem[]) => void>(
+    () => {}
+  )
 
   useEffect(() => {
     threadsRef.current = threads
@@ -115,7 +125,9 @@ export function useChat(onChange?: () => void): ChatHandle {
               status,
               error: evt.error,
               content: answer,
-              usage: u ? { input: u.inputTokens, output: u.outputTokens, cached: u.cachedInputTokens ?? 0 } : m.usage
+              usage: u
+                ? { input: u.inputTokens, output: u.outputTokens, cached: u.cachedInputTokens ?? 0 }
+                : m.usage
             }
           })
           setContextRatio((c) => ({ ...c, [r.convId]: evt.contextRatio }))
@@ -140,7 +152,7 @@ export function useChat(onChange?: () => void): ChatHandle {
           const p = pendingSendRef.current
           if (p) {
             pendingSendRef.current = null
-            sendRef.current(p.convId, p.model, p.text)
+            sendRef.current(p.convId, p.model, p.text, p.refs)
           }
           return
         }
@@ -160,11 +172,18 @@ export function useChat(onChange?: () => void): ChatHandle {
     return streamId
   }, [])
 
-  const send: (convId: string, model: string, text: string) => void = useCallback(
-    (convId: string, model: string, text: string) => {
+  const send: (convId: string, model: string, text: string, refs?: RefItem[]) => void = useCallback(
+    (convId: string, model: string, text: string, refs?: RefItem[]) => {
       if (routeRef.current) return
       const now = Date.now()
-      const userMsg: Msg = { id: uid('u'), role: 'user', content: text, status: 'done', createdAt: now }
+      const userMsg: Msg = {
+        id: uid('u'),
+        role: 'user',
+        content: text,
+        items: refs?.length ? refs : undefined,
+        status: 'done',
+        createdAt: now
+      }
       const asstMsg: Msg = {
         id: uid('a'),
         role: 'assistant',
@@ -175,7 +194,7 @@ export function useChat(onChange?: () => void): ChatHandle {
       }
       setThreads((t) => ({ ...t, [convId]: [...(t[convId] ?? []), userMsg, asstMsg] }))
       const streamId = begin(convId, asstMsg.id)
-      window.api.sendChat({ streamId, convId, text, model })
+      window.api.sendChat({ streamId, convId, text, model, refs })
     },
     [begin]
   )
@@ -221,12 +240,26 @@ export function useChat(onChange?: () => void): ChatHandle {
 
   // 提问卡等待中打字发送 = 中断提问 + 开启新一轮（Claude 同此）：
   // 停止本轮（卡记未回应），本轮收场事件到达后把输入的文字作为新消息发出
-  const interruptAskAndSend = useCallback((convId: string, model: string, text: string) => {
-    const r = routeRef.current
-    if (!r) return
-    pendingSendRef.current = { convId, model, text }
-    window.api.stopChat(r.streamId)
-  }, [])
+  const interruptAskAndSend = useCallback(
+    (convId: string, model: string, text: string, refs?: RefItem[]) => {
+      const r = routeRef.current
+      if (!r) return
+      pendingSendRef.current = { convId, model, text, refs }
+      window.api.stopChat(r.streamId)
+    },
+    []
+  )
 
-  return { threads, streamingConv, contextRatio, hydrate, send, stop, retry, respondCard, respondAsk, interruptAskAndSend }
+  return {
+    threads,
+    streamingConv,
+    contextRatio,
+    hydrate,
+    send,
+    stop,
+    retry,
+    respondCard,
+    respondAsk,
+    interruptAskAndSend
+  }
 }

@@ -13,6 +13,7 @@ import {
   Sparkles,
   FileText,
   Table,
+  Table2,
   X
 } from 'lucide-react'
 import { cn, stripCitations } from '@/lib/utils'
@@ -68,7 +69,7 @@ interface Props {
   onOpenSource: (file: string, sources: SourceRef[]) => void
   onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
   onRespondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
-  onOpenArtifact: (id: number) => void
+  onOpenArtifact: (id: number, rows?: number[]) => void
 }
 
 export default function ChatArea({
@@ -107,7 +108,9 @@ export default function ChatArea({
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
   const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
-  const overLimit = input.length > SEND_CHAR_LIMIT
+  // 超限检查计入引用的估算字数（013 Case 2）：不然发出去才发现超
+  const chipChars = (chips ?? []).reduce((n, c) => n + (c.chars ?? 0), 0)
+  const overLimit = input.length + chipChars > SEND_CHAR_LIMIT
   const lastAssistantId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
   // 队首待回应的卡决定输入框状态：授权卡→禁用（只能操作卡片或点停止）；提问卡→开放，打字即整体回答
   const lastMsg = messages[messages.length - 1]
@@ -148,6 +151,7 @@ export default function ChatArea({
       onChange={onInput}
       chips={chips}
       onRemoveChip={onRemoveChip}
+      onOpenChip={(c) => onOpenArtifact(c.artifactId, c.rowIndexes)}
       onSubmit={() => {
         if (!overLimit) onSubmit()
       }}
@@ -203,7 +207,7 @@ export default function ChatArea({
                 <div className="flex flex-col gap-8">
                   {messages.map((m) =>
                     m.role === 'user' ? (
-                      <UserMsg key={m.id}>{m.content}</UserMsg>
+                      <UserMsg key={m.id} m={m} onOpenArtifact={onOpenArtifact} />
                     ) : (
                       <AssistantMsg
                         key={m.id}
@@ -306,11 +310,36 @@ function TitleBar({
   )
 }
 
-function UserMsg({ children }: { children: ReactNode }): React.JSX.Element {
+// 用户消息：带引用时 chip 排在气泡上方（013 Case 2），样式同输入框上方、无移除钮；
+// 点击打开对应制品并高亮当时引用的那几行
+function UserMsg({
+  m,
+  onOpenArtifact
+}: {
+  m: Msg
+  onOpenArtifact: (id: number, rows?: number[]) => void
+}): React.JSX.Element {
+  const refs = (m.items ?? []).filter((it): it is Extract<TurnItem, { t: 'ref' }> => it.t === 'ref')
   return (
-    <div className="flex justify-end">
+    <div className="flex flex-col items-end gap-1.5">
+      {refs.length > 0 && (
+        <div className="flex max-w-[82%] flex-wrap justify-end gap-1.5">
+          {refs.map((r, i) => (
+            <button
+              key={i}
+              onClick={() => onOpenArtifact(r.artifactId, r.rowIndexes)}
+              title={r.title}
+              className="flex max-w-[240px] items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2 py-1 text-[12px] transition-colors hover:bg-muted"
+            >
+              <Table2 className="size-3.5 flex-none text-muted-foreground" />
+              <span className="min-w-0 truncate">{r.title}</span>
+              <span className="flex-none text-muted-foreground">{r.rowIndexes.length} 行</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="max-w-[82%] rounded-[18px] bg-[#f0f0ee] px-4 py-2.5 text-[16px] leading-[1.7] whitespace-pre-wrap text-foreground select-text">
-        {children}
+        {m.content}
       </div>
     </div>
   )

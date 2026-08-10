@@ -48,6 +48,7 @@ interface Props {
   onChange: (v: string) => void
   chips?: import('../types').ChipRef[] // 待发送的表格行引用（013 Case 2），排在输入区上方
   onRemoveChip?: (idx: number) => void
+  onOpenChip?: (c: import('../types').ChipRef) => void // 点主体回看：打开制品并高亮引用行
   onSubmit: () => void
   onStop: () => void
   sessionUsage?: { input: number; output: number; cached: number } | null // 会话累计（正常轮次之和）
@@ -73,6 +74,7 @@ export default function Composer({
   onChange,
   chips,
   onRemoveChip,
+  onOpenChip,
   onSubmit,
   onStop,
   sessionUsage,
@@ -137,11 +139,17 @@ export default function Composer({
                   key={i}
                   className="flex max-w-[240px] items-center gap-1.5 rounded-lg border border-border bg-muted/60 py-1 pr-1 pl-2 text-[12px]"
                 >
-                  <Table2 className="size-3.5 flex-none text-muted-foreground" />
-                  <span className="min-w-0 truncate" title={c.title}>
-                    {c.title}
-                  </span>
-                  <span className="flex-none text-muted-foreground">{c.rowIndexes.length} 行</span>
+                  <button
+                    onClick={() => onOpenChip?.(c)}
+                    title={c.title}
+                    className="flex min-w-0 items-center gap-1.5 transition-opacity hover:opacity-70"
+                  >
+                    <Table2 className="size-3.5 flex-none text-muted-foreground" />
+                    <span className="min-w-0 truncate">{c.title}</span>
+                    <span className="flex-none text-muted-foreground">
+                      {c.rowIndexes.length} 行
+                    </span>
+                  </button>
                   <button
                     onClick={() => onRemoveChip?.(i)}
                     title="移除引用"

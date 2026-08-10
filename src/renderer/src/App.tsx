@@ -46,7 +46,9 @@ function App(): React.JSX.Element {
   >([])
   // 侧板：一个容器、单一内容位（来源文档阅读 / 制品表格查看，结构上互斥）
   const [panel, setPanel] = useState<
-    { kind: 'doc'; doc: DocPanelData } | { kind: 'artifact'; artifact: ArtifactView } | null
+    | { kind: 'doc'; doc: DocPanelData }
+    | { kind: 'artifact'; artifact: ArtifactView; highlightRows?: number[] } // 高亮：回看引用时定位
+    | null
   >(null)
   const [kbDraftSel, setKbDraftSel] = useState<Record<string, { id: number; name: string }[]>>({})
   // 服务连接状态（输入框工具菜单用）：启动加载 + mcp:status 事件刷新
@@ -135,7 +137,17 @@ function App(): React.JSX.Element {
       const a = panel.artifact
       setChips((m) => {
         const cur = m[activeId] ?? []
-        const next = { artifactId: a.id, title: a.title, rowIndexes }
+        const head = a.columns.map((c) => c.label).join(' | ')
+        const chars = rowIndexes.reduce(
+          (n, i) =>
+            n +
+            a.columns.reduce((w, c) => {
+              const v = a.rows[i]?.[c.key]
+              return w + (v === undefined || v === null ? 0 : String(v).length) + 3
+            }, 0),
+          head.length
+        )
+        const next = { artifactId: a.id, title: a.title, rowIndexes, chars }
         const i = cur.findIndex((c) => c.artifactId === a.id)
         return {
           ...m,
@@ -146,11 +158,11 @@ function App(): React.JSX.Element {
     [panel, activeId]
   )
 
-  // 点制品卡 → 侧板换制品内容（同一容器）
-  const openArtifact = useCallback(async (id: number) => {
+  // 点制品卡 → 侧板换制品内容（同一容器）；带 rows 时为引用回看，打开后高亮那几行
+  const openArtifact = useCallback(async (id: number, rows?: number[]) => {
     const a = await window.api.getArtifact(id)
     if (!a) return
-    setPanel({ kind: 'artifact', artifact: a })
+    setPanel({ kind: 'artifact', artifact: a, highlightRows: rows })
     setCollapsed(true)
   }, [])
 
@@ -208,10 +220,21 @@ function App(): React.JSX.Element {
   const submit = async (): Promise<void> => {
     const text = input.trim()
     if (!text) return
+    // 表格行引用随消息发出（013 Case 2）：chars 是渲染层的估算件，落库前剥掉
+    const refs = (chips[activeId] ?? []).map(({ artifactId, title, rowIndexes }) => ({
+      t: 'ref' as const,
+      artifactId,
+      title,
+      rowIndexes
+    }))
+    const clearPending = (): void => {
+      setInputs((m) => ({ ...m, [activeId]: '' }))
+      setChips((m) => ({ ...m, [activeId]: [] }))
+    }
     // 提问卡等待中打字发送 = 中断提问 + 开启新一轮（Claude 同此；想回答问题用卡内作答）
     if (askActive) {
-      chat.interruptAskAndSend(activeId, activeModel, text)
-      setInputs((m) => ({ ...m, [activeId]: '' }))
+      chat.interruptAskAndSend(activeId, activeModel, text, refs.length ? refs : undefined)
+      clearPending()
       return
     }
     if (sending) return
@@ -227,8 +250,8 @@ function App(): React.JSX.Element {
       setConversations((cs) => [{ ...c, kbSelection: kbChosen }, ...cs])
       setDraftId(null)
     }
-    setInputs((m) => ({ ...m, [activeId]: '' }))
-    chat.send(activeId, activeModel, text)
+    clearPending()
+    chat.send(activeId, activeModel, text, refs.length ? refs : undefined)
   }
 
   const confirmDelete = async (): Promise<void> => {
@@ -357,6 +380,7 @@ function App(): React.JSX.Element {
             <ArtifactContent
               key={panel.artifact.id} // 按制品重建：不加 key 时 A 切 B 组件不重挂，A 的勾选会串给 B
               artifact={panel.artifact}
+              highlightRows={panel.highlightRows}
               referencedRows={
                 (chips[activeId] ?? []).find((c) => c.artifactId === panel.artifact.id)?.rowIndexes
               }
