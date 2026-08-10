@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { X, FileX2, Loader2, BookX } from 'lucide-react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -164,10 +164,11 @@ export function DocContent({ doc }: { doc: DocPanelData }): React.JSX.Element {
     return out.sort((a, b) => a.start - b.start)
   }, [doc])
 
-  // 定位滚动：首屏一次；mermaid / 图片异步加载改变高度后二次校正
-  const settle = (): void => {
+  // 定位滚动：首屏一次；mermaid / 图片异步加载改变高度后二次校正。
+  // useCallback 让它能安全进 mdComponents 的依赖（只读 ref，永不变）
+  const settle = useCallback((): void => {
     if (anchorRef.current) anchorRef.current.scrollIntoView({ block: 'start', behavior: 'auto' })
-  }
+  }, [])
   useEffect(() => {
     const t1 = setTimeout(settle, 50)
     const t2 = setTimeout(settle, 700)
@@ -178,23 +179,93 @@ export function DocContent({ doc }: { doc: DocPanelData }): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc])
 
-  // 块级元素统一包装：按源码行区间判定高亮；嵌套重复上色由 CSS 后代选择器抵消
-  const block = (Tag: string) =>
-    function Block(props: Record<string, unknown>): React.JSX.Element {
-      const node = props.node as
-        { position?: { start: { line: number }; end: { line: number } } } | undefined
-      const pos = node?.position
-      const hit = !!pos && ranges.some((r) => pos.start.line <= r.end && pos.end.line >= r.start)
-      const { node: _n, ...rest } = props
-      const ref = (el: HTMLElement | null): void => {
-        if (el && hit && !anchorTakenRef.current) {
-          anchorTakenRef.current = true
-          anchorRef.current = el
+  // 渲染组件表跨渲染保持身份（013 验证中发现的存量缺陷）：这套组件原来每次渲染当场新建，
+  // React 视为不同的组件类型而把整棵内容树卸载重建——Mermaid 图退回「渲染中」重画、图片重载、
+  // settle 再把内容拉回锚点，于是界面任何一次重画（输入框打字 / 删字）侧板都闪一下位移。
+  // memo 后只在换文档或高亮区间变化时重建，那时本就该重画
+  const mdComponents = useMemo<Components>(() => {
+    // 块级元素统一包装：按源码行区间判定高亮；嵌套重复上色由 CSS 后代选择器抵消
+    const block = (Tag: string) =>
+      function Block(props: Record<string, unknown>): React.JSX.Element {
+        const node = props.node as
+          { position?: { start: { line: number }; end: { line: number } } } | undefined
+        const pos = node?.position
+        const hit = !!pos && ranges.some((r) => pos.start.line <= r.end && pos.end.line >= r.start)
+        const { node: _n, ...rest } = props
+        const ref = (el: HTMLElement | null): void => {
+          if (el && hit && !anchorTakenRef.current) {
+            anchorTakenRef.current = true
+            anchorRef.current = el
+          }
         }
+        const T = Tag as 'div'
+        return <T ref={ref} className={cn(hit && 'doc-hl')} {...(rest as object)} />
       }
-      const T = Tag as 'div'
-      return <T ref={ref} className={cn(hit && 'doc-hl')} {...(rest as object)} />
-    }
+    return {
+      p: block('p'),
+      h1: block('h1'),
+      h2: block('h2'),
+      h3: block('h3'),
+      h4: block('h4'),
+      h5: block('h5'),
+      h6: block('h6'),
+      ul: block('ul'),
+      ol: block('ol'),
+      table: block('table'),
+      blockquote: block('blockquote'),
+      hr: block('hr'),
+      pre: (props) => {
+        // 拦截 mermaid 围栏块 → 渲染为图；其余照常
+        const node = props.node as unknown as {
+          position?: { start: { line: number }; end: { line: number } }
+          children?: {
+            tagName?: string
+            properties?: { className?: string[] }
+            children?: { value?: string }[]
+          }[]
+        }
+        const codeNode = node?.children?.[0]
+        const lang = codeNode?.properties?.className?.find((c) => c.startsWith('language-'))
+        const codeText = codeNode?.children?.[0]?.value ?? ''
+        const pos = node?.position
+        const hit = !!pos && ranges.some((r) => pos.start.line <= r.end && pos.end.line >= r.start)
+        const ref = (el: HTMLElement | null): void => {
+          if (el && hit && !anchorTakenRef.current) {
+            anchorTakenRef.current = true
+            anchorRef.current = el
+          }
+        }
+        if (lang === 'language-mermaid') {
+          return (
+            <div ref={ref} className={cn(hit && 'doc-hl')}>
+              <MermaidBlock code={codeText} onSettled={settle} />
+            </div>
+          )
+        }
+        const { node: _n, ...rest } = props
+        return <pre ref={ref as never} className={cn(hit && 'doc-hl')} {...(rest as object)} />
+      },
+      img: (props) => {
+        const src = String(props.src ?? '')
+        const isAbs = /^(https?:|data:|file:|chime-doc:)/.test(src)
+        const url = isAbs
+          ? src
+          : `chime-doc://img/?kb=${doc.sources[0]?.kbId ?? 0}&doc=${encodeURIComponent(doc.file)}&src=${encodeURIComponent(src)}`
+        return <img src={url} alt={String(props.alt ?? '')} loading="lazy" onLoad={settle} />
+      },
+      a: (props) => (
+        // 只读视图：外链交系统浏览器，内链不跳转
+        <a
+          {...props}
+          onClick={(e) => {
+            e.preventDefault()
+            const href = String(props.href ?? '')
+            if (/^https?:/.test(href)) window.open(href)
+          }}
+        />
+      )
+    } as Components
+  }, [ranges, doc, settle])
 
   if (doc.error) {
     if (doc.error !== 'busy' && doc.sources.some((x) => x.content))
@@ -203,78 +274,7 @@ export function DocContent({ doc }: { doc: DocPanelData }): React.JSX.Element {
   }
   return (
     <div ref={scrollRef} className="doc-md flex-1 overflow-y-auto px-6 py-5">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={
-          {
-            p: block('p'),
-            h1: block('h1'),
-            h2: block('h2'),
-            h3: block('h3'),
-            h4: block('h4'),
-            h5: block('h5'),
-            h6: block('h6'),
-            ul: block('ul'),
-            ol: block('ol'),
-            table: block('table'),
-            blockquote: block('blockquote'),
-            hr: block('hr'),
-            pre: (props) => {
-              // 拦截 mermaid 围栏块 → 渲染为图；其余照常
-              const node = props.node as unknown as {
-                position?: { start: { line: number }; end: { line: number } }
-                children?: {
-                  tagName?: string
-                  properties?: { className?: string[] }
-                  children?: { value?: string }[]
-                }[]
-              }
-              const codeNode = node?.children?.[0]
-              const lang = codeNode?.properties?.className?.find((c) => c.startsWith('language-'))
-              const codeText = codeNode?.children?.[0]?.value ?? ''
-              const pos = node?.position
-              const hit =
-                !!pos && ranges.some((r) => pos.start.line <= r.end && pos.end.line >= r.start)
-              const ref = (el: HTMLElement | null): void => {
-                if (el && hit && !anchorTakenRef.current) {
-                  anchorTakenRef.current = true
-                  anchorRef.current = el
-                }
-              }
-              if (lang === 'language-mermaid') {
-                return (
-                  <div ref={ref} className={cn(hit && 'doc-hl')}>
-                    <MermaidBlock code={codeText} onSettled={settle} />
-                  </div>
-                )
-              }
-              const { node: _n, ...rest } = props
-              return (
-                <pre ref={ref as never} className={cn(hit && 'doc-hl')} {...(rest as object)} />
-              )
-            },
-            img: (props) => {
-              const src = String(props.src ?? '')
-              const isAbs = /^(https?:|data:|file:|chime-doc:)/.test(src)
-              const url = isAbs
-                ? src
-                : `chime-doc://img/?kb=${doc.sources[0]?.kbId ?? 0}&doc=${encodeURIComponent(doc.file)}&src=${encodeURIComponent(src)}`
-              return <img src={url} alt={String(props.alt ?? '')} loading="lazy" onLoad={settle} />
-            },
-            a: (props) => (
-              // 只读视图：外链交系统浏览器，内链不跳转
-              <a
-                {...props}
-                onClick={(e) => {
-                  e.preventDefault()
-                  const href = String(props.href ?? '')
-                  if (/^https?:/.test(href)) window.open(href)
-                }}
-              />
-            )
-          } as Components
-        }
-      >
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
         {doc.content ?? ''}
       </ReactMarkdown>
     </div>
