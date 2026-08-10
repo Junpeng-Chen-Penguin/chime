@@ -128,8 +128,8 @@ export default function Composer({
     <div className="flex-none pt-2 pb-4">
       <div className="mx-auto w-full max-w-[840px] px-8">
         <div className="rounded-2xl border border-input bg-background shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_28px_-8px_rgba(0,0,0,0.14)] transition focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15">
-          {/* 待发送的表格行引用（013 Case 2）：横排、放不下换行；序号即数组下标+1，
-              与发给模型的引用块序号一致。点击回看（模块三）尚未接上 */}
+          {/* 待发送的表格行引用（013 Case 2）：横排、放不下换行；不带序号——一个制品
+              最多一个 chip，模型与用户都靠标题分辨。点击回看（模块三）尚未接上 */}
           {!!chips?.length && (
             <div className="flex flex-wrap gap-1.5 px-4 pt-3">
               {chips.map((c, i) => (
@@ -138,7 +138,6 @@ export default function Composer({
                   className="flex max-w-[240px] items-center gap-1.5 rounded-lg border border-border bg-muted/60 py-1 pr-1 pl-2 text-[12px]"
                 >
                   <Table2 className="size-3.5 flex-none text-muted-foreground" />
-                  <span className="flex-none text-muted-foreground">{i + 1}</span>
                   <span className="min-w-0 truncate" title={c.title}>
                     {c.title}
                   </span>

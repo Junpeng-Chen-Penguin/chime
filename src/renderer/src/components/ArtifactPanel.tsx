@@ -6,20 +6,24 @@ import type { ArtifactView } from '../../../preload/index.d'
 // 滚动容器不留顶部内边距——吸顶表头贴住容器顶，行数据不会从表头上方穿出。
 // rows 已在主进程按渲染上限截断，totalRows 为完整行数（超出时提示）。
 //
-// 行勾选与右键菜单（013 Case 2 模块二）：勾选是临时状态，不落库——加进对话后清空，
-// 侧板换内容组件重挂也自然清空。右键菜单只在有勾选行时出现，只作用于已勾选的行
-// （不把光标下那行自动算进去）；超过 200 行时菜单内提示改用导出，不执行。
+// 行勾选与右键菜单（013 Case 2 模块二）：勾选状态与未发出的 chip 是同一份数据的两个视图——
+// 打开侧板时按该制品未发出的引用初始化勾选（chip 还挂着就恢复勾选，发出后 chip 清空、
+// 侧板回初始态）；「加进对话」把勾选写回 chip（同制品替换，一个制品最多一个 chip）。
+// 右键菜单只在有勾选行时出现，只作用于已勾选的行（不把光标下那行自动算进去）；
+// 超过 200 行时菜单内提示改用导出，不执行。
 // 菜单用 portal 挂到 body：侧板容器带入场动画与 overflow，fixed 定位在里面会被裁剪
 const REF_ROWS_MAX = 200
 
 export function ArtifactContent({
   artifact,
+  referencedRows,
   onAddToChat
 }: {
   artifact: ArtifactView
+  referencedRows?: number[] // 该制品未发出的引用行（挂载时恢复勾选）
   onAddToChat?: (rowIndexes: number[]) => void
 }): React.JSX.Element {
-  const [sel, setSel] = useState<Set<number>>(new Set())
+  const [sel, setSel] = useState<Set<number>>(() => new Set(referencedRows ?? []))
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const canPick = !!onAddToChat
   const allPicked = artifact.rows.length > 0 && sel.size === artifact.rows.length
@@ -129,7 +133,6 @@ export function ArtifactContent({
                   className="w-full rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-muted"
                   onClick={() => {
                     onAddToChat?.([...sel].sort((a, b) => a - b))
-                    setSel(new Set())
                     setMenu(null)
                   }}
                 >

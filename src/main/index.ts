@@ -835,7 +835,7 @@ app.whenReady().then(() => {
         // chip 落库与历史展开（013 Case 2 模块一）：声明、引用块、行内容、正文位次各验一条
         const st = await import('./engine/store')
         const a1id = 'id' in a1 ? a1.id : 0
-        st.saveUserMessage(conv, '把 1 里这几条续签了', [
+        st.saveUserMessage(conv, '把引用里这几条续签了', [
           { t: 'ref', artifactId: a1id, title: '测试 T1', rowIndexes: [0, 1] }
         ])
         const um = st
@@ -843,14 +843,14 @@ app.whenReady().then(() => {
           .messages.filter((m) => m.role === 'user')
           .pop() as { content: string }
         assert(um.content.startsWith('以下引用区的内容'), 'chip：声明在最前且只一次')
-        assert(um.content.includes('<引用 序号="1" 来源="测试 T1">'), 'chip：引用块带序号与来源')
+        assert(um.content.includes('<引用 来源="测试 T1">'), 'chip：引用块带来源标题')
         assert(
           um.content.includes('租户 | 金额') &&
             um.content.includes('A | 1') &&
             um.content.includes('B | 2'),
           'chip：按行号取到制品行'
         )
-        assert(um.content.trimEnd().endsWith('把 1 里这几条续签了'), 'chip：用户正文在末尾')
+        assert(um.content.trimEnd().endsWith('把引用里这几条续签了'), 'chip：用户正文在末尾')
         // 删会话清结果与制品
         db.deleteConversation(conv)
         assert(db.getToolResult(bigId, conv) === null, '删除会话：结果一并清除')

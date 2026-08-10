@@ -126,15 +126,22 @@ function App(): React.JSX.Element {
     [panel]
   )
 
-  // 右键「加进对话」：当前制品 + 选中行号 → 本会话的引用清单（013 Case 2）
+  // 右键「加进对话」：当前制品 + 选中行号 → 本会话的引用清单（013 Case 2）。
+  // 一个制品最多一个 chip（俊鹏定：一个制品配一个指令，符合交互形态）——
+  // 同一制品再加是替换行集，不新增第二个 chip
   const addChip = useCallback(
     (rowIndexes: number[]) => {
       if (panel?.kind !== 'artifact' || !activeId) return
       const a = panel.artifact
-      setChips((m) => ({
-        ...m,
-        [activeId]: [...(m[activeId] ?? []), { artifactId: a.id, title: a.title, rowIndexes }]
-      }))
+      setChips((m) => {
+        const cur = m[activeId] ?? []
+        const next = { artifactId: a.id, title: a.title, rowIndexes }
+        const i = cur.findIndex((c) => c.artifactId === a.id)
+        return {
+          ...m,
+          [activeId]: i < 0 ? [...cur, next] : cur.map((c, j) => (j === i ? next : c))
+        }
+      })
     },
     [panel, activeId]
   )
@@ -347,7 +354,13 @@ function App(): React.JSX.Element {
           {panel.kind === 'doc' ? (
             <DocContent doc={panel.doc} />
           ) : (
-            <ArtifactContent artifact={panel.artifact} onAddToChat={addChip} />
+            <ArtifactContent
+              artifact={panel.artifact}
+              referencedRows={
+                (chips[activeId] ?? []).find((c) => c.artifactId === panel.artifact.id)?.rowIndexes
+              }
+              onAddToChat={addChip}
+            />
           )}
         </SidePanel>
       )}
