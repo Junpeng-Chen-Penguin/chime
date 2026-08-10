@@ -7,7 +7,7 @@ import { ArtifactContent } from './components/ArtifactPanel'
 import ConfirmDialog from './components/ConfirmDialog'
 import { Download, Table2 } from 'lucide-react'
 import { useChat, type Msg, type MsgStatus } from './hooks/useChat'
-import type { Conversation, PersistedMessage } from './types'
+import type { ChipRef, Conversation, PersistedMessage } from './types'
 import type { SourceRef, TurnItem, ArtifactView } from '../../preload/index.d'
 
 const toMsg = (p: PersistedMessage): Msg => ({
@@ -38,6 +38,8 @@ function App(): React.JSX.Element {
   const [convModel, setConvModel] = useState<Record<string, string>>({})
   // 每个会话各自的输入草稿
   const [inputs, setInputs] = useState<Record<string, string>>({})
+  // 每个会话各自待发送的表格行引用（013 Case 2）：临时状态不落库，发送时随消息转正
+  const [chips, setChips] = useState<Record<string, ChipRef[]>>({})
   // 知识库：可选库清单 + 草稿会话的勾选意向（发首条消息时定性）
   const [kbOptions, setKbOptions] = useState<
     { id: number; name: string; ready: boolean; building: boolean; folderMissing: boolean }[]
@@ -122,6 +124,19 @@ function App(): React.JSX.Element {
       setCollapsed(true) // 侧板打开 → 侧边栏自动收起
     },
     [panel]
+  )
+
+  // 右键「加进对话」：当前制品 + 选中行号 → 本会话的引用清单（013 Case 2）
+  const addChip = useCallback(
+    (rowIndexes: number[]) => {
+      if (panel?.kind !== 'artifact' || !activeId) return
+      const a = panel.artifact
+      setChips((m) => ({
+        ...m,
+        [activeId]: [...(m[activeId] ?? []), { artifactId: a.id, title: a.title, rowIndexes }]
+      }))
+    },
+    [panel, activeId]
   )
 
   // 点制品卡 → 侧板换制品内容（同一容器）
@@ -252,6 +267,10 @@ function App(): React.JSX.Element {
         contextRatio={chat.contextRatio[activeId] ?? 0}
         input={input}
         onInput={(v) => setInputs((m) => ({ ...m, [activeId]: v }))}
+        chips={chips[activeId] ?? []}
+        onRemoveChip={(idx) =>
+          setChips((m) => ({ ...m, [activeId]: (m[activeId] ?? []).filter((_, i) => i !== idx) }))
+        }
         onSubmit={submit}
         onStop={chat.stop}
         onRetry={() => chat.retry(activeId, activeModel)}
@@ -328,7 +347,7 @@ function App(): React.JSX.Element {
           {panel.kind === 'doc' ? (
             <DocContent doc={panel.doc} />
           ) : (
-            <ArtifactContent artifact={panel.artifact} />
+            <ArtifactContent artifact={panel.artifact} onAddToChat={addChip} />
           )}
         </SidePanel>
       )}

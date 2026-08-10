@@ -134,13 +134,20 @@ export async function runTurn(opts: {
   model: string
   emit: Emit
   saveUser?: boolean // 重试时为 false：用户消息已在库里，不重复写
+  refs?: TurnItem[] // 表格行引用 chip（013 Case 2）：随用户消息落库，历史组装时展开
 }): Promise<void> {
   try {
     await runTurnBody(opts)
   } catch (e) {
     // 兜底收场：组装 / 落库等未预期异常也必须发 turn-done，否则渲染端路由不清空、输入框永久锁死
     console.error('[chime] runTurn 未预期异常:', e)
-    opts.emit({ type: 'turn-done', streamId: opts.streamId, status: 'error', error: '处理出错，请重试', contextRatio: 0 })
+    opts.emit({
+      type: 'turn-done',
+      streamId: opts.streamId,
+      status: 'error',
+      error: '处理出错，请重试',
+      contextRatio: 0
+    })
   }
 }
 
@@ -148,14 +155,20 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
   const { streamId, convId, text, model, emit } = opts
   const p = resolveModelRef(model)
 
-  if (opts.saveUser !== false) saveUserMessage(convId, text)
+  if (opts.saveUser !== false) saveUserMessage(convId, text, opts.refs)
   emit({ type: 'turn-start', streamId })
 
   const msgId = randomUUID()
   if (!p || !p.apiKey) {
     const items: TurnItem[] = [{ t: 'boundary', kind: 'error', text: '请先在设置里配置 API 密钥' }]
     saveAssistantTurn(convId, msgId, { content: '', items, status: 'error' })
-    emit({ type: 'turn-done', streamId, status: 'error', error: '请先在设置里配置 API 密钥', contextRatio: 0 })
+    emit({
+      type: 'turn-done',
+      streamId,
+      status: 'error',
+      error: '请先在设置里配置 API 密钥',
+      contextRatio: 0
+    })
     return
   }
 
@@ -187,7 +200,13 @@ async function streamCore(core: {
   const p = resolveModelRef(model)
   if (!p || !p.apiKey || !p.enabled) {
     saveAssistantTurn(convId, msgId, { content: '', items: [], status: 'error' })
-    emit({ type: 'turn-done', streamId, status: 'error', error: p ? '该模型所属的服务商未启用或未配置密钥' : '模型无法定位，请重新选择', contextRatio: 0 })
+    emit({
+      type: 'turn-done',
+      streamId,
+      status: 'error',
+      error: p ? '该模型所属的服务商未启用或未配置密钥' : '模型无法定位，请重新选择',
+      contextRatio: 0
+    })
     return
   }
 
@@ -209,10 +228,16 @@ async function streamCore(core: {
     if (!it || (it.t !== 'text' && it.t !== 'reasoning')) return
     emit({ type: 'item-done', streamId, index: cur, item: it })
   }
-  const finish = (status: TurnStatus, error?: string, usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }, contextRatio = 0): void => {
+  const finish = (
+    status: TurnStatus,
+    error?: string,
+    usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number },
+    contextRatio = 0
+  ): void => {
     // 模型可能发出空的 text/reasoning 段（如开了个头就转去调工具），不落库
     const kept = items.filter((i) => (i.t !== 'text' && i.t !== 'reasoning') || i.text.trim())
-    const content = [...kept].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')?.text ?? ''
+    const content =
+      [...kept].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')?.text ?? ''
     saveAssistantTurn(convId, msgId, { content, items: kept, status, usage })
     emit({ type: 'turn-done', streamId, status, error, usage, contextRatio })
   }
@@ -290,12 +315,18 @@ async function streamCore(core: {
   turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
   turnTools[GREP_TOOL_NAME] = makeGrepResultTool(convId)
   turnTools[READ_TOOL_NAME] = makeReadResultTool(convId)
-  turnTools[ARTIFACT_TOOL_NAME] = makeArtifactTool(convId, (toolCallId, info) => artifacts.set(toolCallId, info))
+  turnTools[ARTIFACT_TOOL_NAME] = makeArtifactTool(convId, (toolCallId, info) =>
+    artifacts.set(toolCallId, info)
+  )
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
   // 已启用但连不上的服务：工具静默不挂载，不进对话流提醒（07-13 修订——状态常驻输入框标识，与主流一致）
 
   // 组装：系统提示词（固定主干 +（带工具）输出约定 +（挂库）条件段 + 环境信息）+ 消息序列
-  const system = buildSystemPrompt(kbEnv, Object.keys(turnTools).length > 0, getMcpInstructions(mcpSelection))
+  const system = buildSystemPrompt(
+    kbEnv,
+    Object.keys(turnTools).length > 0,
+    getMcpInstructions(mcpSelection)
+  )
   const budget = budgetFor(model)
   const bundle = core.history
   let history = bundle.messages
@@ -318,7 +349,9 @@ async function streamCore(core: {
     const partOf = (c: (typeof clearable)[number]): { output: { value: string } } | null => {
       const msg = history[c.msgIdx] as unknown as { content?: { output?: { value?: unknown } }[] }
       const part = msg?.content?.[c.partIdx]
-      return part?.output && typeof part.output.value === 'string' ? (part as { output: { value: string } }) : null
+      return part?.output && typeof part.output.value === 'string'
+        ? (part as { output: { value: string } })
+        : null
     }
     const savable = clearable.reduce((s, c) => s + estimateTokens(partOf(c)?.output.value ?? ''), 0)
     if (savable >= RELIEF_MIN_SAVE_TOKENS) {
@@ -329,7 +362,12 @@ async function streamCore(core: {
         const id =
           c.resultRef ??
           findToolResultIdByCallId(c.toolCallId) ??
-          insertToolResult({ conversationId: convId, toolCallId: c.toolCallId, toolName: c.toolName, content: p.output.value })
+          insertToolResult({
+            conversationId: convId,
+            toolCallId: c.toolCallId,
+            toolName: c.toolName,
+            content: p.output.value
+          })
         p.output.value = `（这段返回已移出对话释放空间，完整内容在结果编号 #${id}——用 grep_result 搜关键词、read_result 按行读取；任何给用户看的文字不要提编号或存取机制）`
       }
     }
@@ -340,7 +378,8 @@ async function streamCore(core: {
     history = history.slice(2)
     droppedOldest = true
   }
-  if (droppedOldest) emit({ type: 'notice', streamId, text: '对话过长，最早的内容已让位；建议新开会话继续这个话题' })
+  if (droppedOldest)
+    emit({ type: 'notice', streamId, text: '对话过长，最早的内容已让位；建议新开会话继续这个话题' })
   const estimatedInput = estimate()
   const contextRatio = Math.min(1, estimatedInput / budget)
 
@@ -374,7 +413,13 @@ async function streamCore(core: {
         let gated: Map<string, string> | null = null
         if (lastIdx >= 0 && !gatedSteps.has(lastIdx)) {
           gatedSteps.add(lastIdx)
-          const batch = (steps[lastIdx].toolResults as { toolCallId: string; toolName: string; output: unknown }[])
+          const batch = (
+            steps[lastIdx].toolResults as {
+              toolCallId: string
+              toolName: string
+              output: unknown
+            }[]
+          )
             .filter(
               (tr) =>
                 typeof tr.output === 'string' &&
@@ -383,7 +428,11 @@ async function streamCore(core: {
                 tr.toolName !== ASK_TOOL_NAME && // 用户的回答不是外部数据
                 !overflow.refs.has(tr.toolCallId) // 单结果闸已处理的不重复
             )
-            .map((tr) => ({ toolCallId: tr.toolCallId, toolName: tr.toolName, text: tr.output as string }))
+            .map((tr) => ({
+              toolCallId: tr.toolCallId,
+              toolName: tr.toolName,
+              text: tr.output as string
+            }))
           if (batch.length) {
             const replaced = applyTotalGate(overflow, sessionBase, batch)
             if (replaced.size) {
@@ -424,7 +473,14 @@ async function streamCore(core: {
           })
         }
         if (needNote) {
-          msgs = msgs.filter((m) => !(m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(BUDGET_NOTE_PREFIX)))
+          msgs = msgs.filter(
+            (m) =>
+              !(
+                m.role === 'user' &&
+                typeof m.content === 'string' &&
+                m.content.startsWith(BUDGET_NOTE_PREFIX)
+              )
+          )
           msgs = [
             ...msgs,
             {
@@ -515,7 +571,9 @@ async function streamCore(core: {
     }
 
     // 来源结算（B 路线）：流式结束后扫描回答的 [n] 反查结果池；无 [n] 则无来源区
-    const answer = [...items].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')
+    const answer = [...items]
+      .reverse()
+      .find((i): i is { t: 'text'; text: string } => i.t === 'text')
     if (answer && toolCtx.pool.length) {
       const cited = [...new Set([...answer.text.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])))]
       const list = toolCtx.pool.filter((s) => cited.includes(s.n))
@@ -536,7 +594,11 @@ async function streamCore(core: {
     finish(
       'done',
       undefined,
-      { inputTokens: input, outputTokens: usage.outputTokens ?? 0, cachedInputTokens: usage.inputTokenDetails?.cacheReadTokens ?? 0 },
+      {
+        inputTokens: input,
+        outputTokens: usage.outputTokens ?? 0,
+        cachedInputTokens: usage.inputTokenDetails?.cacheReadTokens ?? 0
+      },
       contextRatio
     )
   } catch (e) {

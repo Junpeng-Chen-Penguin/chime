@@ -13,8 +13,15 @@ export interface PersistedMessage {
   conversationId: string
   role: 'user' | 'assistant'
   content: string
-  items: string | null // TurnItem[] 的 JSON，仅 assistant 行有
+  items: string | null // TurnItem[] 的 JSON；assistant 行是过程件，user 行只有表格行引用（013）
   usage: string | null // {input, output, cached} JSON
   status: string
   createdAt: number
+}
+
+// 表格行引用（013 Case 2）：待发送的 chip，随消息落库时转成 TurnItem 的 ref 分支
+export interface ChipRef {
+  artifactId: number
+  title: string
+  rowIndexes: number[]
 }

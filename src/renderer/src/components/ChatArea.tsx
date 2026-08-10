@@ -47,6 +47,8 @@ interface Props {
   contextRatio: number
   input: string
   onInput: (v: string) => void
+  chips?: import('../types').ChipRef[] // 待发送的表格行引用（013 Case 2）
+  onRemoveChip?: (idx: number) => void
   onSubmit: () => void
   onStop: () => void
   onRetry: () => void
@@ -83,6 +85,8 @@ export default function ChatArea({
   onSubmit,
   onStop,
   onRetry,
+  chips,
+  onRemoveChip,
   onRename,
   model,
   models,
@@ -142,6 +146,8 @@ export default function ChatArea({
       askWaiting={!!askItem}
       value={input}
       onChange={onInput}
+      chips={chips}
+      onRemoveChip={onRemoveChip}
       onSubmit={() => {
         if (!overLimit) onSubmit()
       }}
