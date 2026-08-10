@@ -1,34 +1,46 @@
-# chime
+# Chime
 
-An Electron application with React and TypeScript
+一个跑在自己电脑上的 AI 对话应用。它能查你本地的知识库、调你自己接的 MCP 服务，把查到的数据整理成可以打开细看的表格。数据、对话记录、API 密钥都只存在本机。
 
-## Recommended IDE Setup
+macOS + Apple Silicon。其他平台的构建脚本在，但没验证过。
 
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
+## 它能做什么
 
-## Project Setup
+- **对着本地知识库问答**：指一个装着 Markdown 的文件夹，它建索引、检索、回答，并把用到的原文列出来供你核对
+- **调 MCP 服务**：接入任何 MCP 服务；写操作走授权卡，执行前由你逐次确认
+- **表格制品**：数据超过几条时不在正文堆表格，生成一个可以在侧板打开的表格
+- **多家模型服务**：内置 DeepSeek、智谱两家的预设，也可以填自定义的服务地址
 
-### Install
-
-```bash
-$ pnpm install
-```
-
-### Development
+## 装起来
 
 ```bash
-$ pnpm dev
+pnpm install
+pnpm dev          # 开发模式
+pnpm build:mac    # 打包成 .app
 ```
 
-### Build
+打包产物的输出目录写在 `electron-builder.yml` 的 `directories.output`，默认指向作者本机的路径，**自己用要改成你的**。
+
+## 第一次用要配三样
+
+**一、模型服务**（必须）。设置 → 模型服务 → 选一家 → 填 API 密钥 → 检测模型 → 勾选要用的 → 回到「默认模型」选一个。密钥加密后存在本机，不上传。
+
+**二、知识库**（可选）。设置 → 知识库 → 添加，指一个装 Markdown 的文件夹。首次会建索引（本地跑 embedding 模型，第一次要下载模型文件）。库的用途写在「简介」里——那段文字会进模型的上下文，决定它什么时候来查这个库，值得认真写。
+
+**三、MCP 服务**（可选）。设置 → MCP 服务 → 添加，填服务地址和请求头。默认每次调用都要你授权；确认某个服务安全后可以打开「信任」，此后它的只读工具不再逐次问你。
+
+## 几件值得知道的事
+
+- **工具清单指纹**：每个服务首次连上时记下它的工具清单指纹，之后每次连接都比对。工具说明被改过会在界面上提示——MCP 的工具说明是会进模型上下文的，改了等于改了模型的行为
+- **大结果不会撑爆上下文**：单次工具返回超过 3 万字时只给模型摘要，全文存在本地，模型需要细节时自己去搜、去读
+- **对话历史里的制品**：制品在发给模型的历史里还原成工具调用记录，不会被模型当成自己说过的话
+
+## 开发
 
 ```bash
-# For windows
-$ pnpm build:win
-
-# For macOS
-$ pnpm build:mac
-
-# For Linux
-$ pnpm build:linux
+pnpm typecheck    # 类型检查
+pnpm lint
+pnpm format
 ```
+
+主进程在 `src/main/`（`engine/` 是对话编排的核心），渲染进程在 `src/renderer/`。改动约定见 `CLAUDE.md`。
