@@ -364,14 +364,34 @@ export function makeSearchTool(ctx: TurnToolContext) {
         }
       }
       if (ctx.searches >= SEARCH_LIMIT_PER_TURN) {
-        return { denied: '已达检索上限，请基于已有结果作答' }
+        // 到上限分两种（013 Case 6）：一条结果都没有时「基于已有结果作答」等于让模型凭空编
+        return ctx.pool.length
+          ? { denied: '已达检索上限，请基于已有结果作答' }
+          : {
+              denied:
+                '已达检索上限且没有任何命中：如实告知用户知识库中没有找到相关内容，不要用你自己的知识补充没有资料依据的回答'
+            }
       }
       ctx.searches++
       try {
         const r = await retrieve(query, ctx.kbIds)
         if (r.status === 'busy') return { notice: '知识库正在更新，请稍后再试' }
         if (r.status === 'needs-rebuild') return { notice: '知识库暂时不可用' } // 组装时已按无库拦下，此为兜底
-        if (r.status === 'miss') return { results: [] }
+        if (r.status === 'miss') {
+          // 空结果带说明与下一步（013 Case 6）：裸空数组让模型自己发明下一步——
+          // badcase A8（拒绝后只报状态不给动作）与 S6（空结果不报默认）的同族第三例。
+          // 报剩余次数让它自己规划；不描述知识库怎么组织（那是某一个库的观察，不是通用事实）
+          const left = SEARCH_LIMIT_PER_TURN - ctx.searches
+          return {
+            results: [],
+            notice:
+              left > 0
+                ? `本次检索没有命中。本轮还可检索 ${left} 次，可换一个角度或换一组业务概念词再查`
+                : ctx.pool.length
+                  ? '本次检索没有命中，检索次数已用完，基于已查到的结果作答'
+                  : '本次检索没有命中且次数已用完：如实告知用户知识库中没有找到相关内容，不要用你自己的知识补充没有资料依据的回答'
+          }
+        }
 
         // 结果续接本轮来源池，连续编号
         const start = ctx.pool.length
