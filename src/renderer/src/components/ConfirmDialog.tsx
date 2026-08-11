@@ -6,6 +6,7 @@ interface Props {
   title: string
   body: string
   confirmText: string
+  cancelText?: string // 缺省「取消」
   onConfirm: () => void
   onCancel: () => void
 }
@@ -15,6 +16,7 @@ export default function ConfirmDialog({
   title,
   body,
   confirmText,
+  cancelText,
   onConfirm,
   onCancel
 }: Props): React.JSX.Element | null {
@@ -45,7 +47,7 @@ export default function ConfirmDialog({
         <div className="mb-5 text-[13px] leading-[1.6] text-muted-foreground">{body}</div>
         <div className="flex justify-end gap-2.5">
           <Button variant="outline" onClick={onCancel} className="h-9">
-            取消
+            {cancelText ?? '取消'}
           </Button>
           <Button variant="destructive" onClick={onConfirm} className="h-9">
             {confirmText}

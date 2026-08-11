@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
-import { X, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText } from 'lucide-react'
+import { PanelLeft, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText } from 'lucide-react'
 import { BUILTIN_TOOLS } from '../../../shared/builtinTools'
 import deepseekIcon from '@/assets/vendors/deepseek.png'
 import zhipuIcon from '@/assets/vendors/zhipu.png'
@@ -19,76 +19,73 @@ const TABS: { key: Tab; label: string; icon: typeof Boxes }[] = [
 ]
 
 interface Props {
-  open: boolean
-  onClose: () => void
+  collapsed: boolean // 侧边栏收起时顶栏要自带展开按钮，否则设置页没有出路
+  fullscreen: boolean
+  onExpand: () => void
+  onClose: () => void // Esc 退出设置（回当前会话）；App 侧包了未保存拦截
   onSaved: (defaultModel: string) => void
+  onDirtyChange: (dirty: boolean) => void // 有未保存的表单内容时上报，App 在离开入口拦截
   initialTab?: Tab // 外部入口直达分区（如输入框服务状态面板的「前往设置」）
 }
 
-export default function SettingsDialog({ open, onClose, onSaved, initialTab }: Props): React.JSX.Element | null {
-  const [tab, setTab] = useState<Tab>('provider')
+// 设置页：占用主区域展示（014 Case 1，原为弹窗——弹窗放不下 Agent 提示词这类长文本编辑）
+export default function SettingsView({ collapsed, fullscreen, onExpand, onClose, onSaved, onDirtyChange, initialTab }: Props): React.JSX.Element {
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'provider')
 
   useEffect(() => {
-    if (!open) return
-    setTab(initialTab ?? 'provider')
-  }, [open, initialTab])
-
-  useEffect(() => {
-    if (!open) return
     const h = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [open, onClose])
-
-  if (!open) return null
+  }, [onClose])
 
   return (
-    <div
-      onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="flex h-[560px] max-h-[88vh] w-[780px] flex-col overflow-hidden rounded-2xl bg-background shadow-2xl"
+    <div className="flex h-full min-w-[480px] flex-1 flex-col overflow-hidden rounded-[12px] border border-border bg-background shadow-[0_1px_2px_rgba(0,0,0,0.03),0_2px_8px_rgba(0,0,0,0.05)]">
+      <header
+        className={cn(
+          'app-drag flex h-[44px] flex-none items-center gap-1',
+          collapsed && !fullscreen ? 'pr-4 pl-[72px]' : 'px-4'
+        )}
       >
-        <div className="flex h-14 flex-none items-center justify-between border-b border-border px-5">
-          <div className="text-[15px] font-semibold">设置</div>
+        {collapsed && (
           <button
-            onClick={onClose}
-            className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            onClick={onExpand}
+            title="展开侧栏  ⌘."
+            className="app-no-drag grid size-8 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-black/5 hover:text-foreground"
           >
-            <X className="size-[18px]" />
+            <PanelLeft className="size-[18px]" />
           </button>
-        </div>
+        )}
+        <div className="text-[15px] font-semibold">设置</div>
+      </header>
 
-        <div className="flex min-h-0 flex-1">
-          <nav className="flex w-[168px] flex-none flex-col gap-1 border-r border-border p-3">
-            {TABS.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                onClick={() => setTab(key)}
-                className={cn(
-                  'flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] transition-colors',
-                  tab === key ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60'
-                )}
-              >
-                <Icon className="size-4" />
-                {label}
-              </button>
-            ))}
-          </nav>
+      <div className="flex min-h-0 flex-1">
+        <nav className="flex w-[168px] flex-none flex-col gap-1 border-r border-border p-3">
+          {TABS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={cn(
+                'flex items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] transition-colors',
+                tab === key ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60'
+              )}
+            >
+              <Icon className="size-4" />
+              {label}
+            </button>
+          ))}
+        </nav>
 
-          <div className="flex min-w-0 flex-1 flex-col">
-            {tab === 'kb' ? (
-              <KbPanel />
-            ) : tab === 'mcp' ? (
-              <ToolsPanel initialSub={initialTab === 'mcp' ? 'mcp' : 'builtin'} />
-            ) : (
-              <ProviderPanel onSaved={onSaved} />
-            )}
-          </div>
+        {/* 切换分区即卸载当前面板，面板卸载时自行把未保存标记复位 */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {tab === 'kb' ? (
+            <KbPanel onDirtyChange={onDirtyChange} />
+          ) : tab === 'mcp' ? (
+            <ToolsPanel initialSub={initialTab === 'mcp' ? 'mcp' : 'builtin'} onDirtyChange={onDirtyChange} />
+          ) : (
+            <ProviderPanel onSaved={onSaved} />
+          )}
         </div>
       </div>
     </div>
@@ -429,7 +426,7 @@ const KB_PHASE_TEXT: Record<string, string> = {
   embedding: '导入文档…'
 }
 
-function KbPanel(): React.JSX.Element {
+function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): React.JSX.Element {
   type KbCard = import('../../../preload/index.d').KbCard
   type KbProgress = import('../../../preload/index.d').KbProgress
   const [cards, setCards] = useState<KbCard[]>([])
@@ -486,15 +483,30 @@ function KbPanel(): React.JSX.Element {
 
   const anyBuilding = !!progress || cards.some((c) => c.building)
 
+  const formInit = useRef({ name: '', intro: '', path: '' }) // 打开表单时的初值，未保存判断的基准
+
   const openForm = (card: KbCard | null): void => {
     setEditingId(card?.id ?? null)
     setFormName(card?.name ?? '')
     setFormIntro(card?.intro ?? '')
     setFormPath(card?.rootPath ?? '')
+    formInit.current = { name: card?.name ?? '', intro: card?.intro ?? '', path: card?.rootPath ?? '' }
     setFormError('')
     setFormDone(null)
     setShowForm(true)
   }
+
+  // 未保存上报：表单开着且有字段偏离初值才算（构建中/构建完成不算——内容已提交，离开无损失）
+  useEffect(() => {
+    const i = formInit.current
+    onDirtyChange(
+      showForm &&
+        !progress &&
+        formDone === null &&
+        (formName !== i.name || formIntro !== i.intro || formPath !== i.path)
+    )
+  }, [showForm, formName, formIntro, formPath, progress, formDone, onDirtyChange])
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]) // 卸载复位（切分区、退出设置）
 
   const submitForm = async (): Promise<void> => {
     setFormError('')
@@ -794,7 +806,7 @@ const INPUT_CLS =
 
 // 工具分区：顶部子页签（内置工具 / MCP 服务）——内置再多也不挤压 MCP 的直达入口（Cherry Studio 同构）。
 // 「前往设置」深链时落 MCP 页签，正常导航默认落内置工具
-function ToolsPanel({ initialSub }: { initialSub: 'builtin' | 'mcp' }): React.JSX.Element {
+function ToolsPanel({ initialSub, onDirtyChange }: { initialSub: 'builtin' | 'mcp'; onDirtyChange: (d: boolean) => void }): React.JSX.Element {
   const [sub, setSub] = useState<'builtin' | 'mcp'>(initialSub)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -812,7 +824,7 @@ function ToolsPanel({ initialSub }: { initialSub: 'builtin' | 'mcp' }): React.JS
           </button>
         ))}
       </div>
-      {sub === 'builtin' ? <BuiltinToolsPane /> : <McpPanel />}
+      {sub === 'builtin' ? <BuiltinToolsPane /> : <McpPanel onDirtyChange={onDirtyChange} />}
     </div>
   )
 }
@@ -854,7 +866,7 @@ function BuiltinToolsPane(): React.JSX.Element {
   )
 }
 
-function McpPanel(): React.JSX.Element {
+function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): React.JSX.Element {
   type McpServiceInfo = import('../../../preload/index.d').McpServiceInfo
   type McpTestResult = import('../../../preload/index.d').McpTestResult
   const [list, setList] = useState<McpServiceInfo[]>([])
@@ -884,6 +896,8 @@ function McpPanel(): React.JSX.Element {
     return window.api.onMcpStatus(reload)
   }, [reload])
 
+  const formInit = useRef({ name: '', url: '', enabled: true, headers: '' }) // 打开表单时的初值，未保存判断的基准
+
   const openForm = (svc: McpServiceInfo | null): void => {
     setEditing(svc)
     setFormName(svc?.name ?? '')
@@ -896,10 +910,22 @@ function McpPanel(): React.JSX.Element {
       : ''
     setHeadersText(text)
     setHeadersOriginal(text)
+    formInit.current = { name: svc?.name ?? '', url: svc?.url ?? '', enabled: svc?.enabled ?? true, headers: text }
     setFormError('')
     setTestResult(null)
     setShowForm(true)
   }
+
+  // 未保存上报：表单开着且有字段偏离初值才算（保存进行中不算）
+  useEffect(() => {
+    const i = formInit.current
+    onDirtyChange(
+      showForm &&
+        !saving &&
+        (formName !== i.name || formUrl !== i.url || formEnabled !== i.enabled || headersText !== i.headers)
+    )
+  }, [showForm, formName, formUrl, formEnabled, headersText, saving, onDirtyChange])
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]) // 卸载复位（切分区、切子页签、退出设置）
 
   // 认证请求头解析：一行一条「名=值」。编辑时文本没动 = 沿用已存（null，与模型服务密钥同一约定）；
   // 动了则须全部重填（打码字符出现在值里即视为没填完整）

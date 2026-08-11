@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Sidebar from './components/Sidebar'
 import ChatArea from './components/ChatArea'
-import SettingsDialog from './components/SettingsDialog'
+import SettingsView from './components/SettingsView'
 import SidePanel, { DocContent, type DocPanelData } from './components/SidePanel'
 import { ArtifactContent } from './components/ArtifactPanel'
 import ConfirmDialog from './components/ConfirmDialog'
@@ -30,6 +30,8 @@ function App(): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsDirty = useRef(false) // 设置里有未保存表单内容（只在离开瞬间读，不需要触发渲染）
+  const [leaveTarget, setLeaveTarget] = useState<(() => void) | null>(null) // 未保存拦截：确认后要执行的离开动作
   // 设置打开时直达的分区：侧栏入口用默认分区，服务状态面板的「前往设置」直达 MCP 分区
   const [settingsTab, setSettingsTab] = useState<'provider' | 'kb' | 'mcp' | undefined>(undefined)
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
@@ -172,6 +174,15 @@ function App(): React.JSX.Element {
   const chat = useChat(refresh)
   const didInit = useRef(false)
 
+  // ⌘. 收起/展开侧边栏：按钮提示一直写着这个快捷键，实现是 1.12.0 补的（此前从未生效）
+  useEffect(() => {
+    const h = (e: KeyboardEvent): void => {
+      if (e.metaKey && e.key === '.') setCollapsed((c) => !c)
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [])
+
   const openDraft = useCallback(() => {
     const id = newId()
     setDraftId(id)
@@ -267,18 +278,40 @@ function App(): React.JSX.Element {
     setDeleteTarget(null)
   }
 
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false)
+    settingsDirty.current = false
+    reloadKb() // 设置里增删改了库，回到会话即反映（移除后标已移除）
+  }, [reloadKb])
+
+  // 离开设置的统一入口：有未保存内容先拦（Case 1 功能点 5），确认后执行原动作；没有则直接走。
+  // 不在设置页时 then 原样执行，行为与改版前一致
+  const leaveSettings = (then?: () => void): void => {
+    if (settingsOpen && settingsDirty.current) {
+      setLeaveTarget(() => () => {
+        closeSettings()
+        then?.()
+      })
+      return
+    }
+    if (settingsOpen) closeSettings()
+    then?.()
+  }
+
+  const openSettings = (tab?: 'provider' | 'kb' | 'mcp'): void => {
+    setSettingsTab(tab)
+    setPanel(null) // 设置占用主区域，侧板一并收起（退出后不自动恢复）
+    setSettingsOpen(true)
+  }
+
   const sidebarProps = {
     items: conversations,
-    activeId,
+    activeId: settingsOpen ? '' : activeId, // 设置打开时会话列表无选中项
     fullscreen,
-    onSelect: (id: string) => {
-      setActiveId(id)
-    },
-    onNewChat: openDraft,
-    onOpenSettings: () => {
-      setSettingsTab(undefined)
-      setSettingsOpen(true)
-    },
+    settingsActive: settingsOpen,
+    onSelect: (id: string) => leaveSettings(() => setActiveId(id)),
+    onNewChat: () => leaveSettings(openDraft),
+    onOpenSettings: () => openSettings(undefined),
     onDelete: (c: Conversation) => setDeleteTarget(c)
   }
 
@@ -286,6 +319,20 @@ function App(): React.JSX.Element {
     <div className="relative flex h-full w-full gap-2 bg-[#e8e8e5] p-2">
       {!collapsed && <Sidebar {...sidebarProps} onCollapse={() => setCollapsed(true)} />}
 
+      {settingsOpen ? (
+        <SettingsView
+          collapsed={collapsed}
+          fullscreen={fullscreen}
+          onExpand={() => setCollapsed(false)}
+          initialTab={settingsTab}
+          onClose={() => leaveSettings()}
+          onDirtyChange={(d) => (settingsDirty.current = d)}
+          onSaved={(m) => {
+            if (m) setDefaultModel(m)
+            window.api.providerMenu().then(setModels)
+          }}
+        />
+      ) : (
       <ChatArea
         title={active?.title ?? '新对话'}
         convId={activeId}
@@ -330,10 +377,7 @@ function App(): React.JSX.Element {
         onRetryServices={() => {
           window.api.mcpRetry().then(reloadServices)
         }}
-        onOpenSettings={() => {
-          setSettingsTab('mcp')
-          setSettingsOpen(true)
-        }}
+        onOpenSettings={() => openSettings('mcp')}
         onRename={(t) => {
           if (!activeId || activeId === draftId) return
           setConversations((cs) => cs.map((c) => (c.id === activeId ? { ...c, title: t } : c)))
@@ -347,6 +391,7 @@ function App(): React.JSX.Element {
         onRespondAsk={chat.respondAsk}
         onOpenArtifact={openArtifact}
       />
+      )}
 
       {panel && (
         <SidePanel
@@ -390,19 +435,6 @@ function App(): React.JSX.Element {
         </SidePanel>
       )}
 
-      <SettingsDialog
-        open={settingsOpen}
-        initialTab={settingsTab}
-        onClose={() => {
-          setSettingsOpen(false)
-          reloadKb() // 设置里增删改了库，回到会话即反映（移除后标已移除）
-        }}
-        onSaved={(m) => {
-          if (m) setDefaultModel(m)
-          window.api.providerMenu().then(setModels)
-        }}
-      />
-
       <ConfirmDialog
         open={!!deleteTarget}
         title="删除会话"
@@ -410,6 +442,20 @@ function App(): React.JSX.Element {
         confirmText="删除"
         onConfirm={confirmDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/* 设置里有未保存内容时的离开确认（Case 1 功能点 5）；取消即留在设置页继续编辑 */}
+      <ConfirmDialog
+        open={!!leaveTarget}
+        title="放弃未保存的修改？"
+        body="当前编辑的内容还没有保存，离开后会丢失。"
+        confirmText="放弃并离开"
+        cancelText="继续编辑"
+        onConfirm={() => {
+          leaveTarget?.()
+          setLeaveTarget(null)
+        }}
+        onCancel={() => setLeaveTarget(null)}
       />
     </div>
   )

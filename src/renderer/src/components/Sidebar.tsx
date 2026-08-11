@@ -6,6 +6,7 @@ interface Props {
   items: Conversation[]
   activeId: string
   fullscreen: boolean
+  settingsActive: boolean // 设置占用主区域时，选中态从会话列表移到设置按钮
   onSelect: (id: string) => void
   onNewChat: () => void
   onCollapse: () => void
@@ -17,6 +18,7 @@ export default function Sidebar({
   items,
   activeId,
   fullscreen,
+  settingsActive,
   onSelect,
   onNewChat,
   onCollapse,
@@ -79,7 +81,12 @@ export default function Sidebar({
       <div className="flex-none border-t border-border p-2.5">
         <button
           onClick={onOpenSettings}
-          className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] text-muted-foreground transition-colors hover:bg-black/5"
+          className={cn(
+            'flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] transition-colors',
+            settingsActive
+              ? 'bg-primary-soft font-medium text-primary-soft-foreground'
+              : 'text-muted-foreground hover:bg-black/5'
+          )}
         >
           <Settings className="size-[18px] text-muted-foreground" />
           设置
