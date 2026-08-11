@@ -59,8 +59,13 @@ interface Props {
   onPickModel: (m: string) => void
   kbOptions: KbOption[]
   kbSel: KbSelEntry[]
-  kbLocked: boolean
-  onToggleKb: (id: number, name: string) => void
+  agents: { id: number; name: string }[]
+  agentSel: { id: number; name: string } | null
+  agentLocked: boolean
+  agentGone: boolean
+  agentServiceIds: number[]
+  onSelectAgent: (a: { id: number; name: string } | null) => void
+  onManageAgents: () => void
   services: ServiceStatus[]
   selectedServiceIds: number[]
   onToggleService: (id: number) => void
@@ -94,8 +99,13 @@ export default function ChatArea({
   onPickModel,
   kbOptions,
   kbSel,
-  kbLocked,
-  onToggleKb,
+  agents,
+  agentSel,
+  agentLocked,
+  agentGone,
+  agentServiceIds,
+  onSelectAgent,
+  onManageAgents,
   services,
   selectedServiceIds,
   onToggleService,
@@ -159,8 +169,13 @@ export default function ChatArea({
       sessionUsage={sessionUsage}
       kbOptions={kbOptions}
       kbSel={kbSel}
-      kbLocked={kbLocked}
-      onToggleKb={onToggleKb}
+      agents={agents}
+      agentSel={agentSel}
+      agentLocked={agentLocked}
+      agentGone={agentGone}
+      agentServiceIds={agentServiceIds}
+      onSelectAgent={onSelectAgent}
+      onManageAgents={onManageAgents}
       services={services}
       selectedServiceIds={selectedServiceIds}
       onToggleService={onToggleService}

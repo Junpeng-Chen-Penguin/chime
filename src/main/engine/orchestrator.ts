@@ -11,10 +11,13 @@ import {
   resolveModelRef,
   getConversationKbSelection,
   getConversationMcpSelection,
+  getConversationAgent,
+  getAgent,
   listKbs,
   kbStatsFor,
   findToolResultIdByCallId,
-  insertToolResult
+  insertToolResult,
+  type AgentRow
 } from '../db'
 import { EMBED_MODEL_ID } from '../model'
 import { humanize, markVendorHealth } from '../ai'
@@ -108,8 +111,16 @@ function humanizeError(e: unknown): string {
 // 挂库判定（组装时）：需重建（本地模型已更换）按无知识库组装并提示，「更新中」则正常挂、由工具返回 busy 语义
 // 会话选库 → 检索环境：逐库判定可用性。被移除的静默剔除（控件已展示），
 // embed 模型不匹配的剔除并提示（需重建才能检索）
-function deriveKbEnv(convId: string, notice?: (text: string) => void): KbEnv | null {
-  const sel = getConversationKbSelection(convId)
+// 会话选用的 Agent（014 Case 4）：id 现查配置（跟随最新），Agent 已删返回 null（Case 5 降级）
+function deriveAgent(convId: string): AgentRow | null {
+  const { agentId } = getConversationAgent(convId)
+  return agentId === null ? null : getAgent(agentId)
+}
+
+function deriveKbEnv(convId: string, agent: AgentRow | null, notice?: (text: string) => void): KbEnv | null {
+  // 知识库来源两条：历史会话自带的 kb_selection + Agent 挂的（合并去重；Agent 会话通常只有后者）
+  const own = getConversationKbSelection(convId)
+  const sel = [...own, ...(agent?.kbSel ?? []).filter((a) => !own.some((o) => o.id === a.id))]
   if (sel.length === 0) return null
   const all = new Map(listKbs().map((k) => [k.id, k]))
   const libraries: KbEnv['libraries'] = []
@@ -172,7 +183,8 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
     return
   }
 
-  const kbEnv = deriveKbEnv(convId, (t) => emit({ type: 'notice', streamId, text: t }))
+  const agent = deriveAgent(convId)
+  const kbEnv = deriveKbEnv(convId, agent, (t) => emit({ type: 'notice', streamId, text: t }))
   await streamCore({
     streamId,
     convId,
@@ -181,7 +193,8 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
     msgId,
     items: [],
     history: loadHistoryMessages(convId),
-    kbEnv
+    kbEnv,
+    agent
   })
 }
 
@@ -195,8 +208,9 @@ async function streamCore(core: {
   items: TurnItem[]
   history: HistoryBundle
   kbEnv: KbEnv | null
+  agent: AgentRow | null
 }): Promise<void> {
-  const { streamId, convId, model, emit, msgId, items, kbEnv } = core
+  const { streamId, convId, model, emit, msgId, items, kbEnv, agent } = core
   const p = resolveModelRef(model)
   if (!p || !p.apiKey || !p.enabled) {
     saveAssistantTurn(convId, msgId, { content: '', items: [], status: 'error' })
@@ -308,8 +322,12 @@ async function streamCore(core: {
   // 制品：成功的生成调用不出工具步骤行，tool-result 时把该 item 换成制品卡（成果即过程）
   const artifacts = new Map<string, { id: number; title: string; rowCount: number }>()
 
-  // 工具组装：内置（询问用户、查结果集、生成制品常备，挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）
-  const mcpSelection = new Set(getConversationMcpSelection(convId))
+  // 工具组装：内置（询问用户、查结果集、生成制品常备，挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）。
+  // 服务范围 = 会话自加的 ∪ Agent 挂的（Agent 的服务已删/停用时不在缓存里，自然跳过——Case 5 降级）
+  const mcpSelection = new Set([
+    ...getConversationMcpSelection(convId),
+    ...(agent?.mcpSel ?? []).map((e) => e.id)
+  ])
   const mcp = makeMcpTools(controller.signal, cards, overflow, mcpSelection)
   const turnTools: Record<string, Tool> = { ...mcp.tools }
   turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
@@ -321,12 +339,8 @@ async function streamCore(core: {
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
   // 已启用但连不上的服务：工具静默不挂载，不进对话流提醒（07-13 修订——状态常驻输入框标识，与主流一致）
 
-  // 组装：系统提示词（固定主干 +（带工具）输出约定 +（挂库）条件段 + 环境信息）+ 消息序列
-  const system = buildSystemPrompt(
-    kbEnv,
-    Object.keys(turnTools).length > 0,
-    getMcpInstructions(mcpSelection)
-  )
+  // 组装：系统提示词（身份段 + 固定主干 + 输出约定 +（关联知识库）条件段 + 环境信息）+ 消息序列
+  const system = buildSystemPrompt(kbEnv, getMcpInstructions(mcpSelection), agent?.prompt ?? null)
   const budget = budgetFor(model)
   const bundle = core.history
   let history = bundle.messages

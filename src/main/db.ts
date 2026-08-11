@@ -422,6 +422,8 @@ export interface ConversationRow {
   model: string
   updatedAt: number
   kbSelection?: KbSelEntry[]
+  agentId?: number | null // 选用的 Agent；配置按 id 现查（跟随最新），null = 通用对话
+  agentName?: string | null // 名字快照：Agent 删除后界面显示「{名字}（已删除）」用
 }
 
 export interface MessageRow {
@@ -438,9 +440,17 @@ export interface MessageRow {
 export function listConversations(): ConversationRow[] {
   const rows = db
     .prepare(
-      'SELECT id, title, model, updated_at AS updatedAt, kb_selection AS kbSelection FROM conversation ORDER BY updated_at DESC'
+      'SELECT id, title, model, updated_at AS updatedAt, kb_selection AS kbSelection, agent_id AS agentId, agent_name AS agentName FROM conversation ORDER BY updated_at DESC'
     )
-    .all() as unknown as { id: string; title: string; model: string; updatedAt: number; kbSelection: string | null }[]
+    .all() as unknown as {
+    id: string
+    title: string
+    model: string
+    updatedAt: number
+    kbSelection: string | null
+    agentId: number | null
+    agentName: string | null
+  }[]
   return rows.map((r) => {
     let sel: KbSelEntry[] = []
     try {
@@ -1107,4 +1117,12 @@ export function agentUsageCount(id: number): number {
 
 export function setConversationAgent(id: string, agentId: number | null, agentName: string | null): void {
   db.prepare('UPDATE conversation SET agent_id = ?, agent_name = ? WHERE id = ?').run(agentId, agentName, id)
+}
+
+// 会话选用的 Agent（014 Case 4）
+export function getConversationAgent(id: string): { agentId: number | null; agentName: string | null } {
+  const r = db.prepare('SELECT agent_id AS agentId, agent_name AS agentName FROM conversation WHERE id = ?').get(id) as
+    | { agentId: number | null; agentName: string | null }
+    | undefined
+  return r ?? { agentId: null, agentName: null }
 }

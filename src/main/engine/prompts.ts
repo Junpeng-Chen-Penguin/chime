@@ -1,9 +1,11 @@
 // 提示词资产（PRD v0.4.0 定稿文案）：固定主干 + 知识库条件段 + 检索工具描述。
 // 分节组装：会话挂知识库才追加条件段；环境信息独立成节，不混进规则。
 
-const TRUNK = `你是 Chime，面向业务答疑的桌面 AI 助手。
+// 身份段（014 Case 3）：选了 Agent 且写了提示词时用用户那一整段（含身份句与业务规则），
+// 否则用产品自带这句。用户段在最前——身份不先立，后面的机制规则是在替谁办事就不清楚
+const IDENTITY_DEFAULT = '你是 Chime，面向业务答疑的桌面 AI 助手。'
 
-# 回答原则
+const TRUNK = `# 回答原则
 - 有工具可以获取依据时，先取证再回答；没有依据的内容不要虚构。
 - 诚实边界：回答前先看手头条件（可用工具、资料、对话内容）够不够。听不懂就追问；信息不够就答已知部分并说明缺什么；没有对应手段就直说做不了，不要宣称要去做你做不了的事；没把握的内容标明不确定。宁可承认局限，不给听起来可信但没有依据的回答。
 
@@ -33,10 +35,6 @@ const TOOL_SECTION = `# 输出约定
 - 返回里没有的属性，说数据里没有这一项，不要从别的字段推断：返回里只给了 A 字段，就不能拿 A 反推出 B 再说给用户，哪怕业务上通常是那样。推断出来的结论用户没法核对，也常常是错的。
 - 工具清单只说明你具备的能力，不代表用户的话题：用户的问题与工具无关时，就问题本身回答，不要把工具描述里的业务概念当作对话背景带进回答或提问。
 - 超限存储、结果编号、取数工具这类机制是你的内部工作方式：任何给用户看的文字——回答、调用前的说明句——都不要提编号或机制本身。说明句用用户视角的话，如「在已导出的数据里找 4 月份的账单」，而不是「从结果 #3 中搜」。`
-
-// 无工具时的反向声明：拦住模型输出假工具调用标记的惯性（实测约三成概率，仅靠诚实边界拦不全）
-const NO_TOOL_SECTION = `# 输出约定
-- 本轮没有任何可用工具。不要输出工具调用或类似标记；需要外部数据才能回答时，直接向用户说明并提出需要什么。`
 
 const KB_SECTION = `# 知识库会话
 - 回答业务问题前，先检索知识库；闲聊或与业务无关的通用请求（翻译、计算、写作等）直接回答，不检索。
@@ -75,11 +73,13 @@ export interface McpInstructionEntry {
   instructions: string
 }
 
-// 系统提示词 = 固定主干 +（带工具时）输出约定 +（挂库时）知识库条件段 +（有服务说明时）已连接服务说明 + 环境信息，前缀稳定利于缓存
+// 系统提示词 = 身份段（Agent 的用户提示词或产品身份句）+ 固定主干 + 输出约定 +
+// （会话关联知识库时）知识库条件段 +（有服务说明时）已连接服务说明 + 环境信息，前缀稳定利于缓存。
+// 原 hasTools 分支已删：提问卡、查结果集、生成制品四个内置工具无条件挂载，「无工具」分支从未走到过
 export function buildSystemPrompt(
   kb: KbEnv | null,
-  hasTools: boolean,
-  mcpInstructions: McpInstructionEntry[] = []
+  mcpInstructions: McpInstructionEntry[] = [],
+  agentPrompt: string | null = null
 ): string {
   const d = new Date()
   const envLines: string[] = []
@@ -88,8 +88,9 @@ export function buildSystemPrompt(
       envLines.push(`知识库：${lib.name}（${lib.docCount} 篇文档）——${lib.intro}`)
   envLines.push(`当前日期：${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`)
 
-  const parts = [TRUNK]
-  parts.push(hasTools ? TOOL_SECTION : NO_TOOL_SECTION)
+  const parts = [agentPrompt?.trim() ? agentPrompt.trim() : IDENTITY_DEFAULT]
+  parts.push(TRUNK)
+  parts.push(TOOL_SECTION)
   if (kb) parts.push(KB_SECTION)
   if (mcpInstructions.length) {
     const blocks = mcpInstructions.map((m) => `## ${m.name}\n${m.instructions}`)

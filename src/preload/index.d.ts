@@ -282,6 +282,7 @@ export interface ChimeApi {
   }) => Promise<{ ok: true; id: number } | { ok: false; error: string }>
   agentDelete: (id: number) => Promise<void>
   agentUsage: (id: number) => Promise<number>
+  setConversationAgent: (input: { id: string; agentId: number | null; agentName: string | null }) => Promise<void>
   mcpSetTrusted: (input: { id: number; trusted: boolean }) => Promise<void>
   mcpRetry: () => Promise<void>
   setConversationMcpSelection: (input: { id: string; serviceIds: number[] }) => Promise<void>

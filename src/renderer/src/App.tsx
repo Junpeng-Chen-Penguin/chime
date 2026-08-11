@@ -33,7 +33,7 @@ function App(): React.JSX.Element {
   const settingsDirty = useRef(false) // 设置里有未保存表单内容（只在离开瞬间读，不需要触发渲染）
   const [leaveTarget, setLeaveTarget] = useState<(() => void) | null>(null) // 未保存拦截：确认后要执行的离开动作
   // 设置打开时直达的分区：侧栏入口用默认分区，服务状态面板的「前往设置」直达 MCP 分区
-  const [settingsTab, setSettingsTab] = useState<'provider' | 'kb' | 'mcp' | undefined>(undefined)
+  const [settingsTab, setSettingsTab] = useState<'provider' | 'kb' | 'mcp' | 'agent' | undefined>(undefined)
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
   const [defaultModel, setDefaultModel] = useState('deepseek-v4-pro')
   const [models, setModels] = useState<import('./components/Composer').ModelGroup[]>([])
@@ -52,7 +52,8 @@ function App(): React.JSX.Element {
     | { kind: 'artifact'; artifact: ArtifactView; highlightRows?: number[] } // 高亮：回看引用时定位
     | null
   >(null)
-  const [kbDraftSel, setKbDraftSel] = useState<Record<string, { id: number; name: string }[]>>({})
+  const [agentSel, setAgentSel] = useState<Record<string, { id: number; name: string } | null>>({}) // 草稿会话选用的 Agent（014）
+  const [agents, setAgents] = useState<{ id: number; name: string; mcpSel: { id: number; name: string }[] }[]>([])
   // 服务连接状态（输入框工具菜单用）：启动加载 + mcp:status 事件刷新
   const [services, setServices] = useState<
     { id: number; name: string; status: 'connected' | 'auth' | 'error' }[]
@@ -62,6 +63,8 @@ function App(): React.JSX.Element {
 
   const reloadKb = useCallback(() => {
     window.api.kbOptions().then(setKbOptions)
+    // Agent 清单一并刷新（014）：设置里建改删了 Agent，回到会话即反映
+    window.api.agentList().then((l) => setAgents(l.map((a) => ({ id: a.id, name: a.name, mcpSel: a.mcpSel }))))
   }, [])
 
   useEffect(() => {
@@ -224,9 +227,17 @@ function App(): React.JSX.Element {
       )
     : undefined
   const askActive = activeCard?.ask?.state === 'pending' ? activeCard : undefined
-  // 会话定性：草稿（未发首条消息）可切换挂库，已发消息后不可更改
-  const kbLocked = draftId !== activeId
-  const kbSel = kbLocked ? (active?.kbSelection ?? []) : (kbDraftSel[activeId] ?? [])
+  // 知识库只从 Agent 进入（014）：kbSel 只剩历史会话的只读展示
+  const kbSel = active?.kbSelection ?? []
+  // 会话定性：草稿（未发首条消息）可改选 Agent，已发消息后锁定
+  const agentLocked = draftId !== activeId
+  const curAgent = agentLocked
+    ? active?.agentId != null
+      ? { id: active.agentId, name: active.agentName ?? '' }
+      : null
+    : (agentSel[activeId] ?? null)
+  const agentGone = !!curAgent && !agents.some((a) => a.id === curAgent.id)
+  const agentServiceIds = curAgent ? (agents.find((a) => a.id === curAgent.id)?.mcpSel.map((e) => e.id) ?? []) : []
 
   const submit = async (): Promise<void> => {
     const text = input.trim()
@@ -249,16 +260,20 @@ function App(): React.JSX.Element {
       return
     }
     if (sending) return
-    // 草稿会话发出第一条时才真正建库、进列表；此刻定性是否挂知识库
+    // 草稿会话发出第一条时才真正建库、进列表；此刻定性选用的 Agent（014：知识库只从 Agent 进入，会话不再单独选库）
     if (draftId === activeId) {
       const c = await window.api.createConversation({ id: activeId, model: activeModel })
-      const kbChosen = kbDraftSel[activeId] ?? []
-      if (kbChosen.length) await window.api.setConversationKbSel({ id: activeId, sel: kbChosen })
+      const agent = agentSel[activeId] ?? null
+      if (agent)
+        await window.api.setConversationAgent({ id: activeId, agentId: agent.id, agentName: agent.name })
       // 草稿期勾选的服务随会话落库（Case 8）
       const sel = mcpSel[activeId]
       if (sel?.length)
         await window.api.setConversationMcpSelection({ id: activeId, serviceIds: sel })
-      setConversations((cs) => [{ ...c, kbSelection: kbChosen }, ...cs])
+      setConversations((cs) => [
+        { ...c, agentId: agent?.id ?? null, agentName: agent?.name ?? null },
+        ...cs
+      ])
       setDraftId(null)
     }
     clearPending()
@@ -298,7 +313,7 @@ function App(): React.JSX.Element {
     then?.()
   }
 
-  const openSettings = (tab?: 'provider' | 'kb' | 'mcp'): void => {
+  const openSettings = (tab?: 'provider' | 'kb' | 'mcp' | 'agent'): void => {
     setSettingsTab(tab)
     setPanel(null) // 设置占用主区域，侧板一并收起（退出后不自动恢复）
     setSettingsOpen(true)
@@ -353,17 +368,13 @@ function App(): React.JSX.Element {
         onRetry={() => chat.retry(activeId, activeModel)}
         kbOptions={kbOptions}
         kbSel={kbSel}
-        kbLocked={kbLocked}
-        onToggleKb={(id, name) => {
-          if (kbLocked) return
-          setKbDraftSel((m) => {
-            const cur = m[activeId] ?? []
-            const next = cur.some((e) => e.id === id)
-              ? cur.filter((e) => e.id !== id)
-              : [...cur, { id, name }]
-            return { ...m, [activeId]: next }
-          })
-        }}
+        agents={agents}
+        agentSel={curAgent}
+        agentLocked={agentLocked}
+        agentGone={agentGone}
+        agentServiceIds={agentServiceIds}
+        onSelectAgent={(a) => setAgentSel((m) => ({ ...m, [activeId]: a }))}
+        onManageAgents={() => openSettings('agent')}
         services={services}
         selectedServiceIds={mcpSel[activeId] ?? []}
         onToggleService={(id) => {

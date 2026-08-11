@@ -6,6 +6,8 @@ export interface Conversation {
   model: string
   updatedAt: number
   kbSelection?: { id: number; name: string }[]
+  agentId?: number | null // 选用的 Agent（014）；null = 通用对话
+  agentName?: string | null // 名字快照：Agent 删除后仍显示原名
 }
 
 export interface PersistedMessage {

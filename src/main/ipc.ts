@@ -12,7 +12,8 @@ import {
   listAgents,
   saveAgent,
   deleteAgent,
-  agentUsageCount
+  agentUsageCount,
+  setConversationAgent
 } from './db'
 import { detect, listModels, generateTitle, vendorHealth, markVendorHealth, humanize } from './ai'
 import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
@@ -215,6 +216,9 @@ export function registerIpc(): void {
   )
   ipcMain.handle('agent:delete', (_e, id: number) => deleteAgent(id))
   ipcMain.handle('agent:usage', (_e, id: number) => agentUsageCount(id))
+  ipcMain.handle('conv:setAgent', (_e, input: { id: string; agentId: number | null; agentName: string | null }) =>
+    setConversationAgent(input.id, input.agentId, input.agentName)
+  )
 
   // 会话管理
   ipcMain.handle('conv:list', () => listConversations())
