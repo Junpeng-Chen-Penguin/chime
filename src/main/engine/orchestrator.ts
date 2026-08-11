@@ -56,7 +56,6 @@ import {
   saveUserMessage,
   saveAssistantTurn,
   loadHistoryMessages,
-  type HistoryBundle,
   type TurnItem,
   type TurnStatus
 } from './store'
@@ -192,7 +191,6 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
     emit,
     msgId,
     items: [],
-    history: loadHistoryMessages(convId),
     kbEnv,
     agent
   })
@@ -206,7 +204,6 @@ async function streamCore(core: {
   emit: Emit
   msgId: string
   items: TurnItem[]
-  history: HistoryBundle
   kbEnv: KbEnv | null
   agent: AgentRow | null
 }): Promise<void> {
@@ -342,7 +339,9 @@ async function streamCore(core: {
   // 组装：系统提示词（身份段 + 固定主干 + 输出约定 +（关联知识库）条件段 + 环境信息）+ 消息序列
   const system = buildSystemPrompt(kbEnv, getMcpInstructions(mcpSelection), agent?.prompt ?? null)
   const budget = budgetFor(model)
-  const bundle = core.history
+  // 历史加载放在 turnTools 组装之后（014 Case 5）：把本轮实际挂载的工具名传进去，
+  // 已消失的工具在历史返回里标「已不可用」——模型会把历史当成当前能力的依据（实测）
+  const bundle = loadHistoryMessages(convId, new Set(Object.keys(turnTools)))
   let history = bundle.messages
   const sizeOf = (m: ModelMessage): number =>
     estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
@@ -571,6 +570,10 @@ async function streamCore(core: {
             break
           }
           const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
+          // 提问卡被校验拦下（014 Case 7）：卡片没弹出，tool-call 时预置的 pending 状态必须收掉，
+          // 否则界面留一张永远等不到回应的假卡，且落库后重开会话还在
+          if (item.name === ASK_TOOL_NAME && typeof part.output === 'string' && part.output.startsWith('这次提问没有发出'))
+            delete item.ask
           // 超限结果：item 存摘要（全量在结果库），resultRef 指向结果编号
           item.result = lateSummaries.get(part.toolCallId) ?? part.output
           const ref = overflow.refs.get(part.toolCallId)

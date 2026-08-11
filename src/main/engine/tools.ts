@@ -247,6 +247,15 @@ export function makeAskTool(signal: AbortSignal, cards: CardQueue) {
       required: ['questions']
     }),
     execute: async ({ questions }, { toolCallId }) => {
+      // 运行时强校验（014 Case 7）：参数结构里的 minItems 只是给模型看的声明，模型不照做没人拦——
+      // 实测近两轮回归 5 次传空选项照样弹卡。不合格不弹卡，返回文案说清三件事：没生效、为什么、下一步
+      if (!questions?.length)
+        return '这次提问没有发出：没有携带任何问题。要问用户就带上问题和至少 2 个候选选项；答案完全开放时不要用这个工具，直接在回复正文里向用户提问。'
+      const bad = questions
+        .map((q, i) => ({ i, n: q.options?.length ?? 0 }))
+        .filter((x) => x.n < 2)
+      if (bad.length)
+        return `这次提问没有发出：${bad.map((x) => `第 ${x.i + 1} 个问题只给了 ${x.n} 个选项`).join('；')}，少于 2 个。答案完全开放时（要人名、租户名、日期这类）不要用这个工具，直接在回复正文里向用户提问。选项能列全且不少于 2 个时才用这个工具。`
       const outcome = await cards.requestAsk(toolCallId, questions ?? [], signal)
       switch (outcome.kind) {
         case 'answers':

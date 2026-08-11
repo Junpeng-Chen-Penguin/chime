@@ -160,7 +160,10 @@ export interface HistoryBundle {
   toolOutputs: HistoryToolOutput[] // 全部工具返回的位置索引（旧→新），压力降级按此定位
 }
 
-export function loadHistoryMessages(convId: string): HistoryBundle {
+// currentTools（014 Case 5）：本轮实际挂载的工具名集合。传入时，历史里不在集合内的工具返回
+// 会被标注「已不可用」——实测（2026-08-11）模型会把历史调用记录当成当前能力清单，向用户报错误的能力。
+// 缺省 undefined = 不标注（overflow 自测等旁路调用）
+export function loadHistoryMessages(convId: string, currentTools?: Set<string>): HistoryBundle {
   const db = getDb()
   const rows = db
     .prepare(
@@ -237,7 +240,7 @@ export function loadHistoryMessages(convId: string): HistoryBundle {
         })
       } else if (it.t === 'tool') {
         const callId = it.id ?? `hist_${++fallbackId}`
-        const value = historyToolOutput(it)
+        const value = historyToolOutput(it, currentTools)
         asst.push({
           type: 'tool-call',
           toolCallId: callId,
@@ -292,20 +295,24 @@ function expandRefs(items: TurnItem[], text: string): string {
 }
 
 // 工具返回进历史的文本形态：字符串原样（含超限摘要）；对象结构原样序列化（当轮模型看到的就是它）；
-// 知识库检索定点转换为命中文档名
-function historyToolOutput(it: Extract<TurnItem, { t: 'tool' }>): string {
+// 知识库检索定点转换为命中文档名。
+// 定点转换跟随当前能力（014 Case 5）：检索工具已不在清单时，不能再让历史文本指示模型「重新检索」——
+// 那是让它做一件做不到的事；其他已消失的工具在返回末尾附一句不可用声明
+function historyToolOutput(it: Extract<TurnItem, { t: 'tool' }>, currentTools?: Set<string>): string {
+  const gone = currentTools !== undefined && !currentTools.has(it.name)
   const r = it.result
   if (it.name === 'search_knowledge_base' && r && typeof r === 'object' && 'results' in r) {
     const files = [
       ...new Set(((r as { results?: { file: string }[] }).results ?? []).map((s) => s.file))
     ]
-    return files.length
-      ? `检索命中${files.map((f) => `《${f}》`).join('')}。片段原文不跨轮保留（资料会更新），追问业务问题时本轮重新检索后作答`
-      : '未命中'
+    if (!files.length) return '未命中'
+    const hit = `检索命中${files.map((f) => `《${f}》`).join('')}`
+    return gone
+      ? `${hit}。本会话已不再挂知识库`
+      : `${hit}。片段原文不跨轮保留（资料会更新），追问业务问题时本轮重新检索后作答`
   }
-  if (typeof r === 'string') return r
-  if (r === undefined) return '（本次调用未产生结果）'
-  return JSON.stringify(r)
+  const base = typeof r === 'string' ? r : r === undefined ? '（本次调用未产生结果）' : JSON.stringify(r)
+  return gone ? `${base}\n（该工具在本会话已不可用）` : base
 }
 
 // ── 等待与启动修复（弹卡即落库的配套）────────────────────────
