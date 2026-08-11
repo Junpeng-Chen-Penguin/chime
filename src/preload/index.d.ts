@@ -209,6 +209,16 @@ export interface KbCard {
 }
 
 // MCP 服务列表项（配置 + 运行时状态；认证头值已打码）
+// 自定义 Agent（014）：kbSel/mcpSel 为 [{id,name}] 快照，成员被删后仍能显示原名
+export interface AgentInfo {
+  id: number
+  name: string
+  prompt: string
+  kbSel: { id: number; name: string }[]
+  mcpSel: { id: number; name: string }[]
+  createdAt: number
+}
+
 export interface McpServiceInfo {
   id: number
   name: string
@@ -262,6 +272,16 @@ export interface ChimeApi {
   onChatEvent: (cb: (evt: ChatEvent) => void) => () => void
   onFullscreen: (cb: (v: boolean) => void) => () => void
   mcpList: () => Promise<McpServiceInfo[]>
+  agentList: () => Promise<AgentInfo[]>
+  agentSave: (a: {
+    id?: number
+    name: string
+    prompt: string
+    kbSel: { id: number; name: string }[]
+    mcpSel: { id: number; name: string }[]
+  }) => Promise<{ ok: true; id: number } | { ok: false; error: string }>
+  agentDelete: (id: number) => Promise<void>
+  agentUsage: (id: number) => Promise<number>
   mcpSetTrusted: (input: { id: number; trusted: boolean }) => Promise<void>
   mcpRetry: () => Promise<void>
   setConversationMcpSelection: (input: { id: string; serviceIds: number[] }) => Promise<void>

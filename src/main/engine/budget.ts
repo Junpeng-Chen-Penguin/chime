@@ -2,6 +2,7 @@
 
 import { parseModelRef, windowFor as vendorWindow } from '../vendors'
 import { registryContext } from '../registry'
+import { estimateTokensBase } from '../../shared/tokens'
 
 const SAFETY = 0.75
 const OUTPUT_RESERVE = 8192
@@ -37,8 +38,7 @@ function ratio(): number {
   return Math.min(2, Math.max(0.5, accActual / accEstimated))
 }
 
-// 估算：汉字 × 0.6 + 其他字符 ÷ 4，乘校准比值
+// 估算：基础公式（shared，与渲染端共用）乘校准比值
 export function estimateTokens(text: string): number {
-  const han = (text.match(/\p{Script=Han}/gu) ?? []).length
-  return Math.ceil((han * 0.6 + (text.length - han) / 4) * ratio())
+  return Math.ceil(estimateTokensBase(text) * ratio())
 }

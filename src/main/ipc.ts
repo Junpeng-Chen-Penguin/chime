@@ -8,7 +8,11 @@ import {
   deleteConversation,
   getMessages,
   getConversationMeta,
-  setConversationTitle
+  setConversationTitle,
+  listAgents,
+  saveAgent,
+  deleteAgent,
+  agentUsageCount
 } from './db'
 import { detect, listModels, generateTitle, vendorHealth, markVendorHealth, humanize } from './ai'
 import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
@@ -202,6 +206,15 @@ export function registerIpc(): void {
       respondAskCard(payload.streamId, payload.toolCallId, payload.outcome)
     }
   )
+
+  // 自定义 Agent（014 Case 2）
+  ipcMain.handle('agent:list', () => listAgents())
+  ipcMain.handle(
+    'agent:save',
+    (_e, a: { id?: number; name: string; prompt: string; kbSel: KbSelEntry[]; mcpSel: KbSelEntry[] }) => saveAgent(a)
+  )
+  ipcMain.handle('agent:delete', (_e, id: number) => deleteAgent(id))
+  ipcMain.handle('agent:usage', (_e, id: number) => agentUsageCount(id))
 
   // 会话管理
   ipcMain.handle('conv:list', () => listConversations())

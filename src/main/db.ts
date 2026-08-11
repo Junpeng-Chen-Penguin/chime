@@ -115,12 +115,32 @@ export function initDb(): void {
       rows            TEXT NOT NULL,
       created_at      INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS agent (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      name       TEXT NOT NULL UNIQUE,
+      prompt     TEXT NOT NULL DEFAULT '',
+      kb_sel     TEXT NOT NULL DEFAULT '[]',
+      mcp_sel    TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL
+    );
   `)
   // 迁移（Case 8 会话选用工具）：本会话选用的 MCP 服务 id 清单（JSON 数组；NULL/空 = 未选用任何服务）
   try {
     db.exec('ALTER TABLE conversation ADD COLUMN mcp_selection TEXT')
   } catch {
     // 列已存在
+  }
+  // 迁移（014 自定义 Agent）：会话选用的 Agent（id 现查配置，name 为快照——删除后界面显示原名用）
+  for (const col of [
+    'ALTER TABLE conversation ADD COLUMN agent_id INTEGER',
+    'ALTER TABLE conversation ADD COLUMN agent_name TEXT'
+  ]) {
+    try {
+      db.exec(col)
+    } catch {
+      // 列已存在
+    }
   }
   // 迁移（011 Case 4/5 服务级信任）：信任只读声明开关 + 开启时的清单指纹 + 变更标识
   for (const col of [
@@ -1008,4 +1028,83 @@ export function getConversationMcpSelection(id: string): number[] {
   } catch {
     return []
   }
+}
+
+// ── 自定义 Agent（014）：提示词 + 知识库 + MCP 服务的命名组合 ──
+// kb_sel / mcp_sel 与 kb_selection 同款 [{id,name}] 快照：成员被删后编辑页仍能显示原名并标「已移除」
+
+export interface AgentRow {
+  id: number
+  name: string
+  prompt: string
+  kbSel: KbSelEntry[]
+  mcpSel: KbSelEntry[] // 结构相同（id + 名字快照），复用同一类型
+  createdAt: number
+}
+
+function parseSel(s: string | null): KbSelEntry[] {
+  if (!s) return []
+  try {
+    const v = JSON.parse(s)
+    return Array.isArray(v) ? v.filter((e) => e && Number.isInteger(e.id) && typeof e.name === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+export function listAgents(): AgentRow[] {
+  const rows = db
+    .prepare('SELECT id, name, prompt, kb_sel AS kbSel, mcp_sel AS mcpSel, created_at AS createdAt FROM agent ORDER BY created_at DESC')
+    .all() as { id: number; name: string; prompt: string; kbSel: string; mcpSel: string; createdAt: number }[]
+  return rows.map((r) => ({ ...r, kbSel: parseSel(r.kbSel), mcpSel: parseSel(r.mcpSel) }))
+}
+
+export function getAgent(id: number): AgentRow | null {
+  const r = db
+    .prepare('SELECT id, name, prompt, kb_sel AS kbSel, mcp_sel AS mcpSel, created_at AS createdAt FROM agent WHERE id = ?')
+    .get(id) as { id: number; name: string; prompt: string; kbSel: string; mcpSel: string; createdAt: number } | undefined
+  return r ? { ...r, kbSel: parseSel(r.kbSel), mcpSel: parseSel(r.mcpSel) } : null
+}
+
+export function getAgentByName(name: string): AgentRow | null {
+  const r = db.prepare('SELECT id FROM agent WHERE name = ?').get(name) as { id: number } | undefined
+  return r ? getAgent(r.id) : null
+}
+
+export function saveAgent(a: {
+  id?: number
+  name: string
+  prompt: string
+  kbSel: KbSelEntry[]
+  mcpSel: KbSelEntry[]
+}): { ok: true; id: number } | { ok: false; error: string } {
+  const dup = db.prepare('SELECT id FROM agent WHERE name = ? AND id != ?').get(a.name, a.id ?? -1)
+  if (dup) return { ok: false, error: '已有同名 Agent' }
+  if (a.id !== undefined) {
+    const r = db
+      .prepare('UPDATE agent SET name = ?, prompt = ?, kb_sel = ?, mcp_sel = ? WHERE id = ?')
+      .run(a.name, a.prompt, JSON.stringify(a.kbSel), JSON.stringify(a.mcpSel), a.id)
+    if (!r.changes) return { ok: false, error: 'Agent 不存在' }
+    // 名字改了：在用它的会话同步刷新快照名（快照的语义是「删除后仍可显示」，在世时跟随最新）
+    db.prepare('UPDATE conversation SET agent_name = ? WHERE agent_id = ?').run(a.name, a.id)
+    return { ok: true, id: a.id }
+  }
+  const r = db
+    .prepare('INSERT INTO agent (name, prompt, kb_sel, mcp_sel, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(a.name, a.prompt, JSON.stringify(a.kbSel), JSON.stringify(a.mcpSel), Date.now())
+  return { ok: true, id: Number(r.lastInsertRowid) }
+}
+
+export function deleteAgent(id: number): void {
+  db.prepare('DELETE FROM agent WHERE id = ?').run(id)
+  // 会话行不动：agent_id 悬空即「已删除」判定依据，agent_name 快照供界面显示原名
+}
+
+export function agentUsageCount(id: number): number {
+  const r = db.prepare('SELECT COUNT(*) AS n FROM conversation WHERE agent_id = ?').get(id) as { n: number }
+  return r.n
+}
+
+export function setConversationAgent(id: string, agentId: number | null, agentName: string | null): void {
+  db.prepare('UPDATE conversation SET agent_id = ?, agent_name = ? WHERE id = ?').run(agentId, agentName, id)
 }

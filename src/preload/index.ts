@@ -66,6 +66,10 @@ const api = {
 
   // MCP 服务：mcp:status 为无载荷提醒，收到后重新拉列表即可
   mcpList: () => ipcRenderer.invoke('mcp:list'),
+  agentList: () => ipcRenderer.invoke('agent:list'),
+  agentSave: (a: unknown) => ipcRenderer.invoke('agent:save', a),
+  agentDelete: (id: number) => ipcRenderer.invoke('agent:delete', id),
+  agentUsage: (id: number) => ipcRenderer.invoke('agent:usage', id),
   mcpSetTrusted: (input: { id: number; trusted: boolean }) =>
     ipcRenderer.invoke('mcp:setTrusted', input),
   mcpRetry: () => ipcRenderer.invoke('mcp:retry'),
