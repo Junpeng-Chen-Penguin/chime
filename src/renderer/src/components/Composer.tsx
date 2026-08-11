@@ -268,6 +268,7 @@ export default function Composer({
                                       e.preventDefault()
                                       if (agentLocked) return
                                       onSelectAgent?.(picked ? null : { id: a.id, name: a.name })
+                                      closePlus() // 单选：选完（或取消）即收起整个菜单
                                     }}
                                     className={cn(
                                       'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
@@ -416,41 +417,6 @@ export default function Composer({
                   {agentGone && '（已删除）'}
                 </button>
               )}
-
-              {selectedIds.map((id) => {
-                const svc = svcList.find((s) => s.id === id)
-                if (!svc) return null
-                const viaAgent = fromAgent.has(id)
-                const down = svc.status !== 'connected'
-                return (
-                  <button
-                    key={id}
-                    onClick={() => {
-                      if (!viaAgent) onToggleService?.(id)
-                    }}
-                    title={viaAgent ? '来自 Agent，随 Agent 挂载' : down ? `${svc.name}：连接不上，点击移除` : '点击移除'}
-                    className={cn(
-                      'group/stag flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px]',
-                      down ? 'text-amber-600' : 'text-muted-foreground',
-                      viaAgent ? 'cursor-default' : 'hover:bg-muted'
-                    )}
-                  >
-                    {viaAgent ? (
-                      down ? <TriangleAlert className="size-4" /> : <Wrench className="size-4" />
-                    ) : (
-                      <>
-                        {down ? (
-                          <TriangleAlert className="size-4 group-hover/stag:hidden" />
-                        ) : (
-                          <Wrench className="size-4 group-hover/stag:hidden" />
-                        )}
-                        <X className="hidden size-4 group-hover/stag:inline" />
-                      </>
-                    )}
-                    {svc.name}
-                  </button>
-                )
-              })}
 
               {/* 历史会话的知识库：只读展示（014 起知识库只从 Agent 进入，新会话无此控件） */}
               {kbSel.length > 0 && (
