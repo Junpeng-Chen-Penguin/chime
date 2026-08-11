@@ -1115,6 +1115,12 @@ export function agentUsageCount(id: number): number {
   return r.n
 }
 
+// 未信任服务的「工具清单已变更」确认（1.15.9）：012 只给了重开信任这一条清除路径，
+// 没开信任的服务提示会永远挂着，补一个显式确认
+export function ackMcpToolsChanged(id: number): void {
+  db.prepare('UPDATE mcp_service SET tools_changed = 0 WHERE id = ?').run(id)
+}
+
 export function setConversationAgent(id: string, agentId: number | null, agentName: string | null): void {
   db.prepare('UPDATE conversation SET agent_id = ?, agent_name = ? WHERE id = ?').run(agentId, agentName, id)
 }

@@ -71,6 +71,7 @@ const api = {
   agentDelete: (id: number) => ipcRenderer.invoke('agent:delete', id),
   agentUsage: (id: number) => ipcRenderer.invoke('agent:usage', id),
   setConversationAgent: (input: unknown) => ipcRenderer.invoke('conv:setAgent', input),
+  mcpAckToolsChanged: (id: number) => ipcRenderer.invoke('mcp:ackToolsChanged', id),
   mcpSetTrusted: (input: { id: number; trusted: boolean }) =>
     ipcRenderer.invoke('mcp:setTrusted', input),
   mcpRetry: () => ipcRenderer.invoke('mcp:retry'),

@@ -1182,7 +1182,17 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
                   </StatusLine>
                 )}
                 {svc.enabled && svc.toolsChanged && (
-                  <StatusLine className="text-amber-600">⚠ 工具清单已变更</StatusLine>
+                  <StatusLine className="text-amber-600">
+                    ⚠ 工具清单已变更
+                    <button
+                      onClick={() => {
+                        void window.api.mcpAckToolsChanged(svc.id).then(reload)
+                      }}
+                      className="ml-1 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground underline-offset-2 hover:underline"
+                    >
+                      知道了
+                    </button>
+                  </StatusLine>
                 )}
               </div>
 

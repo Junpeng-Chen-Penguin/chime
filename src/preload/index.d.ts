@@ -283,6 +283,7 @@ export interface ChimeApi {
   agentDelete: (id: number) => Promise<void>
   agentUsage: (id: number) => Promise<number>
   setConversationAgent: (input: { id: string; agentId: number | null; agentName: string | null }) => Promise<void>
+  mcpAckToolsChanged: (id: number) => Promise<void>
   mcpSetTrusted: (input: { id: number; trusted: boolean }) => Promise<void>
   mcpRetry: () => Promise<void>
   setConversationMcpSelection: (input: { id: string; serviceIds: number[] }) => Promise<void>
