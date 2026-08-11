@@ -1186,11 +1186,15 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
                     ⚠ 工具清单已变更
                     <button
                       onClick={() => {
-                        void window.api.mcpAckToolsChanged(svc.id).then(reload)
+                        // 检测更新 = 清变更标记 + 重连刷新工具清单（拿到的就是当前最新）
+                        void window.api
+                          .mcpAckToolsChanged(svc.id)
+                          .then(() => window.api.mcpRetry())
+                          .then(reload)
                       }}
                       className="ml-1 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground underline-offset-2 hover:underline"
                     >
-                      知道了
+                      检测更新
                     </button>
                   </StatusLine>
                 )}
