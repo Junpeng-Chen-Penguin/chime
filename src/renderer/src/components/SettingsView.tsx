@@ -1388,56 +1388,6 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     setConfirmDelete({ id: a.id, name: a.name, usage })
   }
 
-  // 目录卡片（知识库与工具同一样式）：名称 + 右侧添加/已添加。
-  // 已添加 = ✅（Claude Connectors 同款），悬停变「移除」文案，点击弹确认；内置工具恒 ✅ 且不可移除
-  const CatalogRow = ({
-    name,
-    added,
-    note,
-    lockAdded,
-    onAdd,
-    onAskRemove
-  }: {
-    name: string
-    added: boolean
-    note?: string // 「已移除」一类的备注（成员在 Chime 里已删）
-    lockAdded?: boolean
-    onAdd?: () => void
-    onAskRemove?: () => void
-  }): React.JSX.Element => (
-    <div
-      className={cn(
-        'flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-[13px]',
-        note && 'opacity-60'
-      )}
-    >
-      <span className="min-w-0 flex-1 truncate">{name}</span>
-      {note && (
-        <>
-          <span className="size-1.5 flex-none rounded-full bg-destructive" />
-          <span className="flex-none text-[12px] text-muted-foreground">{note}</span>
-        </>
-      )}
-      {lockAdded ? (
-        <span className="grid h-7 w-14 flex-none place-items-center text-muted-foreground">
-          <Check className="size-4" />
-        </span>
-      ) : added ? (
-        <button
-          onClick={onAskRemove}
-          className="group/rm grid h-7 w-14 flex-none place-items-center rounded-md border border-border text-[12px] transition-colors hover:border-destructive/40 hover:bg-destructive/5 hover:text-destructive"
-        >
-          <Check className="size-4 group-hover/rm:hidden" />
-          <span className="hidden group-hover/rm:inline">移除</span>
-        </button>
-      ) : (
-        <Button variant="outline" onClick={onAdd} className="h-7 w-14 flex-none px-0 text-[12px]">
-          添加
-        </Button>
-      )}
-    </div>
-  )
-
   // ── 编辑视图（分类式）：四个分类共享一份表单，切分类不丢，保存一次落库 ──
   if (editing !== null) {
     const kbById = new Map(kbs.map((k) => [k.id, k]))
@@ -1512,7 +1462,7 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
             {sub === 'kb' && (
               <>
                 <div className="mb-2 text-[13px] font-medium text-muted-foreground">知识库</div>
-                <div className="flex flex-col gap-2">
+                <div className="divide-y divide-border rounded-xl border border-border">
                   {goneKb.map((e) => (
                     <CatalogRow
                       key={`gone-${e.id}`}
@@ -1546,15 +1496,13 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
             {sub === 'tools' && (
               <>
                 <div className="mb-2 text-[13px] font-medium text-muted-foreground">内置工具</div>
-                <div className="flex flex-col gap-2">
+                <div className="divide-y divide-border rounded-xl border border-border">
                   {BUILTIN_TOOLS.map((t) => (
                     <CatalogRow key={t.name} name={t.display} added lockAdded />
                   ))}
                 </div>
-                <div className="mt-5 mb-2 border-t border-border pt-4 text-[13px] font-medium text-muted-foreground">
-                  MCP 服务
-                </div>
-                <div className="flex flex-col gap-2">
+                <div className="mt-5 mb-2 pt-2 text-[13px] font-medium text-muted-foreground">MCP 服务</div>
+                <div className="divide-y divide-border rounded-xl border border-border">
                   {goneMcp.map((e) => (
                     <CatalogRow
                       key={`gone-${e.id}`}
@@ -1677,6 +1625,69 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
         }}
         onCancel={() => setConfirmDelete(null)}
       />
+    </div>
+  )
+}
+
+
+// 目录表格行（Agent 编辑页的知识库与工具，参照 Claude Connectors 的表格式）。
+// 已添加 = ✅，悬停变「移除」，点击弹确认；内置工具恒 ✅ 不可移除。
+// 悬停抑制：刚点完「添加」鼠标还悬在原地，立即显示「移除」会误导——移出一次后才恢复悬停态。
+// 独立顶层组件而非面板内定义：内联定义每次渲染重建组件身份，内部 state 会丢（mermaid 闪动同款教训）
+function CatalogRow({
+  name,
+  added,
+  note,
+  lockAdded,
+  onAdd,
+  onAskRemove
+}: {
+  name: string
+  added: boolean
+  note?: string // 「已移除」一类的备注（成员在 Chime 里已删）
+  lockAdded?: boolean
+  onAdd?: () => void
+  onAskRemove?: () => void
+}): React.JSX.Element {
+  const [suppressHover, setSuppressHover] = useState(false)
+  return (
+    <div className={cn('flex items-center gap-2 px-4 py-2.5 text-[13px]', note && 'opacity-60')}>
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      {note && (
+        <>
+          <span className="size-1.5 flex-none rounded-full bg-destructive" />
+          <span className="flex-none text-[12px] text-muted-foreground">{note}</span>
+        </>
+      )}
+      {lockAdded ? (
+        <span className="grid h-7 w-14 flex-none place-items-center text-muted-foreground">
+          <Check className="size-4" />
+        </span>
+      ) : added ? (
+        <button
+          onClick={onAskRemove}
+          onMouseLeave={() => setSuppressHover(false)}
+          className={cn(
+            'grid h-7 w-14 flex-none place-items-center rounded-md border border-border text-[12px] transition-colors',
+            !suppressHover &&
+              'group/rm hover:border-destructive/40 hover:bg-destructive/5 hover:text-destructive'
+          )}
+        >
+          <Check className={cn('size-4', !suppressHover && 'group-hover/rm:hidden')} />
+          {!suppressHover && <span className="hidden group-hover/rm:inline">移除</span>}
+        </button>
+      ) : (
+        <Button
+          variant="outline"
+          onClick={() => {
+            onAdd?.()
+            setSuppressHover(true)
+          }}
+          className="h-7 w-14 flex-none px-0 text-[12px]"
+        >
+          添加
+        </Button>
+      )}
     </div>
   )
 }
