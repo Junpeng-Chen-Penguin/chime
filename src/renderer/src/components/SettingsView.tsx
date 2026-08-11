@@ -1322,6 +1322,7 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
   const [formKbSel, setFormKbSel] = useState<SelEntry[]>([])
   const [formMcpSel, setFormMcpSel] = useState<SelEntry[]>([])
   const [promptEditing, setPromptEditing] = useState(false) // 提示词：渲染态 / 文本框态
+  const [sub, setSub] = useState<'base' | 'prompt' | 'kb' | 'tools'>('base') // 编辑页内的分类导航
   const [formError, setFormError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<{ id: number; name: string; usage: number } | null>(null)
   const formInit = useRef({ name: '', prompt: '', kb: '[]', mcp: '[]' })
@@ -1361,6 +1362,7 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     }
     setPromptEditing(!a) // 新建直接进文本框态（骨架就是让人改的）；查看已有先渲染
     setFormError('')
+    setSub('base')
     setEditing(a ? { id: a.id } : {})
   }
 
@@ -1376,6 +1378,7 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     })
     if (!r.ok) {
       setFormError(r.error)
+      setSub('base') // 错误是名字的事，直接带到名称字段下
       return
     }
     onDirtyChange(false)
@@ -1389,19 +1392,19 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     setConfirmDelete({ id: editing.id, name: formName, usage })
   }
 
-  const toggleSel = (list: SelEntry[], set: (v: SelEntry[]) => void, e: SelEntry): void => {
-    set(list.some((x) => x.id === e.id) ? list.filter((x) => x.id !== e.id) : [...list, e])
-  }
-
-  // ── 编辑视图 ──
+  // ── 编辑视图（分类式，参照 Cherry 的助手编辑）：四个分类共享一份表单，切分类不丢，保存一次落库 ──
   if (editing !== null) {
     const kbById = new Map(kbs.map((k) => [k.id, k]))
     const svcById = new Map(services.map((s) => [s.id, s]))
     const goneKb = formKbSel.filter((e) => !kbById.has(e.id))
     const goneMcp = formMcpSel.filter((e) => !svcById.has(e.id))
+    const kbCandidates = kbs.filter((k) => !formKbSel.some((e) => e.id === k.id))
+    const mcpCandidates = services.filter((s) => s.enabled && !formMcpSel.some((e) => e.id === s.id))
+    const remove = (list: SelEntry[], set: (v: SelEntry[]) => void, id: number): void =>
+      set(list.filter((x) => x.id !== id))
     return (
-      <div className="flex-1 overflow-y-auto px-6 py-5">
-        <div className="mb-4 flex items-center justify-between">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex flex-none items-center justify-between px-6 pt-5 pb-2">
           <button
             onClick={() => setEditing(null)}
             className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -1420,121 +1423,135 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
           )}
         </div>
 
-        <Section title="名字 *">
-          <input value={formName} onChange={(e) => setFormName(e.target.value)} className={INPUT_CLS} />
-        </Section>
-
-        <div className="mb-1.5 flex items-center justify-between">
-          <div className="text-[13px] font-medium text-muted-foreground">系统提示词</div>
-          <button
-            onClick={() => setPromptEditing((v) => !v)}
-            className="rounded-md px-2 py-0.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            {promptEditing ? '完成' : '编辑'}
-          </button>
-        </div>
-        {promptEditing ? (
-          <textarea
-            value={formPrompt}
-            onChange={(e) => setFormPrompt(e.target.value)}
-            rows={14}
-            className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-[13px] leading-[1.7] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
-          />
-        ) : (
-          <div className="max-h-[360px] overflow-y-auto rounded-lg border border-border bg-muted/30 px-4 py-3">
-            {formPrompt.trim() ? (
-              <Markdown text={formPrompt} />
-            ) : (
-              <div className="py-2 text-[13px] text-muted-foreground">
-                未填写。对话时使用产品内置的通用身份。
-              </div>
-            )}
-          </div>
-        )}
-        <div className="mt-1 mb-5 text-[12px] text-muted-foreground">
-          {estimateTokensBase(formPrompt === AGENT_PROMPT_SKELETON ? '' : formPrompt)} tokens
-          <span className="ml-2">不编造、安全、工具使用等产品规则已内置，这里只写这个 Agent 特有的东西</span>
-        </div>
-
-        <Section title="知识库">
-          <div className="flex flex-wrap gap-2">
-            {goneKb.map((e) => (
+        <div className="flex min-h-0 flex-1">
+          <nav className="flex w-[112px] flex-none flex-col gap-1 px-4 pt-1">
+            {(
+              [
+                ['base', '基础设置'],
+                ['prompt', '提示词'],
+                ['kb', '知识库'],
+                ['tools', '工具']
+              ] as const
+            ).map(([key, label]) => (
               <button
-                key={`gone-${e.id}`}
-                onClick={() => toggleSel(formKbSel, setFormKbSel, e)}
-                title="点击移除"
-                className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[13px] opacity-60"
+                key={key}
+                onClick={() => setSub(key)}
+                className={cn(
+                  'rounded-lg px-3 py-1.5 text-left text-[13px] transition-colors',
+                  sub === key ? 'bg-muted font-medium' : 'text-muted-foreground hover:bg-muted/60'
+                )}
               >
-                <Check className="size-3.5" strokeWidth={3} />
-                {e.name}
-                <span className="size-1.5 rounded-full bg-destructive" />
-                <span className="text-[12px] text-muted-foreground">已移除</span>
+                {label}
               </button>
             ))}
-            {kbs.map((k) => {
-              const picked = formKbSel.some((e) => e.id === k.id)
-              return (
-                <button
-                  key={k.id}
-                  onClick={() => toggleSel(formKbSel, setFormKbSel, { id: k.id, name: k.name })}
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[13px] transition-colors',
-                    picked ? 'border-ring bg-primary-soft text-primary-soft-foreground' : 'border-border hover:bg-muted'
-                  )}
-                >
-                  {picked && <Check className="size-3.5" strokeWidth={3} />}
-                  {k.name}
-                </button>
-              )
-            })}
-            {!kbs.length && !goneKb.length && (
-              <div className="text-[13px] text-muted-foreground">还没有知识库，可先在「知识库」分区添加</div>
-            )}
-          </div>
-        </Section>
+          </nav>
 
-        <Section title="MCP 服务">
-          <div className="flex flex-wrap gap-2">
-            {goneMcp.map((e) => (
-              <button
-                key={`gone-${e.id}`}
-                onClick={() => toggleSel(formMcpSel, setFormMcpSel, e)}
-                title="点击移除"
-                className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[13px] opacity-60"
-              >
-                <Check className="size-3.5" strokeWidth={3} />
-                {e.name}
-                <span className="size-1.5 rounded-full bg-destructive" />
-                <span className="text-[12px] text-muted-foreground">已移除</span>
-              </button>
-            ))}
-            {services
-              .filter((s) => s.enabled)
-              .map((s) => {
-                const picked = formMcpSel.some((e) => e.id === s.id)
-                return (
+          <div className="min-w-0 flex-1 overflow-y-auto px-6 pb-4">
+            {sub === 'base' && (
+              <Section title="名称 *">
+                <input
+                  value={formName}
+                  onChange={(e) => {
+                    setFormName(e.target.value)
+                    setFormError('')
+                  }}
+                  className={INPUT_CLS}
+                />
+                {formError && <div className="mt-1.5 text-[13px] text-destructive">{formError}</div>}
+              </Section>
+            )}
+
+            {sub === 'prompt' && (
+              <>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <div className="text-[13px] font-medium text-muted-foreground">系统提示词</div>
                   <button
-                    key={s.id}
-                    onClick={() => toggleSel(formMcpSel, setFormMcpSel, { id: s.id, name: s.name })}
-                    className={cn(
-                      'flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[13px] transition-colors',
-                      picked ? 'border-ring bg-primary-soft text-primary-soft-foreground' : 'border-border hover:bg-muted'
-                    )}
+                    onClick={() => setPromptEditing((v) => !v)}
+                    className="rounded-md px-2 py-0.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   >
-                    {picked && <Check className="size-3.5" strokeWidth={3} />}
-                    {s.name}
+                    {promptEditing ? '完成' : '编辑'}
                   </button>
-                )
-              })}
-            {!services.some((s) => s.enabled) && !goneMcp.length && (
-              <div className="text-[13px] text-muted-foreground">还没有已启用的 MCP 服务，可先在「工具」分区添加</div>
+                </div>
+                {promptEditing ? (
+                  <textarea
+                    value={formPrompt}
+                    onChange={(e) => setFormPrompt(e.target.value)}
+                    rows={16}
+                    className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-[13px] leading-[1.7] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
+                  />
+                ) : (
+                  <div className="max-h-[420px] overflow-y-auto rounded-lg border border-border bg-muted/30 px-4 py-3">
+                    {formPrompt.trim() ? (
+                      <Markdown text={formPrompt} />
+                    ) : (
+                      <div className="py-2 text-[13px] text-muted-foreground">
+                        未填写。对话时使用产品内置的通用身份。
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div className="mt-1 text-[12px] text-muted-foreground">
+                  {estimateTokensBase(formPrompt === AGENT_PROMPT_SKELETON ? '' : formPrompt)} tokens
+                </div>
+              </>
+            )}
+
+            {sub === 'kb' && (
+              <AddableList
+                title="知识库"
+                addLabel="添加知识库"
+                empty="还没有挂载知识库"
+                items={[
+                  ...goneKb.map((e) => ({ id: e.id, name: e.name, note: '已移除' })),
+                  ...formKbSel
+                    .filter((e) => kbById.has(e.id))
+                    .map((e) => ({ id: e.id, name: e.name, note: undefined }))
+                ]}
+                candidates={kbCandidates.map((k) => ({ id: k.id, name: k.name }))}
+                onAdd={(c) => setFormKbSel([...formKbSel, c])}
+                onRemove={(id) => remove(formKbSel, setFormKbSel, id)}
+              />
+            )}
+
+            {sub === 'tools' && (
+              <>
+                <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">
+                  内置工具（每个 Agent 都带）
+                </div>
+                <div className="mb-5 flex flex-col">
+                  {BUILTIN_TOOLS.map((t) => {
+                    const Icon = TOOL_ICONS[t.name] ?? Wrench
+                    return (
+                      <div key={t.name} className="flex items-center gap-2.5 py-2">
+                        <Icon className="size-4 flex-none text-muted-foreground" />
+                        <span className="flex-none text-[13px]">{t.display}</span>
+                        <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
+                          {t.name === 'search_knowledge_base' ? `${t.desc}（挂了知识库时可用）` : t.desc}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+                <AddableList
+                  title="MCP 服务"
+                  addLabel="添加服务"
+                  empty="还没有添加 MCP 服务"
+                  items={[
+                    ...goneMcp.map((e) => ({ id: e.id, name: e.name, note: '已移除' })),
+                    ...formMcpSel
+                      .filter((e) => svcById.has(e.id))
+                      .map((e) => ({ id: e.id, name: e.name, note: undefined }))
+                  ]}
+                  candidates={mcpCandidates.map((s) => ({ id: s.id, name: s.name }))}
+                  onAdd={(c) => setFormMcpSel([...formMcpSel, c])}
+                  onRemove={(id) => remove(formMcpSel, setFormMcpSel, id)}
+                />
+              </>
             )}
           </div>
-        </Section>
+        </div>
 
-        {formError && <div className="mb-3 text-[13px] text-destructive">{formError}</div>}
-
-        <div className="mt-2 flex justify-end gap-2.5">
+        <div className="flex flex-none justify-end gap-2.5 border-t border-border px-6 py-3">
           <Button variant="outline" onClick={() => setEditing(null)} className="h-9">
             取消
           </Button>
@@ -1593,6 +1610,96 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
                 {a.kbSel.length} 个知识库&emsp;{a.mcpSel.length} 个 MCP 服务
               </div>
             </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// 添加式列表（014 Agent 编辑页）：标题行右侧放添加按钮，弹层列候选；已加的每条可移除
+function AddableList({
+  title,
+  addLabel,
+  empty,
+  items,
+  candidates,
+  onAdd,
+  onRemove
+}: {
+  title: string
+  addLabel: string
+  empty: string
+  items: { id: number; name: string; note?: string }[]
+  candidates: { id: number; name: string }[]
+  onAdd: (c: { id: number; name: string }) => void
+  onRemove: (id: number) => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <div className="text-[13px] font-medium text-muted-foreground">{title}</div>
+        <div className="relative">
+          <button
+            onClick={() => setOpen((v) => !v)}
+            onBlur={() => setTimeout(() => setOpen(false), 120)}
+            className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Plus className="size-3.5" />
+            {addLabel}
+          </button>
+          {open && (
+            <div className="absolute top-[calc(100%+4px)] right-0 z-20 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+              {candidates.length === 0 ? (
+                <div className="px-2.5 py-1.5 text-[13px] text-muted-foreground">没有可添加的了</div>
+              ) : (
+                candidates.map((c) => (
+                  <button
+                    key={c.id}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      onAdd(c)
+                      setOpen(false)
+                    }}
+                    className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted"
+                  >
+                    <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border px-4 py-4 text-[13px] text-muted-foreground">
+          {empty}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {items.map((it) => (
+            <div
+              key={it.id}
+              className={cn(
+                'flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-[13px]',
+                it.note && 'opacity-60'
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate">{it.name}</span>
+              {it.note && (
+                <>
+                  <span className="size-1.5 flex-none rounded-full bg-destructive" />
+                  <span className="flex-none text-[12px] text-muted-foreground">{it.note}</span>
+                </>
+              )}
+              <button
+                onClick={() => onRemove(it.id)}
+                className="flex-none rounded-md px-2 py-0.5 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                移除
+              </button>
+            </div>
           ))}
         </div>
       )}
