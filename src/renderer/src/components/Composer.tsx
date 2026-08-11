@@ -115,9 +115,6 @@ export default function Composer({
   const selectedIds = [
     ...new Set([...(selectedServiceIds ?? []), ...[...fromAgent].filter((id) => svcList.some((s) => s.id === id))])
   ]
-  const selectedDown = svcList.filter(
-    (s) => selectedIds.includes(s.id) && s.status !== 'connected'
-  ).length
   const anyDown = svcList.some((s) => s.status !== 'connected')
   const closePlus = (): void => {
     setPlusOpen(false)
@@ -227,202 +224,233 @@ export default function Composer({
                         { key: 'mcp' as const, icon: Wrench, label: 'MCP 服务' }
                       ]
                     ).map(({ key, icon: Icon, label }) => (
-                      <button
-                        key={key}
-                        onMouseEnter={() => setPlusSub(key)}
-                        onMouseDown={(e) => {
-                          e.preventDefault()
-                          setPlusSub(key)
-                        }}
-                        className={cn(
-                          'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
-                          plusSub === key ? 'bg-muted' : 'hover:bg-muted'
-                        )}
-                      >
-                        <Icon className="size-4 text-muted-foreground" />
-                        <span className="flex-1">{label}</span>
-                        <ChevronRight className="size-3.5 text-muted-foreground" />
-                      </button>
-                    ))}
+                      <div key={key} className="relative">
+                        <button
+                          onMouseEnter={() => setPlusSub(key)}
+                          onMouseDown={(e) => {
+                            e.preventDefault()
+                            setPlusSub(key)
+                          }}
+                          className={cn(
+                            'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
+                            plusSub === key ? 'bg-muted' : 'hover:bg-muted'
+                          )}
+                        >
+                          <Icon className="size-4 text-muted-foreground" />
+                          <span className="flex-1">{label}</span>
+                          <ChevronRight className="size-3.5 text-muted-foreground" />
+                        </button>
 
-                    {/* 二级：Agent（单选，再点已选中的即取消；锁定态只读） */}
-                    {plusSub === 'agent' && (
-                      <div className="absolute bottom-0 left-[calc(100%+4px)] z-30 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-                        {agentList.length === 0 ? (
-                          <>
-                            <div className="px-2.5 pt-1.5 pb-0.5 text-[13px]">还没有 Agent</div>
-                            <button
-                              onMouseDown={(e) => {
-                                e.preventDefault()
-                                closePlus()
-                                onManageAgents?.()
-                              }}
-                              className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted"
-                            >
-                              去设置里建一个
-                            </button>
-                          </>
-                        ) : (
-                          agentList.map((a) => {
-                            const picked = agentSel?.id === a.id
-                            return (
+                        {/* 二级面板挂在对应一级项内部：与该项顶部对齐（正常级联菜单的对齐方式） */}
+                        {plusSub === key && key === 'agent' && (
+                          <div className="absolute top-0 left-[calc(100%+10px)] z-30 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                            {agentList.length === 0 ? (
+                              <>
+                                <div className="px-2.5 pt-1.5 pb-0.5 text-[13px]">还没有 Agent</div>
+                                <button
+                                  onMouseDown={(e) => {
+                                    e.preventDefault()
+                                    closePlus()
+                                    onManageAgents?.()
+                                  }}
+                                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted"
+                                >
+                                  去设置里建一个
+                                </button>
+                              </>
+                            ) : (
+                              agentList.map((a) => {
+                                const picked = agentSel?.id === a.id
+                                return (
+                                  <button
+                                    key={a.id}
+                                    onMouseDown={(e) => {
+                                      e.preventDefault()
+                                      if (agentLocked) return
+                                      onSelectAgent?.(picked ? null : { id: a.id, name: a.name })
+                                    }}
+                                    className={cn(
+                                      'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
+                                      agentLocked && !picked ? 'cursor-default opacity-50' : 'hover:bg-muted'
+                                    )}
+                                  >
+                                    <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                                    {picked && <Check className="size-4 flex-none" strokeWidth={3} />}
+                                  </button>
+                                )
+                              })
+                            )}
+                            <div className="mt-1 border-t border-border px-1 pt-1.5">
                               <button
-                                key={a.id}
                                 onMouseDown={(e) => {
                                   e.preventDefault()
-                                  if (agentLocked) return
-                                  onSelectAgent?.(picked ? null : { id: a.id, name: a.name })
+                                  closePlus()
+                                  onManageAgents?.()
                                 }}
-                                className={cn(
-                                  'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
-                                  agentLocked && !picked ? 'cursor-default opacity-50' : 'hover:bg-muted'
-                                )}
+                                className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-muted"
                               >
-                                <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                                {picked && <Check className="size-4 flex-none" strokeWidth={3} />}
+                                管理 Agent
                               </button>
-                            )
-                          })
+                            </div>
+                          </div>
                         )}
-                        <div className="mt-1 border-t border-border px-1 pt-1.5">
-                          <button
-                            onMouseDown={(e) => {
-                              e.preventDefault()
-                              closePlus()
-                              onManageAgents?.()
-                            }}
-                            className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-muted"
-                          >
-                            管理 Agent
-                          </button>
-                        </div>
-                      </div>
-                    )}
 
-                    {/* 二级：MCP 服务（多选；Agent 带的标「来自 Agent」勾中不可点） */}
-                    {plusSub === 'mcp' && (
-                      <div className="absolute bottom-0 left-[calc(100%+4px)] z-30 min-w-[280px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-                        {svcList.length === 0 && (
-                          <div className="px-2.5 pt-1.5 pb-0.5 text-[13px]">还没有已启用的 MCP 服务</div>
-                        )}
-                        {svcList.map((s) => {
-                          const viaAgent = fromAgent.has(s.id)
-                          const picked = selectedIds.includes(s.id)
-                          const down = s.status !== 'connected'
-                          const disabled = viaAgent || (down && !picked)
-                          return (
-                            <button
-                              key={s.id}
-                              onMouseDown={(e) => {
-                                e.preventDefault()
-                                if (!disabled) onToggleService?.(s.id)
-                              }}
-                              className={cn(
-                                'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
-                                disabled ? 'cursor-default opacity-60' : 'hover:bg-muted'
-                              )}
-                            >
-                              {/* 方形勾选框 = 多选（与提问卡多选同款；圆形留给单选） */}
-                              <span
-                                className={cn(
-                                  'grid size-5 flex-none place-items-center rounded-md border',
-                                  picked
-                                    ? 'border-primary bg-primary text-primary-foreground'
-                                    : 'border-border'
-                                )}
-                              >
-                                {picked && <Check className="size-3.5" strokeWidth={3} />}
-                              </span>
-                              <span className="min-w-0 flex-1 truncate">{s.name}</span>
-                              {viaAgent ? (
-                                <span className="flex-none text-[12px] text-muted-foreground">来自 Agent</span>
-                              ) : (
-                                <>
+                        {plusSub === key && key === 'mcp' && (
+                          <div className="absolute top-0 left-[calc(100%+10px)] z-30 min-w-[280px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                            {svcList.length === 0 && (
+                              <div className="px-2.5 pt-1.5 pb-0.5 text-[13px]">还没有已启用的 MCP 服务</div>
+                            )}
+                            {svcList.map((s) => {
+                              const viaAgent = fromAgent.has(s.id)
+                              const picked = selectedIds.includes(s.id)
+                              const down = s.status !== 'connected'
+                              const disabled = viaAgent || (down && !picked)
+                              return (
+                                <button
+                                  key={s.id}
+                                  onMouseDown={(e) => {
+                                    e.preventDefault()
+                                    if (!disabled) onToggleService?.(s.id)
+                                  }}
+                                  className={cn(
+                                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
+                                    disabled ? 'cursor-default opacity-60' : 'hover:bg-muted'
+                                  )}
+                                >
+                                  {/* 方形勾选框 = 多选（与提问卡多选同款；圆形留给单选） */}
                                   <span
                                     className={cn(
-                                      'size-1.5 flex-none rounded-full',
-                                      down ? 'bg-destructive' : 'bg-emerald-600'
+                                      'grid size-5 flex-none place-items-center rounded-md border',
+                                      picked
+                                        ? 'border-primary bg-primary text-primary-foreground'
+                                        : 'border-border'
                                     )}
-                                  />
-                                  <span className="flex-none text-[12px] text-muted-foreground">
-                                    {s.status === 'connected'
-                                      ? '已连接'
-                                      : s.status === 'auth'
-                                        ? '认证失效'
-                                        : '连接失败'}
+                                  >
+                                    {picked && <Check className="size-3.5" strokeWidth={3} />}
                                   </span>
-                                </>
+                                  <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                                  {viaAgent ? (
+                                    <span className="flex-none text-[12px] text-muted-foreground">来自 Agent</span>
+                                  ) : (
+                                    <>
+                                      <span
+                                        className={cn(
+                                          'size-1.5 flex-none rounded-full',
+                                          down ? 'bg-destructive' : 'bg-emerald-600'
+                                        )}
+                                      />
+                                      <span className="flex-none text-[12px] text-muted-foreground">
+                                        {s.status === 'connected'
+                                          ? '已连接'
+                                          : s.status === 'auth'
+                                            ? '认证失效'
+                                            : '连接失败'}
+                                      </span>
+                                    </>
+                                  )}
+                                </button>
+                              )
+                            })}
+                            <div className="mt-1 flex gap-1 border-t border-border px-1 pt-1.5">
+                              {anyDown && (
+                                <button
+                                  onMouseDown={(e) => {
+                                    e.preventDefault()
+                                    onRetryServices?.()
+                                  }}
+                                  className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
+                                >
+                                  重试连接
+                                </button>
                               )}
-                            </button>
-                          )
-                        })}
-                        <div className="mt-1 flex gap-1 border-t border-border px-1 pt-1.5">
-                          {anyDown && (
-                            <button
-                              onMouseDown={(e) => {
-                                e.preventDefault()
-                                onRetryServices?.()
-                              }}
-                              className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
-                            >
-                              重试连接
-                            </button>
-                          )}
-                          <button
-                            onMouseDown={(e) => {
-                              e.preventDefault()
-                              closePlus()
-                              onOpenSettings?.()
-                            }}
-                            className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
-                          >
-                            管理服务
-                          </button>
-                        </div>
+                              <button
+                                onMouseDown={(e) => {
+                                  e.preventDefault()
+                                  closePlus()
+                                  onOpenSettings?.()
+                                }}
+                                className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
+                              >
+                                管理服务
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    ))}
                   </div>
                 )}
               </div>
 
-              {/* 已选展示：Agent 名字（已删除时警告样式，Case 5） */}
+              {/* 已选展示（WorkBuddy 同款）：悬停图标变 ×、点击移除；锁定态与 Agent 带的不显示 × */}
               {agentSel && (
-                <span
-                  className={cn(
-                    'flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px]',
-                    agentGone ? 'text-amber-600' : 'text-muted-foreground'
-                  )}
-                  title={agentGone ? '这个 Agent 已被删除，会话保留但不再具备它的知识库和服务能力' : '本会话使用的 Agent'}
-                >
-                  {agentGone ? <TriangleAlert className="size-4" /> : <Bot className="size-4" />}
-                  {agentSel.name}
-                  {agentGone && '（已删除）'}
-                </span>
-              )}
-
-              {/* 已选展示：服务计数；点击等于回菜单的 MCP 二级 */}
-              {(selectedIds.length > 0 || selectedDown > 0) && (
                 <button
                   onClick={() => {
-                    setPlusOpen(true)
-                    setPlusSub('mcp')
+                    if (!agentLocked && !agentGone) onSelectAgent?.(null)
                   }}
-                  title="本会话选用的 MCP 服务"
-                  className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
+                  title={
+                    agentGone
+                      ? '这个 Agent 已被删除，会话保留但不再具备它的知识库和服务能力'
+                      : agentLocked
+                        ? '本会话使用的 Agent（已发出消息，不可更换）'
+                        : '点击移除'
+                  }
+                  className={cn(
+                    'group/atag flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px]',
+                    agentGone ? 'cursor-default text-amber-600' : 'text-muted-foreground',
+                    !agentLocked && !agentGone && 'hover:bg-muted',
+                    agentLocked && 'cursor-default'
+                  )}
                 >
-                  {selectedDown > 0 ? (
-                    <>
-                      <TriangleAlert className="size-3.5" />
-                      {selectedDown} 个服务不可用
-                    </>
+                  {agentGone ? (
+                    <TriangleAlert className="size-4" />
+                  ) : agentLocked ? (
+                    <Bot className="size-4" />
                   ) : (
                     <>
-                      <Wrench className="size-4" />
-                      {selectedIds.length}
+                      <Bot className="size-4 group-hover/atag:hidden" />
+                      <X className="hidden size-4 group-hover/atag:inline" />
                     </>
                   )}
+                  {agentSel.name}
+                  {agentGone && '（已删除）'}
                 </button>
               )}
+
+              {selectedIds.map((id) => {
+                const svc = svcList.find((s) => s.id === id)
+                if (!svc) return null
+                const viaAgent = fromAgent.has(id)
+                const down = svc.status !== 'connected'
+                return (
+                  <button
+                    key={id}
+                    onClick={() => {
+                      if (!viaAgent) onToggleService?.(id)
+                    }}
+                    title={viaAgent ? '来自 Agent，随 Agent 挂载' : down ? `${svc.name}：连接不上，点击移除` : '点击移除'}
+                    className={cn(
+                      'group/stag flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px]',
+                      down ? 'text-amber-600' : 'text-muted-foreground',
+                      viaAgent ? 'cursor-default' : 'hover:bg-muted'
+                    )}
+                  >
+                    {viaAgent ? (
+                      down ? <TriangleAlert className="size-4" /> : <Wrench className="size-4" />
+                    ) : (
+                      <>
+                        {down ? (
+                          <TriangleAlert className="size-4 group-hover/stag:hidden" />
+                        ) : (
+                          <Wrench className="size-4 group-hover/stag:hidden" />
+                        )}
+                        <X className="hidden size-4 group-hover/stag:inline" />
+                      </>
+                    )}
+                    {svc.name}
+                  </button>
+                )
+              })}
 
               {/* 历史会话的知识库：只读展示（014 起知识库只从 Agent 进入，新会话无此控件） */}
               {kbSel.length > 0 && (
