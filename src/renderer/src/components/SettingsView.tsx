@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import { PanelLeft, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText, Bot, ChevronLeft, Trash2 } from 'lucide-react'
-import { Markdown } from './Markdown'
 import { estimateTokensBase } from '../../../shared/tokens'
 import { BUILTIN_TOOLS } from '../../../shared/builtinTools'
 import deepseekIcon from '@/assets/vendors/deepseek.png'
@@ -1291,7 +1290,8 @@ function StatusLine({
 
 // ── Agent 分区（014 Case 2）：列表 / 编辑两态。Agent = 提示词 + 知识库 + MCP 服务的命名组合 ──
 
-// 提示词预填骨架：括号里是引导文字，用户写时替换；不需要的标题自行删除
+// 提示词预填骨架：括号里是引导文字，用户写时替换；不需要的标题自行删除。
+// 所见即所得：编辑框里是什么就存什么、token 数按实际内容算，不做「没动过骨架按空存」的特判
 const AGENT_PROMPT_SKELETON = `你是XXX，负责XXX。
 
 ## 我能做什么
@@ -1317,14 +1317,14 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
   const [kbs, setKbs] = useState<KbCard[]>([])
   const [services, setServices] = useState<McpServiceInfo[]>([])
   const [editing, setEditing] = useState<{ id?: number } | null>(null) // null = 列表；{} = 新建；{id} = 编辑
+  const [sub, setSub] = useState<'base' | 'prompt' | 'kb' | 'tools'>('base') // 编辑页内的分类导航
   const [formName, setFormName] = useState('')
   const [formPrompt, setFormPrompt] = useState('')
   const [formKbSel, setFormKbSel] = useState<SelEntry[]>([])
   const [formMcpSel, setFormMcpSel] = useState<SelEntry[]>([])
-  const [promptEditing, setPromptEditing] = useState(false) // 提示词：渲染态 / 文本框态
-  const [sub, setSub] = useState<'base' | 'prompt' | 'kb' | 'tools'>('base') // 编辑页内的分类导航
   const [formError, setFormError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<{ id: number; name: string; usage: number } | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<{ kind: 'kb' | 'mcp'; id: number; name: string } | null>(null)
   const formInit = useRef({ name: '', prompt: '', kb: '[]', mcp: '[]' })
 
   const reload = useCallback(() => {
@@ -1360,19 +1360,16 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
       kb: JSON.stringify(a?.kbSel ?? []),
       mcp: JSON.stringify(a?.mcpSel ?? [])
     }
-    setPromptEditing(!a) // 新建直接进文本框态（骨架就是让人改的）；查看已有先渲染
     setFormError('')
     setSub('base')
     setEditing(a ? { id: a.id } : {})
   }
 
   const submit = async (): Promise<void> => {
-    // 提示词没动过骨架 = 没写，按空存（组装时用产品身份句）
-    const prompt = formPrompt === AGENT_PROMPT_SKELETON ? '' : formPrompt
     const r = await window.api.agentSave({
       id: editing?.id,
       name: formName.trim(),
-      prompt,
+      prompt: formPrompt,
       kbSel: formKbSel,
       mcpSel: formMcpSel
     })
@@ -1386,25 +1383,60 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     reload()
   }
 
-  const askDelete = async (): Promise<void> => {
-    if (editing?.id === undefined) return
-    const usage = await window.api.agentUsage(editing.id)
-    setConfirmDelete({ id: editing.id, name: formName, usage })
+  const askDelete = async (a: { id: number; name: string }): Promise<void> => {
+    const usage = await window.api.agentUsage(a.id)
+    setConfirmDelete({ id: a.id, name: a.name, usage })
   }
 
-  // ── 编辑视图（分类式，参照 Cherry 的助手编辑）：四个分类共享一份表单，切分类不丢，保存一次落库 ──
+  // 目录行（知识库与工具同一样式）：名称 + 右侧添加/已添加；移除走确认弹窗
+  const CatalogRow = ({
+    name,
+    added,
+    note,
+    lockAdded,
+    onAdd,
+    onAskRemove
+  }: {
+    name: string
+    added: boolean
+    note?: string // 「已移除」一类的备注（成员在 Chime 里已删）
+    lockAdded?: boolean // 内置工具：默认添加且不可移除
+    onAdd?: () => void
+    onAskRemove?: () => void
+  }): React.JSX.Element => (
+    <div className={cn('flex h-11 items-center gap-2 text-[13px]', note && 'opacity-60')}>
+      <span className="min-w-0 flex-1 truncate">{name}</span>
+      {note && (
+        <>
+          <span className="size-1.5 flex-none rounded-full bg-destructive" />
+          <span className="flex-none text-[12px] text-muted-foreground">{note}</span>
+        </>
+      )}
+      {lockAdded ? (
+        <Button variant="outline" disabled className="h-7 px-3 text-[12px]">
+          已添加
+        </Button>
+      ) : added ? (
+        <Button variant="outline" onClick={onAskRemove} className="h-7 px-3 text-[12px]">
+          已添加
+        </Button>
+      ) : (
+        <Button variant="outline" onClick={onAdd} className="h-7 px-3 text-[12px]">
+          添加
+        </Button>
+      )}
+    </div>
+  )
+
+  // ── 编辑视图（分类式）：四个分类共享一份表单，切分类不丢，保存一次落库 ──
   if (editing !== null) {
     const kbById = new Map(kbs.map((k) => [k.id, k]))
     const svcById = new Map(services.map((s) => [s.id, s]))
     const goneKb = formKbSel.filter((e) => !kbById.has(e.id))
     const goneMcp = formMcpSel.filter((e) => !svcById.has(e.id))
-    const kbCandidates = kbs.filter((k) => !formKbSel.some((e) => e.id === k.id))
-    const mcpCandidates = services.filter((s) => s.enabled && !formMcpSel.some((e) => e.id === s.id))
-    const remove = (list: SelEntry[], set: (v: SelEntry[]) => void, id: number): void =>
-      set(list.filter((x) => x.id !== id))
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex flex-none items-center justify-between px-6 pt-5 pb-2">
+        <div className="flex flex-none items-center px-6 pt-5 pb-2">
           <button
             onClick={() => setEditing(null)}
             className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -1412,15 +1444,6 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
             <ChevronLeft className="size-4" />
             Agent
           </button>
-          {editing.id !== undefined && (
-            <button
-              onClick={askDelete}
-              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-destructive transition-colors hover:bg-destructive/10"
-            >
-              <Trash2 className="size-3.5" />
-              删除
-            </button>
-          )}
         </div>
 
         <div className="flex min-h-0 flex-1">
@@ -1463,89 +1486,96 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
 
             {sub === 'prompt' && (
               <>
-                <div className="mb-1.5 flex items-center justify-between">
-                  <div className="text-[13px] font-medium text-muted-foreground">系统提示词</div>
-                  <button
-                    onClick={() => setPromptEditing((v) => !v)}
-                    className="rounded-md px-2 py-0.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  >
-                    {promptEditing ? '完成' : '编辑'}
-                  </button>
-                </div>
-                {promptEditing ? (
-                  <textarea
-                    value={formPrompt}
-                    onChange={(e) => setFormPrompt(e.target.value)}
-                    rows={16}
-                    className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-[13px] leading-[1.7] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
-                  />
-                ) : (
-                  <div className="max-h-[420px] overflow-y-auto rounded-lg border border-border bg-muted/30 px-4 py-3">
-                    {formPrompt.trim() ? (
-                      <Markdown text={formPrompt} />
-                    ) : (
-                      <div className="py-2 text-[13px] text-muted-foreground">
-                        未填写。对话时使用产品内置的通用身份。
-                      </div>
-                    )}
-                  </div>
-                )}
+                <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">系统提示词</div>
+                <textarea
+                  value={formPrompt}
+                  onChange={(e) => setFormPrompt(e.target.value)}
+                  rows={16}
+                  className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-[13px] leading-[1.7] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
+                />
                 <div className="mt-1 text-[12px] text-muted-foreground">
-                  {estimateTokensBase(formPrompt === AGENT_PROMPT_SKELETON ? '' : formPrompt)} tokens
+                  {estimateTokensBase(formPrompt)} tokens
                 </div>
               </>
             )}
 
             {sub === 'kb' && (
-              <AddableList
-                title="知识库"
-                addLabel="添加知识库"
-                empty="还没有挂载知识库"
-                items={[
-                  ...goneKb.map((e) => ({ id: e.id, name: e.name, note: '已移除' })),
-                  ...formKbSel
-                    .filter((e) => kbById.has(e.id))
-                    .map((e) => ({ id: e.id, name: e.name, note: undefined }))
-                ]}
-                candidates={kbCandidates.map((k) => ({ id: k.id, name: k.name }))}
-                onAdd={(c) => setFormKbSel([...formKbSel, c])}
-                onRemove={(id) => remove(formKbSel, setFormKbSel, id)}
-              />
+              <>
+                <div className="mb-1 text-[13px] font-medium text-muted-foreground">知识库</div>
+                <div className="divide-y divide-border">
+                  {goneKb.map((e) => (
+                    <CatalogRow
+                      key={`gone-${e.id}`}
+                      name={e.name}
+                      added
+                      note="已移除"
+                      onAskRemove={() => setConfirmRemove({ kind: 'kb', id: e.id, name: e.name })}
+                    />
+                  ))}
+                  {kbs.map((k) => {
+                    const added = formKbSel.some((e) => e.id === k.id)
+                    return (
+                      <CatalogRow
+                        key={k.id}
+                        name={k.name}
+                        added={added}
+                        onAdd={() => setFormKbSel([...formKbSel, { id: k.id, name: k.name }])}
+                        onAskRemove={() => setConfirmRemove({ kind: 'kb', id: k.id, name: k.name })}
+                      />
+                    )
+                  })}
+                  {!kbs.length && !goneKb.length && (
+                    <div className="py-3 text-[13px] text-muted-foreground">
+                      还没有知识库，可先在「知识库」分区添加
+                    </div>
+                  )}
+                </div>
+              </>
             )}
 
             {sub === 'tools' && (
               <>
-                <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">
+                <div className="mb-1 text-[13px] font-medium text-muted-foreground">
                   内置工具（每个 Agent 都带）
                 </div>
-                <div className="mb-5 flex flex-col">
-                  {BUILTIN_TOOLS.map((t) => {
-                    const Icon = TOOL_ICONS[t.name] ?? Wrench
-                    return (
-                      <div key={t.name} className="flex items-center gap-2.5 py-2">
-                        <Icon className="size-4 flex-none text-muted-foreground" />
-                        <span className="flex-none text-[13px]">{t.display}</span>
-                        <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
-                          {t.name === 'search_knowledge_base' ? `${t.desc}（挂了知识库时可用）` : t.desc}
-                        </span>
-                      </div>
-                    )
-                  })}
+                <div className="divide-y divide-border">
+                  {BUILTIN_TOOLS.map((t) => (
+                    <CatalogRow key={t.name} name={t.display} added lockAdded />
+                  ))}
                 </div>
-                <AddableList
-                  title="MCP 服务"
-                  addLabel="添加服务"
-                  empty="还没有添加 MCP 服务"
-                  items={[
-                    ...goneMcp.map((e) => ({ id: e.id, name: e.name, note: '已移除' })),
-                    ...formMcpSel
-                      .filter((e) => svcById.has(e.id))
-                      .map((e) => ({ id: e.id, name: e.name, note: undefined }))
-                  ]}
-                  candidates={mcpCandidates.map((s) => ({ id: s.id, name: s.name }))}
-                  onAdd={(c) => setFormMcpSel([...formMcpSel, c])}
-                  onRemove={(id) => remove(formMcpSel, setFormMcpSel, id)}
-                />
+                <div className="mt-5 mb-1 border-t border-border pt-4 text-[13px] font-medium text-muted-foreground">
+                  MCP 服务
+                </div>
+                <div className="divide-y divide-border">
+                  {goneMcp.map((e) => (
+                    <CatalogRow
+                      key={`gone-${e.id}`}
+                      name={e.name}
+                      added
+                      note="已移除"
+                      onAskRemove={() => setConfirmRemove({ kind: 'mcp', id: e.id, name: e.name })}
+                    />
+                  ))}
+                  {services
+                    .filter((s) => s.enabled)
+                    .map((s) => {
+                      const added = formMcpSel.some((e) => e.id === s.id)
+                      return (
+                        <CatalogRow
+                          key={s.id}
+                          name={s.name}
+                          added={added}
+                          onAdd={() => setFormMcpSel([...formMcpSel, { id: s.id, name: s.name }])}
+                          onAskRemove={() => setConfirmRemove({ kind: 'mcp', id: s.id, name: s.name })}
+                        />
+                      )
+                    })}
+                  {!services.some((s) => s.enabled) && !goneMcp.length && (
+                    <div className="py-3 text-[13px] text-muted-foreground">
+                      还没有已启用的 MCP 服务，可先在「工具」分区添加
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -1561,28 +1591,26 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
         </div>
 
         <ConfirmDialog
-          open={!!confirmDelete}
-          title={`删除 Agent「${confirmDelete?.name ?? ''}」？`}
+          open={!!confirmRemove}
+          title={`移除「${confirmRemove?.name ?? ''}」？`}
           body={
-            confirmDelete?.usage
-              ? `有 ${confirmDelete.usage} 个会话正在用它。删除后这些会话保留，但不再具备它的知识库和服务能力。`
-              : '删除后不可恢复。'
+            confirmRemove?.kind === 'kb'
+              ? '移除后这个 Agent 不再依据该知识库作答。'
+              : '移除后这个 Agent 不再具备该服务的操作能力。'
           }
-          confirmText="删除"
-          onConfirm={async () => {
-            if (confirmDelete) await window.api.agentDelete(confirmDelete.id)
-            setConfirmDelete(null)
-            onDirtyChange(false)
-            setEditing(null)
-            reload()
+          confirmText="移除"
+          onConfirm={() => {
+            if (confirmRemove?.kind === 'kb') setFormKbSel(formKbSel.filter((e) => e.id !== confirmRemove.id))
+            if (confirmRemove?.kind === 'mcp') setFormMcpSel(formMcpSel.filter((e) => e.id !== confirmRemove.id))
+            setConfirmRemove(null)
           }}
-          onCancel={() => setConfirmDelete(null)}
+          onCancel={() => setConfirmRemove(null)}
         />
       </div>
     )
   }
 
-  // ── 列表视图 ──
+  // ── 列表视图（删除入口在这里，不进编辑页）──
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
       <div className="mb-4 flex items-center justify-between">
@@ -1600,109 +1628,47 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
       ) : (
         <div className="flex flex-col gap-2.5">
           {agents.map((a) => (
-            <button
+            <div
               key={a.id}
               onClick={() => openEdit(a)}
-              className="rounded-xl border border-border px-4 py-3 text-left transition-colors hover:bg-muted/50"
+              className="group flex cursor-pointer items-center gap-3 rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/50"
             >
-              <div className="text-[14px] font-medium">{a.name}</div>
-              <div className="mt-0.5 text-[13px] text-muted-foreground">
-                {a.kbSel.length} 个知识库&emsp;{a.mcpSel.length} 个 MCP 服务
+              <div className="min-w-0 flex-1">
+                <div className="text-[14px] font-medium">{a.name}</div>
+                <div className="mt-0.5 text-[13px] text-muted-foreground">
+                  {a.kbSel.length} 个知识库&emsp;{a.mcpSel.length} 个 MCP 服务
+                </div>
               </div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// 添加式列表（014 Agent 编辑页）：标题行右侧放添加按钮，弹层列候选；已加的每条可移除
-function AddableList({
-  title,
-  addLabel,
-  empty,
-  items,
-  candidates,
-  onAdd,
-  onRemove
-}: {
-  title: string
-  addLabel: string
-  empty: string
-  items: { id: number; name: string; note?: string }[]
-  candidates: { id: number; name: string }[]
-  onAdd: (c: { id: number; name: string }) => void
-  onRemove: (id: number) => void
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between">
-        <div className="text-[13px] font-medium text-muted-foreground">{title}</div>
-        <div className="relative">
-          <button
-            onClick={() => setOpen((v) => !v)}
-            onBlur={() => setTimeout(() => setOpen(false), 120)}
-            className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <Plus className="size-3.5" />
-            {addLabel}
-          </button>
-          {open && (
-            <div className="absolute top-[calc(100%+4px)] right-0 z-20 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-              {candidates.length === 0 ? (
-                <div className="px-2.5 py-1.5 text-[13px] text-muted-foreground">没有可添加的了</div>
-              ) : (
-                candidates.map((c) => (
-                  <button
-                    key={c.id}
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      onAdd(c)
-                      setOpen(false)
-                    }}
-                    className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors hover:bg-muted"
-                  >
-                    <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                  </button>
-                ))
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-      {items.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border px-4 py-4 text-[13px] text-muted-foreground">
-          {empty}
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {items.map((it) => (
-            <div
-              key={it.id}
-              className={cn(
-                'flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-[13px]',
-                it.note && 'opacity-60'
-              )}
-            >
-              <span className="min-w-0 flex-1 truncate">{it.name}</span>
-              {it.note && (
-                <>
-                  <span className="size-1.5 flex-none rounded-full bg-destructive" />
-                  <span className="flex-none text-[12px] text-muted-foreground">{it.note}</span>
-                </>
-              )}
               <button
-                onClick={() => onRemove(it.id)}
-                className="flex-none rounded-md px-2 py-0.5 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void askDelete(a)
+                }}
+                title="删除"
+                className="grid size-8 flex-none place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-black/5 hover:text-destructive"
               >
-                移除
+                <Trash2 className="size-4" />
               </button>
             </div>
           ))}
         </div>
       )}
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title={`删除 Agent「${confirmDelete?.name ?? ''}」？`}
+        body={
+          confirmDelete?.usage
+            ? `有 ${confirmDelete.usage} 个会话正在用它。删除后这些会话保留，但不再具备它的知识库和服务能力。`
+            : '删除后不可恢复。'
+        }
+        confirmText="删除"
+        onConfirm={async () => {
+          if (confirmDelete) await window.api.agentDelete(confirmDelete.id)
+          setConfirmDelete(null)
+          reload()
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   )
 }
