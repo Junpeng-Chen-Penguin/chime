@@ -322,10 +322,16 @@ app.whenReady().then(() => {
             app.exit(1)
             return
           }
-          const mcpNames = evalAgent.mcpSel.map((e) => e.name)
+          // 按 id 取当前名字，不用快照名——库或服务改过名后快照名对不上（快照只为删除后显示原名）。
+          // id 已不存在的成员跳过，与正常对话的降级语义一致
+          const mcpNames = evalAgent.mcpSel
+            .map((e) => listMcpServices().find((s) => s.id === e.id)?.name)
+            .filter((n): n is string => !!n)
           if (mcpNames.length && spec.mcp !== true)
             spec.mcp = [...(Array.isArray(spec.mcp) ? spec.mcp : []), ...mcpNames]
-          const kbNames = evalAgent.kbSel.map((e) => e.name)
+          const kbNames = evalAgent.kbSel
+            .map((e) => listKbsDb().find((k) => k.id === e.id)?.name)
+            .filter((n): n is string => !!n)
           if (kbNames.length && spec.kb !== true)
             spec.kb = [...(Array.isArray(spec.kb) ? (spec.kb as string[]) : []), ...kbNames]
         }
