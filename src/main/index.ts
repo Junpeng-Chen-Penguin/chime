@@ -160,6 +160,7 @@ app.whenReady().then(() => {
           url?: string
           headers?: Record<string, string>
         }[] = []
+        let agents: string[] = [] // 已建 Agent 名清单（014 Case 8）：供 Tuner 运行前预检
         try {
           const rdb = new Database(join(app.getPath('userData'), 'chime.db'), {
             readonly: true,
@@ -231,6 +232,11 @@ app.whenReady().then(() => {
           } catch {
             // 旧库无 mcp_service 表
           }
+          try {
+            agents = (rdb.prepare('SELECT name FROM agent').all() as { name: string }[]).map((a) => a.name)
+          } catch {
+            // 旧库无 agent 表（--report 只读打开、从不跑迁移）
+          }
           rdb.close()
         } catch {
           // 库不存在：按未配置处理
@@ -257,6 +263,7 @@ app.whenReady().then(() => {
             defaultModel,
             kbs,
             mcpServices,
+            agents,
             baseUrl: defRow?.baseUrl ?? 'https://api.deepseek.com',
             apiKey: defRow?.apiKey ?? null,
             models: defRow?.models ?? [],
@@ -298,11 +305,30 @@ app.whenReady().then(() => {
               | { approve: string[] }
               | { deny: { tool?: string; nth?: number }[] }
           }
+          agent?: string // 按名选用 Chime 里的 Agent（014 Case 8）：kb/mcp 随之带入，提示词组装自动生效
           // agent 应答（011 Case 7）：messages 只含 opening 一条，消费完转 stdin 逐轮取下一句；
           // 提问卡经 ask-request 事件转模拟用户作答；EOF＝结束信号
           driver?: 'agent'
         }
         const { runTurn, stopTurn, REPAIR_TEXTS } = await import('./engine/orchestrator')
+        // Agent 展开（014 Case 8）：按名查表，挂的库与服务并入 spec 同形态清单，之后全走现况逻辑。
+        // 位置必须在 mcpDecls 归一之前——「spec.mcp 未声明就停用全部服务」那条会误伤 Agent 自带的服务
+        let evalAgent: import('./db').AgentRow | null = null
+        if (spec.agent) {
+          const { getAgentByName } = await import('./db')
+          evalAgent = getAgentByName(spec.agent)
+          if (!evalAgent) {
+            process.stderr.write(`[eval] ERROR Agent「${spec.agent}」不存在\n`)
+            app.exit(1)
+            return
+          }
+          const mcpNames = evalAgent.mcpSel.map((e) => e.name)
+          if (mcpNames.length && spec.mcp !== true)
+            spec.mcp = [...(Array.isArray(spec.mcp) ? spec.mcp : []), ...mcpNames]
+          const kbNames = evalAgent.kbSel.map((e) => e.name)
+          if (kbNames.length && spec.kb !== true)
+            spec.kb = [...(Array.isArray(spec.kb) ? (spec.kb as string[]) : []), ...kbNames]
+        }
         // 统一归一（Case 6）：字符串元素 = {name}，与对象元素 {name, url?, headers?} 走同一条合并逻辑。
         // 语义 = "选入会话"：按名取快照库同名服务（地址原值），声明了 headers 就覆盖落库，
         // 未声明的服务不选入也不停用（会话范围由下方 mcpSelected 选择控制）；
@@ -560,6 +586,10 @@ app.whenReady().then(() => {
         const convId = spec.conv ?? `eval-${process.pid}-${Date.now()}`
         if (!spec.conv) {
           createConversation(convId, model, Date.now())
+          if (evalAgent) {
+            const { setConversationAgent } = await import('./db')
+            setConversationAgent(convId, evalAgent.id, evalAgent.name)
+          }
           // 环境快照（kb === true）：选中全部已构建的库；string[] 按名选中；对象形式按名选中该库
           if (spec.kb === true) {
             setConversationKbSelection(
