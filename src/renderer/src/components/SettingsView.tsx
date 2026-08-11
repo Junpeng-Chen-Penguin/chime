@@ -1388,7 +1388,8 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     setConfirmDelete({ id: a.id, name: a.name, usage })
   }
 
-  // 目录行（知识库与工具同一样式）：名称 + 右侧添加/已添加；移除走确认弹窗
+  // 目录卡片（知识库与工具同一样式）：名称 + 右侧添加/已添加。
+  // 已添加 = ✅（Claude Connectors 同款），悬停变「移除」文案，点击弹确认；内置工具恒 ✅ 且不可移除
   const CatalogRow = ({
     name,
     added,
@@ -1400,11 +1401,16 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     name: string
     added: boolean
     note?: string // 「已移除」一类的备注（成员在 Chime 里已删）
-    lockAdded?: boolean // 内置工具：默认添加且不可移除
+    lockAdded?: boolean
     onAdd?: () => void
     onAskRemove?: () => void
   }): React.JSX.Element => (
-    <div className={cn('flex h-11 items-center gap-2 text-[13px]', note && 'opacity-60')}>
+    <div
+      className={cn(
+        'flex items-center gap-2 rounded-xl border border-border px-4 py-2.5 text-[13px]',
+        note && 'opacity-60'
+      )}
+    >
       <span className="min-w-0 flex-1 truncate">{name}</span>
       {note && (
         <>
@@ -1413,15 +1419,19 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
         </>
       )}
       {lockAdded ? (
-        <Button variant="outline" disabled className="h-7 px-3 text-[12px]">
-          已添加
-        </Button>
+        <span className="grid h-7 w-14 flex-none place-items-center text-muted-foreground">
+          <Check className="size-4" />
+        </span>
       ) : added ? (
-        <Button variant="outline" onClick={onAskRemove} className="h-7 px-3 text-[12px]">
-          已添加
-        </Button>
+        <button
+          onClick={onAskRemove}
+          className="group/rm grid h-7 w-14 flex-none place-items-center rounded-md border border-border text-[12px] transition-colors hover:border-destructive/40 hover:bg-destructive/5 hover:text-destructive"
+        >
+          <Check className="size-4 group-hover/rm:hidden" />
+          <span className="hidden group-hover/rm:inline">移除</span>
+        </button>
       ) : (
-        <Button variant="outline" onClick={onAdd} className="h-7 px-3 text-[12px]">
+        <Button variant="outline" onClick={onAdd} className="h-7 w-14 flex-none px-0 text-[12px]">
           添加
         </Button>
       )}
@@ -1501,8 +1511,8 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
 
             {sub === 'kb' && (
               <>
-                <div className="mb-1 text-[13px] font-medium text-muted-foreground">知识库</div>
-                <div className="divide-y divide-border">
+                <div className="mb-2 text-[13px] font-medium text-muted-foreground">知识库</div>
+                <div className="flex flex-col gap-2">
                   {goneKb.map((e) => (
                     <CatalogRow
                       key={`gone-${e.id}`}
@@ -1535,18 +1545,16 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
 
             {sub === 'tools' && (
               <>
-                <div className="mb-1 text-[13px] font-medium text-muted-foreground">
-                  内置工具（每个 Agent 都带）
-                </div>
-                <div className="divide-y divide-border">
+                <div className="mb-2 text-[13px] font-medium text-muted-foreground">内置工具</div>
+                <div className="flex flex-col gap-2">
                   {BUILTIN_TOOLS.map((t) => (
                     <CatalogRow key={t.name} name={t.display} added lockAdded />
                   ))}
                 </div>
-                <div className="mt-5 mb-1 border-t border-border pt-4 text-[13px] font-medium text-muted-foreground">
+                <div className="mt-5 mb-2 border-t border-border pt-4 text-[13px] font-medium text-muted-foreground">
                   MCP 服务
                 </div>
-                <div className="divide-y divide-border">
+                <div className="flex flex-col gap-2">
                   {goneMcp.map((e) => (
                     <CatalogRow
                       key={`gone-${e.id}`}
