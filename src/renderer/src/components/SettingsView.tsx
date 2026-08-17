@@ -1682,7 +1682,8 @@ function SkillPanel(): React.JSX.Element {
                 </pre>
               ) : (
                 <div className="select-text">
-                  <Markdown text={file.content} />
+                  {/* 渲染视图剥掉 YAML 头（验收意见）：头部信息页面顶部已展示，直出会被挤成一段粗体；源码视图保留全文 */}
+                  <Markdown text={file.content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '')} />
                 </div>
               )}
             </div>
@@ -1742,45 +1743,37 @@ function SkillPanel(): React.JSX.Element {
         </div>
       </div>
 
-      {list.length === 0 ? (
-        <div className="flex flex-col items-start gap-1 py-8">
-          <div className="text-[14px] font-medium">还没有技能</div>
-          <div className="text-[13px] text-muted-foreground">
-            把写好的技能文件夹或 zip 导入进来，Agent 添加和会话点名时就有库可用
-          </div>
+      {/* 没数据也展示表头（验收意见，照 Claude 技能页）；不加解释文案 */}
+      <div className="rounded-xl border border-border">
+        <div className="flex items-center gap-3 border-b border-border px-4 py-2 text-[12px] font-medium text-muted-foreground">
+          <span className="min-w-0 flex-1">技能</span>
+          <span className="w-[96px] flex-none">最近更新</span>
         </div>
-      ) : (
-        <div className="rounded-xl border border-border">
-          <div className="flex items-center gap-3 border-b border-border px-4 py-2 text-[12px] font-medium text-muted-foreground">
-            <span className="min-w-0 flex-1">技能</span>
-            <span className="w-[96px] flex-none">最近更新</span>
-          </div>
-          <div className="divide-y divide-border">
-            {shown.map((s) => (
-              <button
-                key={s.name}
-                onClick={() => void openDetail(s.name)}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] transition-colors hover:bg-muted/50"
-              >
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <span className="truncate font-medium">{s.name}</span>
-                  {s.hasScripts && (
-                    <span className="flex-none rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                      含脚本
-                    </span>
-                  )}
-                </span>
-                <span className="w-[96px] flex-none text-muted-foreground">
-                  {new Date(s.updatedAt).toLocaleDateString()}
-                </span>
-              </button>
-            ))}
-            {!shown.length && (
-              <div className="px-4 py-3 text-[13px] text-muted-foreground">未找到匹配结果</div>
-            )}
-          </div>
+        <div className="divide-y divide-border">
+          {shown.map((s) => (
+            <button
+              key={s.name}
+              onClick={() => void openDetail(s.name)}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] transition-colors hover:bg-muted/50"
+            >
+              <span className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="truncate font-medium">{s.name}</span>
+                {s.hasScripts && (
+                  <span className="flex-none rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                    含脚本
+                  </span>
+                )}
+              </span>
+              <span className="w-[96px] flex-none text-muted-foreground">
+                {new Date(s.updatedAt).toLocaleDateString()}
+              </span>
+            </button>
+          ))}
+          {!shown.length && !!q.trim() && (
+            <div className="px-4 py-3 text-[13px] text-muted-foreground">未找到匹配结果</div>
+          )}
         </div>
-      )}
+      </div>
 
       {/* 导入弹窗（功能点 4）：拖放区 + 点击选择 + 文件要求；失败原因就地显示（功能点 6） */}
       {importOpen && (
@@ -2300,7 +2293,8 @@ function AgentPanel({
               <div className="min-w-0 flex-1">
                 <div className="text-[14px] font-medium">{a.name}</div>
                 <div className="mt-0.5 text-[13px] text-muted-foreground">
-                  {a.kbSel.length} 个知识库&emsp;{a.mcpSel.length} 个 MCP 服务
+                  {a.kbSel.length} 个知识库&emsp;{a.mcpSel.length} 个 MCP 服务&emsp;
+                  {a.skillSel.length} 个技能
                 </div>
               </div>
               <button
