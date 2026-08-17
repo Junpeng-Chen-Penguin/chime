@@ -1,5 +1,32 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
-import { PanelLeft, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, FolderOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText, Bot, ChevronLeft, Trash2, TriangleAlert, X } from 'lucide-react'
+import {
+  PanelLeft,
+  Eye,
+  EyeOff,
+  Check,
+  Loader2,
+  Boxes,
+  BookOpen,
+  FolderOpen,
+  Plus,
+  MoreHorizontal,
+  Wrench,
+  Search,
+  MessageCircleQuestion,
+  Table2,
+  TextSearch,
+  FileText,
+  Bot,
+  ChevronLeft,
+  ChevronDown,
+  Trash2,
+  TriangleAlert,
+  X,
+  Puzzle,
+  Code,
+  Upload
+} from 'lucide-react'
+import { Markdown } from './Markdown'
 import { estimateTokensBase } from '../../../shared/tokens'
 import { BUILTIN_TOOLS } from '../../../shared/builtinTools'
 import deepseekIcon from '@/assets/vendors/deepseek.png'
@@ -11,12 +38,13 @@ import ConfirmDialog from './ConfirmDialog'
 import { cn } from '@/lib/utils'
 
 type Status = 'idle' | 'detecting' | 'success' | 'error'
-type Tab = 'provider' | 'kb' | 'mcp' | 'agent'
+type Tab = 'provider' | 'kb' | 'mcp' | 'skill' | 'agent'
 
 const TABS: { key: Tab; label: string; icon: typeof Boxes }[] = [
   { key: 'provider', label: '模型服务', icon: Boxes },
   { key: 'kb', label: '知识库', icon: BookOpen },
   { key: 'mcp', label: '工具', icon: Wrench },
+  { key: 'skill', label: '技能', icon: Puzzle },
   { key: 'agent', label: 'Agent', icon: Bot }
 ]
 
@@ -31,7 +59,15 @@ interface Props {
 }
 
 // 设置页：占用主区域展示（014 Case 1，原为弹窗——弹窗放不下 Agent 提示词这类长文本编辑）
-export default function SettingsView({ collapsed, fullscreen, onExpand, onClose, onSaved, onDirtyChange, initialTab }: Props): React.JSX.Element {
+export default function SettingsView({
+  collapsed,
+  fullscreen,
+  onExpand,
+  onClose,
+  onSaved,
+  onDirtyChange,
+  initialTab
+}: Props): React.JSX.Element {
   const [tab, setTab] = useState<Tab>(initialTab ?? 'provider')
 
   useEffect(() => {
@@ -84,9 +120,14 @@ export default function SettingsView({ collapsed, fullscreen, onExpand, onClose,
           {tab === 'kb' ? (
             <KbPanel onDirtyChange={onDirtyChange} />
           ) : tab === 'mcp' ? (
-            <ToolsPanel initialSub={initialTab === 'mcp' ? 'mcp' : 'builtin'} onDirtyChange={onDirtyChange} />
+            <ToolsPanel
+              initialSub={initialTab === 'mcp' ? 'mcp' : 'builtin'}
+              onDirtyChange={onDirtyChange}
+            />
+          ) : tab === 'skill' ? (
+            <SkillPanel />
           ) : tab === 'agent' ? (
-            <AgentPanel onDirtyChange={onDirtyChange} />
+            <AgentPanel onDirtyChange={onDirtyChange} onGoSkills={() => setTab('skill')} />
           ) : (
             <ProviderPanel onSaved={onSaved} />
           )}
@@ -98,7 +139,11 @@ export default function SettingsView({ collapsed, fullscreen, onExpand, onClose,
 
 // ── 模型服务商分区（PRD Case 6）：两栏——左为默认模型入口 + 预置服务商清单，右为选中项配置 ──
 
-function ProviderPanel({ onSaved }: { onSaved: (defaultModel: string) => void }): React.JSX.Element {
+function ProviderPanel({
+  onSaved
+}: {
+  onSaved: (defaultModel: string) => void
+}): React.JSX.Element {
   type VendorInfo = import('../../../preload/index.d').VendorInfo
   const [list, setList] = useState<VendorInfo[]>([])
   const [sel, setSel] = useState<string>('') // '' = 默认模型页
@@ -204,7 +249,9 @@ function DefaultModelPane({
                       onClick={() => onPick(ref)}
                       className={cn(
                         'flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-[14px] transition-colors',
-                        active ? 'border-primary/40 bg-primary-soft' : 'border-border hover:bg-muted'
+                        active
+                          ? 'border-primary/40 bg-primary-soft'
+                          : 'border-border hover:bg-muted'
                       )}
                     >
                       <span
@@ -281,7 +328,6 @@ function VendorPane({
     }
   }
 
-
   return (
     <div className="px-6 py-6">
       <div className="mb-5 flex items-center justify-between">
@@ -330,7 +376,11 @@ function VendorPane({
               {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
             </button>
           </div>
-          <Button onClick={runDetect} disabled={status === 'detecting' || (!v.hasKey && !keyInput.trim())} className="h-10 px-5">
+          <Button
+            onClick={runDetect}
+            disabled={status === 'detecting' || (!v.hasKey && !keyInput.trim())}
+            className="h-10 px-5"
+          >
             检测
           </Button>
         </div>
@@ -375,7 +425,12 @@ function VendorPane({
 
       <Section title="模型">
         <div className="mb-2">
-          <Button variant="outline" onClick={fetchModels} disabled={fetching || (!v.hasKey && !keyInput.trim())} className="h-9 px-4">
+          <Button
+            variant="outline"
+            onClick={fetchModels}
+            disabled={fetching || (!v.hasKey && !keyInput.trim())}
+            className="h-9 px-4"
+          >
             {fetching ? '获取中…' : '获取模型列表'}
           </Button>
         </div>
@@ -391,7 +446,11 @@ function VendorPane({
                 <button
                   key={m.id}
                   onClick={async () => {
-                    await window.api.providerPickModel({ vendor: v.vendor, id: m.id, picked: !m.picked })
+                    await window.api.providerPickModel({
+                      vendor: v.vendor,
+                      id: m.id,
+                      picked: !m.picked
+                    })
                     onChanged()
                   }}
                   className="flex w-full items-center gap-2.5 rounded-lg border border-border px-3 py-2 text-left text-[13px] transition-colors hover:bg-muted"
@@ -399,16 +458,22 @@ function VendorPane({
                   <span
                     className={cn(
                       'grid size-5 flex-none place-items-center rounded-md border',
-                      m.picked ? 'border-primary bg-primary text-primary-foreground' : 'border-border'
+                      m.picked
+                        ? 'border-primary bg-primary text-primary-foreground'
+                        : 'border-border'
                     )}
                   >
                     {m.picked && <Check className="size-3.5" strokeWidth={3} />}
                   </span>
                   <span className="min-w-0 flex-1 truncate">{m.id}</span>
-                  {m.offline && <span className="flex-none text-[11px] text-amber-600">已下线</span>}
+                  {m.offline && (
+                    <span className="flex-none text-[11px] text-amber-600">已下线</span>
+                  )}
                   {win && (
                     <span className="flex-none text-[11px] text-muted-foreground">
-                      {win >= 1048576 ? `${Math.round(win / 1048576)}M` : `${Math.round(win / 1024)}K`}
+                      {win >= 1048576
+                        ? `${Math.round(win / 1048576)}M`
+                        : `${Math.round(win / 1024)}K`}
                     </span>
                   )}
                 </button>
@@ -417,11 +482,9 @@ function VendorPane({
           </div>
         )}
       </Section>
-
     </div>
   )
 }
-
 
 const KB_PHASE_TEXT: Record<string, string> = {
   pulling: '获取最新内容…',
@@ -445,7 +508,11 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
   const [errors, setErrors] = useState<Record<number, string>>({}) // 库 id → 上次构建失败原因（内存态）
   const [menuFor, setMenuFor] = useState<number | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<KbCard | null>(null)
-  const [confirmBuild, setConfirmBuild] = useState<{ card: KbCard; deleted: number; kept: number } | null>(null)
+  const [confirmBuild, setConfirmBuild] = useState<{
+    card: KbCard
+    deleted: number
+    kept: number
+  } | null>(null)
   const showFormRef = useRef(false)
 
   useEffect(() => {
@@ -494,7 +561,11 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
     setFormName(card?.name ?? '')
     setFormIntro(card?.intro ?? '')
     setFormPath(card?.rootPath ?? '')
-    formInit.current = { name: card?.name ?? '', intro: card?.intro ?? '', path: card?.rootPath ?? '' }
+    formInit.current = {
+      name: card?.name ?? '',
+      intro: card?.intro ?? '',
+      path: card?.rootPath ?? ''
+    }
     setFormError('')
     setFormDone(null)
     setShowForm(true)
@@ -515,7 +586,12 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
   const submitForm = async (): Promise<void> => {
     setFormError('')
     if (editingId !== null) {
-      const r = await window.api.kbUpdate({ id: editingId, name: formName.trim(), intro: formIntro.trim(), path: formPath.trim() })
+      const r = await window.api.kbUpdate({
+        id: editingId,
+        name: formName.trim(),
+        intro: formIntro.trim(),
+        path: formPath.trim()
+      })
       if (!r.ok) {
         setFormError(r.error || '保存失败')
         return
@@ -527,7 +603,11 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
       // 路径改了：留在表单内看重建进度，done 后自动返回
       return
     }
-    const r = await window.api.kbAdd({ name: formName.trim(), intro: formIntro.trim(), path: formPath.trim() })
+    const r = await window.api.kbAdd({
+      name: formName.trim(),
+      intro: formIntro.trim(),
+      path: formPath.trim()
+    })
     if (!r.ok) setFormError(r.error || '创建失败')
     // 成功则留在表单内展示首次构建进度，完成后自动返回
   }
@@ -555,9 +635,16 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
     const formBusy = !!progress || formDone !== null
     return (
       <div className="flex-1 overflow-y-auto px-6 py-6">
-        <div className="mb-5 text-[15px] font-semibold">{editingId === null ? '新建知识库' : '编辑知识库'}</div>
+        <div className="mb-5 text-[15px] font-semibold">
+          {editingId === null ? '新建知识库' : '编辑知识库'}
+        </div>
         <Section title="名称 *">
-          <input value={formName} onChange={(e) => setFormName(e.target.value)} disabled={formBusy} className={INPUT_CLS} />
+          <input
+            value={formName}
+            onChange={(e) => setFormName(e.target.value)}
+            disabled={formBusy}
+            className={INPUT_CLS}
+          />
         </Section>
         <Section title="简介 *">
           <textarea
@@ -569,7 +656,10 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
             className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2.5 text-[14px] leading-[1.6] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50"
           />
         </Section>
-        <Section title="文件夹 *" hint={editingId !== null ? '修改后将按新文件夹重新构建' : undefined}>
+        <Section
+          title="文件夹 *"
+          hint={editingId !== null ? '修改后将按新文件夹重新构建' : undefined}
+        >
           <div className="flex gap-2.5">
             <input
               value={formPath}
@@ -578,7 +668,12 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
               disabled={formBusy}
               className="h-10 w-full flex-1 rounded-lg border border-input bg-background px-3 font-mono text-[13px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15 disabled:opacity-50"
             />
-            <Button variant="outline" onClick={pickFolder} disabled={formBusy} className="h-10 px-4">
+            <Button
+              variant="outline"
+              onClick={pickFolder}
+              disabled={formBusy}
+              className="h-10 px-4"
+            >
               选择
             </Button>
           </div>
@@ -594,11 +689,17 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
             <StatusLine>
               <Loader2 className="size-3.5 animate-spin" />
               {KB_PHASE_TEXT[progress.phase] || '处理中…'}
-              {progress.phase === 'embedding' && progress.total ? `（${progress.current} / ${progress.total}）` : ''}
-              {progress.phase === 'downloading-model' && progress.current ? `${progress.current}%` : ''}
+              {progress.phase === 'embedding' && progress.total
+                ? `（${progress.current} / ${progress.total}）`
+                : ''}
+              {progress.phase === 'downloading-model' && progress.current
+                ? `${progress.current}%`
+                : ''}
             </StatusLine>
             {progress.file && (
-              <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">{progress.file}</div>
+              <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
+                {progress.file}
+              </div>
             )}
           </>
         ) : (
@@ -626,7 +727,10 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
   // ── 卡片状态机（PRD Case 1 功能点 5）──
   const cardStatus = (
     c: KbCard
-  ): { line: ReactNode; btn: { label: string; onClick: () => void; disabled?: boolean } | null } => {
+  ): {
+    line: ReactNode
+    btn: { label: string; onClick: () => void; disabled?: boolean } | null
+  } => {
     if (c.building && progress) {
       return {
         line: (
@@ -634,10 +738,14 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
             <StatusLine className="mt-0">
               <Loader2 className="size-3.5 animate-spin" />
               {KB_PHASE_TEXT[progress.phase] || '处理中…'}
-              {progress.phase === 'embedding' && progress.total ? `（${progress.current} / ${progress.total}）` : ''}
+              {progress.phase === 'embedding' && progress.total
+                ? `（${progress.current} / ${progress.total}）`
+                : ''}
             </StatusLine>
             {progress.file && (
-              <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">{progress.file}</div>
+              <div className="mt-1.5 truncate font-mono text-[11px] text-muted-foreground">
+                {progress.file}
+              </div>
             )}
           </>
         ),
@@ -657,13 +765,17 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
     }
     if (err || !c.indexedAt) {
       return {
-        line: <StatusLine className="mt-0 text-destructive">{err || '尚未完成构建，可重试'}</StatusLine>,
+        line: (
+          <StatusLine className="mt-0 text-destructive">{err || '尚未完成构建，可重试'}</StatusLine>
+        ),
         btn: { label: '重试', onClick: () => startBuild(c), disabled: anyBuilding }
       }
     }
     if (c.changes?.needsFullRebuild) {
       return {
-        line: <StatusLine className="mt-0 text-amber-600">切块规则已更新，需重建全部文档</StatusLine>,
+        line: (
+          <StatusLine className="mt-0 text-amber-600">切块规则已更新，需重建全部文档</StatusLine>
+        ),
         btn: { label: '重建全部', onClick: () => startBuild(c), disabled: anyBuilding }
       }
     }
@@ -699,7 +811,11 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
     <div className="flex-1 overflow-y-auto px-6 py-6">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-[15px] font-semibold">知识库</div>
-        <Button variant="outline" onClick={() => openForm(null)} className="h-8 gap-1 px-3 text-[13px]">
+        <Button
+          variant="outline"
+          onClick={() => openForm(null)}
+          className="h-8 gap-1 px-3 text-[13px]"
+        >
           <Plus className="size-3.5" />
           添加知识库
         </Button>
@@ -708,7 +824,9 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
       {cards.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center">
           <div className="text-[14px] font-medium">还没有知识库</div>
-          <div className="mt-1 text-[12px] text-muted-foreground">添加后可在对话中选用，基于其内容作答</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">
+            添加后可在对话中选用，基于其内容作答
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
@@ -754,7 +872,11 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
                     )}
                   </div>
                 </div>
-                {c.intro && <div className="mt-1.5 text-[12px] leading-[1.7] text-muted-foreground">{c.intro}</div>}
+                {c.intro && (
+                  <div className="mt-1.5 text-[12px] leading-[1.7] text-muted-foreground">
+                    {c.intro}
+                  </div>
+                )}
                 <div className="mt-3">{st.line}</div>
                 {st.btn && (
                   <div className="mt-3 flex justify-end">
@@ -762,7 +884,11 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
                       variant="outline"
                       onClick={st.btn.onClick}
                       disabled={st.btn.disabled}
-                      title={st.btn.disabled && anyBuilding && !c.building ? '等待当前构建完成' : undefined}
+                      title={
+                        st.btn.disabled && anyBuilding && !c.building
+                          ? '等待当前构建完成'
+                          : undefined
+                      }
                       className="h-8 px-4 text-[13px]"
                     >
                       {st.btn.label}
@@ -802,7 +928,6 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
   )
 }
 
-
 // ── MCP 服务分区：卡片只读展示，新建与编辑走同一套表单（延续知识库设置的交互）──────
 
 const INPUT_CLS =
@@ -810,7 +935,13 @@ const INPUT_CLS =
 
 // 工具分区：顶部子页签（内置工具 / MCP 服务）——内置再多也不挤压 MCP 的直达入口（Cherry Studio 同构）。
 // 「前往设置」深链时落 MCP 页签，正常导航默认落内置工具
-function ToolsPanel({ initialSub, onDirtyChange }: { initialSub: 'builtin' | 'mcp'; onDirtyChange: (d: boolean) => void }): React.JSX.Element {
+function ToolsPanel({
+  initialSub,
+  onDirtyChange
+}: {
+  initialSub: 'builtin' | 'mcp'
+  onDirtyChange: (d: boolean) => void
+}): React.JSX.Element {
   const [sub, setSub] = useState<'builtin' | 'mcp'>(initialSub)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -821,7 +952,9 @@ function ToolsPanel({ initialSub, onDirtyChange }: { initialSub: 'builtin' | 'mc
             onClick={() => setSub(k)}
             className={cn(
               'rounded-lg px-3 py-1.5 text-[14px] transition-colors',
-              sub === k ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:bg-muted'
+              sub === k
+                ? 'bg-muted font-medium text-foreground'
+                : 'text-muted-foreground hover:bg-muted'
             )}
           >
             {k === 'builtin' ? '内置工具' : 'MCP 服务'}
@@ -850,7 +983,10 @@ function BuiltinToolsPane(): React.JSX.Element {
         {BUILTIN_TOOLS.map((t, i) => {
           const Icon = TOOL_ICONS[t.name] ?? Search
           return (
-            <div key={t.name} className={cn('flex items-center gap-3 px-4 py-3', i > 0 && 'border-t border-border')}>
+            <div
+              key={t.name}
+              className={cn('flex items-center gap-3 px-4 py-3', i > 0 && 'border-t border-border')}
+            >
               <span className="grid size-8 flex-none place-items-center rounded-lg bg-muted">
                 <Icon className="size-4 text-muted-foreground" />
               </span>
@@ -914,7 +1050,12 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
       : ''
     setHeadersText(text)
     setHeadersOriginal(text)
-    formInit.current = { name: svc?.name ?? '', url: svc?.url ?? '', enabled: svc?.enabled ?? true, headers: text }
+    formInit.current = {
+      name: svc?.name ?? '',
+      url: svc?.url ?? '',
+      enabled: svc?.enabled ?? true,
+      headers: text
+    }
     setFormError('')
     setTestResult(null)
     setShowForm(true)
@@ -926,7 +1067,10 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
     onDirtyChange(
       showForm &&
         !saving &&
-        (formName !== i.name || formUrl !== i.url || formEnabled !== i.enabled || headersText !== i.headers)
+        (formName !== i.name ||
+          formUrl !== i.url ||
+          formEnabled !== i.enabled ||
+          headersText !== i.headers)
     )
   }, [showForm, formName, formUrl, formEnabled, headersText, saving, onDirtyChange])
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]) // 卸载复位（切分区、切子页签、退出设置）
@@ -934,8 +1078,7 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
   // 认证请求头解析：一行一条「名=值」。编辑时文本没动 = 沿用已存（null，与模型服务密钥同一约定）；
   // 动了则须全部重填（打码字符出现在值里即视为没填完整）
   const parseHeaders = ():
-    | { ok: true; value: Record<string, string> | null }
-    | { ok: false; error: string } => {
+    { ok: true; value: Record<string, string> | null } | { ok: false; error: string } => {
     if (editing && headersText === headersOriginal) return { ok: true, value: null }
     const out: Record<string, string> = {}
     for (const line of headersText.split('\n')) {
@@ -948,7 +1091,8 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
           error: `请求头格式不正确：「${t.slice(0, 30)}」。每行一条，格式为 请求头名=值，如 Authorization=Bearer xxx`
         }
       const v = t.slice(i + 1).trim()
-      if (v.includes('•')) return { ok: false, error: '认证值不完整：修改请求头时，值需要全部重新填写' }
+      if (v.includes('•'))
+        return { ok: false, error: '认证值不完整：修改请求头时，值需要全部重新填写' }
       out[t.slice(0, i).trim()] = v
     }
     return { ok: true, value: out }
@@ -963,7 +1107,11 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
     setFormError('')
     setTesting(true)
     setTestResult(null)
-    const r = await window.api.mcpTest({ id: editing?.id, url: formUrl.trim(), headers: parsed.value })
+    const r = await window.api.mcpTest({
+      id: editing?.id,
+      url: formUrl.trim(),
+      headers: parsed.value
+    })
     setTestResult(r)
     setTesting(false)
   }
@@ -993,7 +1141,12 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="mb-5 text-[15px] font-semibold">{editing ? '编辑服务' : '新建服务'}</div>
         <Section title="名称 *">
-          <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="服务名称" className={INPUT_CLS} />
+          <input
+            value={formName}
+            onChange={(e) => setFormName(e.target.value)}
+            placeholder="服务名称"
+            className={INPUT_CLS}
+          />
         </Section>
         <Section title="服务地址 *">
           <input
@@ -1041,14 +1194,23 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
         )}
 
         <div className="mt-6 flex items-center justify-between">
-          <Button variant="outline" onClick={runTest} disabled={testing || !formUrl.trim()} className="h-9">
+          <Button
+            variant="outline"
+            onClick={runTest}
+            disabled={testing || !formUrl.trim()}
+            className="h-9"
+          >
             测试连接
           </Button>
           <div className="flex gap-2.5">
             <Button variant="outline" onClick={() => setShowForm(false)} className="h-9">
               取消
             </Button>
-            <Button onClick={submit} disabled={saving || !formName.trim() || !formUrl.trim()} className="h-9 px-5">
+            <Button
+              onClick={submit}
+              disabled={saving || !formName.trim() || !formUrl.trim()}
+              className="h-9 px-5"
+            >
               保存
             </Button>
           </div>
@@ -1061,7 +1223,11 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
     <div className="flex-1 overflow-y-auto px-6 py-6">
       {/* 分区名由子页签承担，此处只留操作（同一信息只出现一次） */}
       <div className="mb-4 flex items-center justify-end">
-        <Button variant="outline" onClick={() => openForm(null)} className="h-8 gap-1 px-3 text-[13px]">
+        <Button
+          variant="outline"
+          onClick={() => openForm(null)}
+          className="h-8 gap-1 px-3 text-[13px]"
+        >
           <Plus className="size-3.5" />
           添加服务
         </Button>
@@ -1070,7 +1236,9 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
       {list.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center">
           <div className="text-[14px] font-medium">还没有 MCP 服务</div>
-          <div className="mt-1 text-[12px] text-muted-foreground">添加后模型可在对话中调用它的工具</div>
+          <div className="mt-1 text-[12px] text-muted-foreground">
+            添加后模型可在对话中调用它的工具
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
@@ -1175,7 +1343,9 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
                     已连接 · {svc.toolCount} 个工具
                   </StatusLine>
                 ) : svc.status === 'auth' ? (
-                  <StatusLine className="mt-0 text-destructive">认证失效，请更新认证请求头</StatusLine>
+                  <StatusLine className="mt-0 text-destructive">
+                    认证失效，请更新认证请求头
+                  </StatusLine>
                 ) : (
                   <StatusLine className="mt-0 text-destructive">
                     连接失败，请检查服务地址，以及公司网络 / VPN 是否可用
@@ -1199,7 +1369,6 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
                   </StatusLine>
                 )}
               </div>
-
             </div>
           ))}
         </div>
@@ -1241,7 +1410,15 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
 }
 
 // 启停开关（胶囊型），与卡片状态行搭配使用；busy 期间禁点防重复触发
-function SwitchBtn({ on, onToggle, busy }: { on: boolean; onToggle: () => void; busy?: boolean }): React.JSX.Element {
+function SwitchBtn({
+  on,
+  onToggle,
+  busy
+}: {
+  on: boolean
+  onToggle: () => void
+  busy?: boolean
+}): React.JSX.Element {
   return (
     <button
       onClick={onToggle}
@@ -1296,7 +1473,12 @@ function StatusLine({
   className?: string
 }): React.JSX.Element {
   return (
-    <div className={cn('mt-2.5 flex items-center gap-1.5 text-[12px] text-muted-foreground', className)}>
+    <div
+      className={cn(
+        'mt-2.5 flex items-center gap-1.5 text-[12px] text-muted-foreground',
+        className
+      )}
+    >
       {children}
     </div>
   )
@@ -1321,7 +1503,368 @@ const AGENT_PROMPT_SKELETON = `你是XXX，负责XXX。
 （回答时要遵守的具体规则，比如涉及价格不给具体数字，让用户找商务确认）
 `
 
-function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): React.JSX.Element {
+// ── 技能分区（015 Case 4）：列表两列（技能、最近更新）+ 明细页（只读）+ 导入弹窗，界面照 Claude 桌面端技能页 ──
+function SkillPanel(): React.JSX.Element {
+  type SkillInfo = import('../../../preload/index.d').SkillInfo
+  type SkillDetail = import('../../../preload/index.d').SkillDetail
+  type AgentInfo = import('../../../preload/index.d').AgentInfo
+
+  const [list, setList] = useState<SkillInfo[]>([])
+  const [agents, setAgents] = useState<AgentInfo[]>([]) // 删除确认的受影响 Agent 数（renderer 现算）
+  const [q, setQ] = useState('')
+  const [detail, setDetail] = useState<SkillDetail | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importErrors, setImportErrors] = useState<string[]>([])
+  const [dragOver, setDragOver] = useState(false)
+  const [conflict, setConflict] = useState<{ name: string; path: string } | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false) // 明细页 ⋮
+  const [fileMenuOpen, setFileMenuOpen] = useState(false) // 明细页文件切换
+  const [fileIdx, setFileIdx] = useState(0)
+  const [viewSrc, setViewSrc] = useState(false) // 渲染 / 源码
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+
+  const reload = useCallback(() => {
+    window.api.skillList().then(setList)
+    window.api.agentList().then(setAgents)
+  }, [])
+  useEffect(() => {
+    reload()
+  }, [reload])
+
+  const doImport = async (path?: string, overwrite?: boolean): Promise<void> => {
+    const r = await window.api.skillImport({ path, overwrite })
+    if (!r) return // 用户取消了系统选择框
+    if ('ok' in r) {
+      setImportOpen(false)
+      setImportErrors([])
+      setConflict(null)
+      reload()
+    } else if ('conflict' in r) {
+      setConflict({ name: r.conflict, path: r.path })
+    } else {
+      setImportErrors(r.errors)
+    }
+  }
+
+  const openDetail = async (name: string): Promise<void> => {
+    const d = await window.api.skillGet(name)
+    if (!d) return
+    setFileIdx(0)
+    setViewSrc(false)
+    setDetail(d)
+  }
+
+  // ── 明细页 ──
+  if (detail) {
+    const file = detail.files[fileIdx] ?? detail.files[0]
+    const affected = agents.filter((a) => a.skillSel.includes(detail.name)).length
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex flex-none items-center px-6 pt-5 pb-2">
+          <button
+            onClick={() => setDetail(null)}
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <ChevronLeft className="size-4" />
+            技能
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[16px] font-semibold">
+                {detail.name}
+                {detail.hasScripts && (
+                  <span className="rounded-md border border-border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground">
+                    含脚本
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 text-[13px] leading-[1.7] text-muted-foreground">
+                {detail.description}
+              </div>
+            </div>
+            <div className="relative flex-none">
+              <button
+                onClick={() => setMenuOpen((o) => !o)}
+                className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <MoreHorizontal className="size-4" />
+              </button>
+              {menuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                  <div className="absolute right-0 z-20 mt-1 w-[120px] rounded-lg border border-border bg-background p-1 shadow-lg">
+                    <button
+                      onClick={() => {
+                        setMenuOpen(false)
+                        setConfirmDelete(detail.name)
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] text-destructive transition-colors hover:bg-destructive/5"
+                    >
+                      <Trash2 className="size-3.5" />
+                      删除
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* 内容卡：文件切换 + 渲染/源码切换，全程只读（修改走外部编辑后重新导入） */}
+          <div className="mt-4 rounded-xl border border-border">
+            <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+              <div className="relative">
+                <button
+                  onClick={() => setFileMenuOpen((o) => !o)}
+                  className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[12px] transition-colors hover:bg-muted"
+                >
+                  {file?.path ?? 'SKILL.md'}
+                  <ChevronDown className="size-3.5 text-muted-foreground" />
+                </button>
+                {fileMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setFileMenuOpen(false)} />
+                    <div className="absolute left-0 z-20 mt-1 max-h-[280px] w-max min-w-[180px] overflow-y-auto rounded-lg border border-border bg-background p-1 shadow-lg">
+                      {detail.files.map((f, i) => (
+                        <button
+                          key={f.path}
+                          onClick={() => {
+                            setFileIdx(i)
+                            setFileMenuOpen(false)
+                          }}
+                          className={cn(
+                            'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-muted',
+                            i === fileIdx && 'font-medium'
+                          )}
+                        >
+                          <span className="min-w-0 flex-1 truncate">{f.path}</span>
+                          {i === fileIdx && <Check className="size-3.5 flex-none text-primary" />}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+              <span className="text-[12px] text-muted-foreground">
+                {detail.files.length} 个文件
+              </span>
+              <div className="flex-1" />
+              <button
+                onClick={() => setViewSrc(false)}
+                title="渲染视图"
+                className={cn(
+                  'grid size-7 place-items-center rounded-md transition-colors',
+                  !viewSrc ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60'
+                )}
+              >
+                <Eye className="size-4" />
+              </button>
+              <button
+                onClick={() => setViewSrc(true)}
+                title="源码视图"
+                className={cn(
+                  'grid size-7 place-items-center rounded-md transition-colors',
+                  viewSrc ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/60'
+                )}
+              >
+                <Code className="size-4" />
+              </button>
+            </div>
+            <div className="px-4 py-3">
+              {file?.content == null ? (
+                <div className="py-6 text-center text-[13px] text-muted-foreground">
+                  该文件不支持预览
+                </div>
+              ) : viewSrc || !file.path.endsWith('.md') ? (
+                <pre className="overflow-x-auto text-[12.5px] leading-[1.7] whitespace-pre-wrap select-text">
+                  {file.content}
+                </pre>
+              ) : (
+                <div className="select-text">
+                  <Markdown text={file.content} />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <ConfirmDialog
+          open={!!confirmDelete}
+          title="删除技能"
+          body={
+            affected > 0
+              ? `删除「${confirmDelete ?? ''}」？${affected} 个 Agent 添加了它，删除后将从这些 Agent 的技能清单中剔除。`
+              : `删除「${confirmDelete ?? ''}」？删除后不可恢复。`
+          }
+          confirmText="删除"
+          onConfirm={async () => {
+            if (confirmDelete) await window.api.skillDelete(confirmDelete)
+            setConfirmDelete(null)
+            setDetail(null)
+            reload()
+          }}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      </div>
+    )
+  }
+
+  // ── 列表视图 ──
+  const shown = list.filter(
+    (s) => !q.trim() || s.name.toLowerCase().includes(q.trim().toLowerCase())
+  )
+  return (
+    <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="text-[15px] font-semibold">技能</div>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="搜索"
+              className="h-8 w-[160px] rounded-lg border border-input bg-background pr-2 pl-8 text-[13px] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
+            />
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setImportErrors([])
+              setImportOpen(true)
+            }}
+            className="h-8 gap-1 px-3 text-[13px]"
+          >
+            <Plus className="size-4" />
+            导入
+          </Button>
+        </div>
+      </div>
+
+      {list.length === 0 ? (
+        <div className="flex flex-col items-start gap-1 py-8">
+          <div className="text-[14px] font-medium">还没有技能</div>
+          <div className="text-[13px] text-muted-foreground">
+            把写好的技能文件夹或 zip 导入进来，Agent 添加和会话点名时就有库可用
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-border">
+          <div className="flex items-center gap-3 border-b border-border px-4 py-2 text-[12px] font-medium text-muted-foreground">
+            <span className="min-w-0 flex-1">技能</span>
+            <span className="w-[96px] flex-none">最近更新</span>
+          </div>
+          <div className="divide-y divide-border">
+            {shown.map((s) => (
+              <button
+                key={s.name}
+                onClick={() => void openDetail(s.name)}
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] transition-colors hover:bg-muted/50"
+              >
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="truncate font-medium">{s.name}</span>
+                  {s.hasScripts && (
+                    <span className="flex-none rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                      含脚本
+                    </span>
+                  )}
+                </span>
+                <span className="w-[96px] flex-none text-muted-foreground">
+                  {new Date(s.updatedAt).toLocaleDateString()}
+                </span>
+              </button>
+            ))}
+            {!shown.length && (
+              <div className="px-4 py-3 text-[13px] text-muted-foreground">未找到匹配结果</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 导入弹窗（功能点 4）：拖放区 + 点击选择 + 文件要求；失败原因就地显示（功能点 6） */}
+      {importOpen && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/30">
+          <div className="w-[400px] rounded-xl border border-border bg-background p-5 shadow-xl">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-[15px] font-semibold">导入技能</div>
+              <button
+                onClick={() => setImportOpen(false)}
+                className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div
+              onDragOver={(e) => {
+                e.preventDefault()
+                setDragOver(true)
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault()
+                setDragOver(false)
+                const f = e.dataTransfer.files[0]
+                if (!f) return
+                try {
+                  const p = window.api.pathForFile(f)
+                  if (p) void doImport(p)
+                  else setImportErrors(['无法获取拖入项的路径，请点击选择'])
+                } catch {
+                  setImportErrors(['无法获取拖入项的路径，请点击选择'])
+                }
+              }}
+              onClick={() => void doImport()}
+              className={cn(
+                'grid cursor-pointer place-items-center rounded-xl border-2 border-dashed px-6 py-8 text-center transition-colors',
+                dragOver ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'
+              )}
+            >
+              <Upload className="mb-2 size-5 text-muted-foreground" />
+              <div className="text-[13px]">拖入技能文件夹或 zip，或点击选择</div>
+            </div>
+            {importErrors.length > 0 && (
+              <div className="mt-3 flex flex-col gap-1">
+                {importErrors.map((e, i) => (
+                  <div key={i} className="text-[13px] text-destructive">
+                    {e}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4">
+              <div className="mb-1 text-[12px] font-medium text-muted-foreground">文件要求</div>
+              <ul className="flex list-disc flex-col gap-0.5 pl-4 text-[12px] text-muted-foreground">
+                <li>SKILL.md 的 YAML 头须含 name 与 description</li>
+                <li>文件夹或 zip 内须有 SKILL.md</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 重名覆盖确认（功能点 5 第 4 步）：覆盖就是技能的更新方式 */}
+      <ConfirmDialog
+        open={!!conflict}
+        title="覆盖同名技能"
+        body={`已有同名技能「${conflict?.name ?? ''}」，用导入的这份覆盖吗？`}
+        confirmText="覆盖"
+        onConfirm={() => {
+          if (conflict) void doImport(conflict.path, true)
+        }}
+        onCancel={() => setConflict(null)}
+      />
+    </div>
+  )
+}
+
+function AgentPanel({
+  onDirtyChange,
+  onGoSkills
+}: {
+  onDirtyChange: (d: boolean) => void
+  onGoSkills: () => void
+}): React.JSX.Element {
   type AgentInfo = import('../../../preload/index.d').AgentInfo
   type KbCard = import('../../../preload/index.d').KbCard
   type McpServiceInfo = import('../../../preload/index.d').McpServiceInfo
@@ -1330,8 +1873,9 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [kbs, setKbs] = useState<KbCard[]>([])
   const [services, setServices] = useState<McpServiceInfo[]>([])
+  const [skills, setSkills] = useState<import('../../../preload/index.d').SkillInfo[]>([])
   const [editing, setEditing] = useState<{ id?: number } | null>(null) // null = 列表；{} = 新建；{id} = 编辑
-  const [sub, setSub] = useState<'base' | 'prompt' | 'kb' | 'tools'>('base') // 编辑页内的分类导航
+  const [sub, setSub] = useState<'base' | 'prompt' | 'kb' | 'tools' | 'skill'>('base') // 编辑页内的分类导航
   const [formName, setFormName] = useState('')
   const [formPrompt, setFormPrompt] = useState('')
   const [formKbSel, setFormKbSel] = useState<SelEntry[]>([])
@@ -1341,14 +1885,23 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
   const [wsError, setWsError] = useState('') // 「已在授权范围内」提示
   const [wsMissing, setWsMissing] = useState<string[]>([]) // 已失效（磁盘上不存在）的已配目录
   const [formError, setFormError] = useState('')
-  const [confirmDelete, setConfirmDelete] = useState<{ id: number; name: string; usage: number } | null>(null)
-  const [confirmRemove, setConfirmRemove] = useState<{ kind: 'kb' | 'mcp'; id: number; name: string } | null>(null)
-  const formInit = useRef({ name: '', prompt: '', kb: '[]', mcp: '[]', ws: '[]' })
+  const [confirmDelete, setConfirmDelete] = useState<{
+    id: number
+    name: string
+    usage: number
+  } | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<{
+    kind: 'kb' | 'mcp' | 'skill'
+    id: number | string
+    name: string
+  } | null>(null)
+  const formInit = useRef({ name: '', prompt: '', kb: '[]', mcp: '[]', ws: '[]', skill: '[]' })
 
   const reload = useCallback(() => {
     window.api.agentList().then(setAgents)
     window.api.kbList().then(setKbs)
     window.api.mcpList().then(setServices)
+    window.api.skillList().then(setSkills)
   }, [])
   useEffect(() => {
     reload()
@@ -1363,9 +1916,10 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
           formPrompt !== i.prompt ||
           JSON.stringify(formKbSel) !== i.kb ||
           JSON.stringify(formMcpSel) !== i.mcp ||
-          JSON.stringify(formWsSel) !== i.ws)
+          JSON.stringify(formWsSel) !== i.ws ||
+          JSON.stringify(formSkillSel) !== i.skill)
     )
-  }, [editing, formName, formPrompt, formKbSel, formMcpSel, formWsSel, onDirtyChange])
+  }, [editing, formName, formPrompt, formKbSel, formMcpSel, formWsSel, formSkillSel, onDirtyChange])
   useEffect(() => () => onDirtyChange(false), [onDirtyChange])
 
   const openEdit = (a: AgentInfo | null): void => {
@@ -1388,7 +1942,8 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
       prompt: a?.prompt ?? AGENT_PROMPT_SKELETON,
       kb: JSON.stringify(a?.kbSel ?? []),
       mcp: JSON.stringify(a?.mcpSel ?? []),
-      ws: JSON.stringify(a?.wsSel ?? [])
+      ws: JSON.stringify(a?.wsSel ?? []),
+      skill: JSON.stringify(a?.skillSel ?? [])
     }
     setFormError('')
     setSub('base')
@@ -1438,6 +1993,7 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     const svcById = new Map(services.map((s) => [s.id, s]))
     const goneKb = formKbSel.filter((e) => !kbById.has(e.id))
     const goneMcp = formMcpSel.filter((e) => !svcById.has(e.id))
+    const goneSkills = formSkillSel.filter((n) => !skills.some((s) => s.name === n))
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex flex-none items-center px-6 pt-5 pb-2">
@@ -1457,7 +2013,8 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
                 ['base', '基础设置'],
                 ['prompt', '提示词'],
                 ['kb', '知识库'],
-                ['tools', '工具']
+                ['tools', '工具'],
+                ['skill', '技能']
               ] as const
             ).map(([key, label]) => (
               <button
@@ -1485,7 +2042,9 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
                     }}
                     className={INPUT_CLS}
                   />
-                  {formError && <div className="mt-1.5 text-[13px] text-destructive">{formError}</div>}
+                  {formError && (
+                    <div className="mt-1.5 text-[13px] text-destructive">{formError}</div>
+                  )}
                 </Section>
                 {/* 默认工作空间（015 Case 1）：新会话选用该 Agent 时默认勾选；改动只影响之后新建的会话 */}
                 <Section title="工作空间">
@@ -1503,7 +2062,9 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
                               已失效
                             </span>
                           )}
-                          <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">{p}</span>
+                          <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
+                            {p}
+                          </span>
                           <button
                             onClick={() => {
                               setFormWsSel(formWsSel.filter((x) => x !== p))
@@ -1518,18 +2079,27 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
                       )
                     })}
                   </div>
-                  <Button variant="outline" size="sm" className="mt-1.5" onClick={() => void addWs()}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-1.5"
+                    onClick={() => void addWs()}
+                  >
                     <Plus className="size-3.5" />
                     添加
                   </Button>
-                  {wsError && <div className="mt-1.5 text-[13px] text-muted-foreground">{wsError}</div>}
+                  {wsError && (
+                    <div className="mt-1.5 text-[13px] text-muted-foreground">{wsError}</div>
+                  )}
                 </Section>
               </>
             )}
 
             {sub === 'prompt' && (
               <>
-                <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">系统提示词</div>
+                <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">
+                  系统提示词
+                </div>
                 <textarea
                   value={formPrompt}
                   onChange={(e) => setFormPrompt(e.target.value)}
@@ -1576,6 +2146,45 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
               </>
             )}
 
+            {sub === 'skill' && (
+              <>
+                <div className="mb-2 text-[13px] font-medium text-muted-foreground">技能</div>
+                <div className="divide-y divide-border rounded-xl border border-border">
+                  {goneSkills.map((n) => (
+                    <CatalogRow
+                      key={`gone-${n}`}
+                      name={n}
+                      added
+                      note="已删除"
+                      onAskRemove={() => setConfirmRemove({ kind: 'skill', id: n, name: n })}
+                    />
+                  ))}
+                  {skills.map((s) => {
+                    const added = formSkillSel.includes(s.name)
+                    return (
+                      <CatalogRow
+                        key={s.name}
+                        name={s.name}
+                        added={added}
+                        onAdd={() => setFormSkillSel([...formSkillSel, s.name])}
+                        onAskRemove={() =>
+                          setConfirmRemove({ kind: 'skill', id: s.name, name: s.name })
+                        }
+                      />
+                    )
+                  })}
+                  {!skills.length && !goneSkills.length && (
+                    <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-muted-foreground">
+                      技能库是空的
+                      <button onClick={onGoSkills} className="text-primary hover:underline">
+                        去导入
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+
             {sub === 'tools' && (
               <>
                 <div className="mb-2 text-[13px] font-medium text-muted-foreground">内置工具</div>
@@ -1584,7 +2193,9 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
                     <CatalogRow key={t.name} name={t.display} added lockAdded />
                   ))}
                 </div>
-                <div className="mt-5 mb-2 pt-2 text-[13px] font-medium text-muted-foreground">MCP 服务</div>
+                <div className="mt-5 mb-2 pt-2 text-[13px] font-medium text-muted-foreground">
+                  MCP 服务
+                </div>
                 <div className="divide-y divide-border rounded-xl border border-border">
                   {goneMcp.map((e) => (
                     <CatalogRow
@@ -1605,7 +2216,9 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
                           name={s.name}
                           added={added}
                           onAdd={() => setFormMcpSel([...formMcpSel, { id: s.id, name: s.name }])}
-                          onAskRemove={() => setConfirmRemove({ kind: 'mcp', id: s.id, name: s.name })}
+                          onAskRemove={() =>
+                            setConfirmRemove({ kind: 'mcp', id: s.id, name: s.name })
+                          }
                         />
                       )
                     })}
@@ -1635,12 +2248,18 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
           body={
             confirmRemove?.kind === 'kb'
               ? '移除后这个 Agent 不再依据该知识库作答。'
-              : '移除后这个 Agent 不再具备该服务的操作能力。'
+              : confirmRemove?.kind === 'skill'
+                ? '移除后这个 Agent 的会话不再具备该技能。'
+                : '移除后这个 Agent 不再具备该服务的操作能力。'
           }
           confirmText="移除"
           onConfirm={() => {
-            if (confirmRemove?.kind === 'kb') setFormKbSel(formKbSel.filter((e) => e.id !== confirmRemove.id))
-            if (confirmRemove?.kind === 'mcp') setFormMcpSel(formMcpSel.filter((e) => e.id !== confirmRemove.id))
+            if (confirmRemove?.kind === 'kb')
+              setFormKbSel(formKbSel.filter((e) => e.id !== confirmRemove.id))
+            if (confirmRemove?.kind === 'mcp')
+              setFormMcpSel(formMcpSel.filter((e) => e.id !== confirmRemove.id))
+            if (confirmRemove?.kind === 'skill')
+              setFormSkillSel(formSkillSel.filter((n) => n !== confirmRemove.id))
             setConfirmRemove(null)
           }}
           onCancel={() => setConfirmRemove(null)}
@@ -1654,7 +2273,11 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     <div className="flex-1 overflow-y-auto px-6 py-5">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-[15px] font-semibold">Agent</div>
-        <Button variant="outline" onClick={() => openEdit(null)} className="h-8 gap-1 px-3 text-[13px]">
+        <Button
+          variant="outline"
+          onClick={() => openEdit(null)}
+          className="h-8 gap-1 px-3 text-[13px]"
+        >
           <Plus className="size-4" />
           新建 Agent
         </Button>
@@ -1662,7 +2285,9 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
       {agents.length === 0 ? (
         <div className="flex flex-col items-start gap-1 py-8">
           <div className="text-[14px] font-medium">还没有 Agent</div>
-          <div className="text-[13px] text-muted-foreground">建一个专管某摊事的助手，开会话时直接选它</div>
+          <div className="text-[13px] text-muted-foreground">
+            建一个专管某摊事的助手，开会话时直接选它
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-2.5">
@@ -1711,7 +2336,6 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     </div>
   )
 }
-
 
 // 目录表格行（Agent 编辑页的知识库与工具，参照 Claude Connectors 的表格式）。
 // 已添加 = ✅，悬停变「移除」，点击弹确认；内置工具恒 ✅ 不可移除。

@@ -1,6 +1,6 @@
 {
   "name": "chime",
-  "version": "1.18.1",
+  "version": "1.19.0",
   "description": "Chime — 本地 AI 对话桌面应用",
   "main": "./out/main/index.js",
   "author": "Chen Junpeng",
@@ -32,6 +32,7 @@
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@tailwindcss/vite": "^4.3.1",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.19.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
@@ -46,6 +47,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
+    "js-yaml": "^5.3.0",
     "lucide-react": "^1.22.0",
     "mermaid": "^11.16.0",
     "prettier": "^3.7.4",

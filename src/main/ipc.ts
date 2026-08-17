@@ -22,6 +22,7 @@ import {
   listArtifacts
 } from './db'
 import { coveredBy, wsName } from './engine/fs-tools'
+import { listSkills, getSkill, deleteSkill, importSkill } from './skills'
 import { detect, listModels, generateTitle, vendorHealth, markVendorHealth, humanize } from './ai'
 import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
 import { respondCard, respondAskCard, type AskOutcome } from './engine/cards'
@@ -403,6 +404,26 @@ export function registerIpc(): void {
   })
   // 工作面板的制品列表
   ipcMain.handle('artifact:list', (_e, conversationId: string) => listArtifacts(conversationId))
+
+  // ── 技能库（015 Case 4）──────────────────────────
+  ipcMain.handle('skill:list', () => listSkills())
+  ipcMain.handle('skill:get', (_e, name: string) => getSkill(name))
+  ipcMain.handle('skill:delete', (_e, name: string) => deleteSkill(name))
+  // 导入：path 来自拖放（webUtils 取路径）；不带 path 则主进程弹系统选择框（文件与文件夹同框，zip 过滤）
+  ipcMain.handle('skill:import', async (_e, input: { path?: string; overwrite?: boolean }) => {
+    let p = input.path
+    if (!p) {
+      const r = await dialog.showOpenDialog({
+        properties: ['openFile', 'openDirectory'],
+        filters: [{ name: '技能包', extensions: ['zip'] }]
+      })
+      if (r.canceled || !r.filePaths[0]) return null
+      p = r.filePaths[0]
+    }
+    return importSkill(p, !!input.overwrite).then((res) =>
+      'conflict' in res ? { ...res, path: p } : res
+    )
+  })
 
   // ── MCP 服务 ──────────────────────────────────────
   // 重试连接（输入框状态标识的入口）：重连全部已启用服务，完成后 mcp:status 事件自会刷新界面

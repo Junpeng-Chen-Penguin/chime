@@ -373,7 +373,32 @@ export interface ChimeApi {
     path: string
   }) => Promise<{ ok: boolean; reason?: 'covered' | 'not-frozen' }>
   wsRemove: (input: { id: string; path: string }) => Promise<{ ok: boolean }>
+  skillList: () => Promise<SkillInfo[]>
+  skillGet: (name: string) => Promise<SkillDetail | null>
+  skillDelete: (name: string) => Promise<boolean>
+  // null = 用户取消了系统选择框
+  skillImport: (input: {
+    path?: string
+    overwrite?: boolean
+  }) => Promise<
+    { ok: true; name: string } | { conflict: string; path: string } | { errors: string[] } | null
+  >
+  pathForFile: (file: File) => string
   onKbProgress: (cb: (p: KbProgress) => void) => () => void
+}
+
+// 技能库（015 Case 4）
+export interface SkillInfo {
+  name: string
+  description: string
+  hasScripts: boolean
+  updatedAt: number
+}
+export interface SkillDetail {
+  name: string
+  description: string
+  hasScripts: boolean
+  files: { path: string; content: string | null }[]
 }
 
 // 制品查看数据（侧板表格视图；rows 已按渲染上限截断，totalRows 为完整行数）

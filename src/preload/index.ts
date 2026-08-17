@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 
 // 统一事件通道 chat:event：一轮 = turn-start → item-* 序列 → turn-done（结构见主进程 engine）
 interface ChatEvent {
@@ -120,6 +120,15 @@ const api = {
   getConversationWs: (id: string) => ipcRenderer.invoke('conv:getWs', id),
   wsAdd: (input: { id: string; path: string }) => ipcRenderer.invoke('conv:wsAdd', input),
   wsRemove: (input: { id: string; path: string }) => ipcRenderer.invoke('conv:wsRemove', input),
+
+  // 技能库（015 Case 4）
+  skillList: () => ipcRenderer.invoke('skill:list'),
+  skillGet: (name: string) => ipcRenderer.invoke('skill:get', name),
+  skillDelete: (name: string) => ipcRenderer.invoke('skill:delete', name),
+  skillImport: (input: { path?: string; overwrite?: boolean }) =>
+    ipcRenderer.invoke('skill:import', input),
+  // 拖放文件取绝对路径（渲染进程拿不到 File.path，经 preload 的 webUtils 取；V2 待实机验证）
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
   onKbProgress: (cb: (p: unknown) => void): (() => void) => {
     const h = (_e: IpcRendererEvent, p: unknown): void => cb(p)
     ipcRenderer.on('kb:progress', h)
