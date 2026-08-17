@@ -958,13 +958,16 @@ function AuthCard({
         <span className="size-[6px] flex-none animate-pulse rounded-full bg-primary" />
         <span className="min-w-0 truncate">{question}</span>
       </div>
+      {/* 写授权卡按钮序（2026-08-17 验收拍板）：拒绝、总是允许、允许——主操作「允许」在最右 */}
       <div className="flex flex-none gap-2">
-        <button
-          onClick={() => respond('approved')}
-          className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-        >
-          允许
-        </button>
+        {isWrite && (
+          <button
+            onClick={() => respond('denied')}
+            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+          >
+            拒绝
+          </button>
+        )}
         {/* 「总是允许」只在写授权卡出现（Case 3 功能点 2）：放行本次并记住该目录，本会话内有效 */}
         {isWrite && (
           <button
@@ -975,11 +978,19 @@ function AuthCard({
           </button>
         )}
         <button
-          onClick={() => respond('denied')}
-          className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+          onClick={() => respond('approved')}
+          className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
         >
-          拒绝
+          允许
         </button>
+        {!isWrite && (
+          <button
+            onClick={() => respond('denied')}
+            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+          >
+            拒绝
+          </button>
+        )}
       </div>
     </div>
   )
