@@ -80,6 +80,8 @@ export type TurnItem =
   | { t: 'artifact'; id: number; title: string; rowCount: number; result?: string } // 制品卡
   | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] } // 表格行引用（013，user 消息专用）
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
+  // 工作空间授权卡（015 Case 1）：dirs 存绝对路径，渲染层取末段作名字
+  | { t: 'ws-auth'; id: string; dirs: string[]; state: 'pending' | 'approved' | 'denied' | 'unanswered' }
 
 export type ChatEvent =
   | { type: 'turn-start'; streamId: string }
@@ -216,7 +218,17 @@ export interface AgentInfo {
   prompt: string
   kbSel: { id: number; name: string }[]
   mcpSel: { id: number; name: string }[]
+  wsSel: string[] // 默认工作空间（绝对路径，015 Case 1）
+  wsMissing?: string[] // wsSel 中磁盘上已不存在的（已失效标注用）
+  skillSel: string[] // 技能名（015，C4 起使用）
   createdAt: number
+}
+
+// 工作空间条目（015 Case 1）：name = 路径末段，missing = 磁盘上已不存在（已失效）
+export interface WsEntry {
+  path: string
+  name: string
+  missing: boolean
 }
 
 export interface McpServiceInfo {
@@ -256,6 +268,7 @@ export interface ChimeApi {
     text: string
     model: string
     refs?: { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }[]
+    ws?: { picked: string[]; fromAgent: string[] }
   }) => void
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
@@ -279,6 +292,8 @@ export interface ChimeApi {
     prompt: string
     kbSel: { id: number; name: string }[]
     mcpSel: { id: number; name: string }[]
+    wsSel: string[]
+    skillSel: string[]
   }) => Promise<{ ok: true; id: number } | { ok: false; error: string }>
   agentDelete: (id: number) => Promise<void>
   agentUsage: (id: number) => Promise<number>
@@ -347,6 +362,11 @@ export interface ChimeApi {
   openDoc: (input: { kbId: number; filePath: string }) => Promise<DocOpenResult>
   getArtifact: (id: number) => Promise<ArtifactView | null>
   exportArtifact: (id: number) => Promise<{ ok: boolean }>
+  listArtifacts: (conversationId: string) => Promise<{ id: number; title: string; createdAt: number }[]>
+  wsRecent: () => Promise<WsEntry[]>
+  getConversationWs: (id: string) => Promise<WsEntry[] | null>
+  wsAdd: (input: { id: string; path: string }) => Promise<{ ok: boolean; reason?: 'covered' | 'not-frozen' }>
+  wsRemove: (input: { id: string; path: string }) => Promise<{ ok: boolean }>
   onKbProgress: (cb: (p: KbProgress) => void) => () => void
 }
 

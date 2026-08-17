@@ -43,13 +43,15 @@ const api = {
   autoTitle: (input: { convId: string; userText: string; assistantText: string }) =>
     ipcRenderer.invoke('conv:autotitle', input),
 
-  // 渲染层只发「会话 + 一句话」，历史组装与落库都在主进程；refs 为表格行引用（013 Case 2）
+  // 渲染层只发「会话 + 一句话」，历史组装与落库都在主进程；refs 为表格行引用（013 Case 2）；
+  // ws 为首条消息随带的工作空间选中集合（015 Case 1），定格后主进程忽略
   sendChat: (payload: {
     streamId: string
     convId: string
     text: string
     model: string
     refs?: { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }[]
+    ws?: { picked: string[]; fromAgent: string[] }
   }) => ipcRenderer.send('chat:send', payload),
   retryChat: (payload: { streamId: string; convId: string; model: string }) =>
     ipcRenderer.send('chat:retry', payload),
@@ -111,6 +113,13 @@ const api = {
   openDoc: (input: { kbId: number; filePath: string }) => ipcRenderer.invoke('doc:open', input),
   getArtifact: (id: number) => ipcRenderer.invoke('artifact:get', id),
   exportArtifact: (id: number) => ipcRenderer.invoke('artifact:export', id),
+  listArtifacts: (conversationId: string) => ipcRenderer.invoke('artifact:list', conversationId),
+
+  // 工作空间（015 Case 1）
+  wsRecent: () => ipcRenderer.invoke('ws:recent'),
+  getConversationWs: (id: string) => ipcRenderer.invoke('conv:getWs', id),
+  wsAdd: (input: { id: string; path: string }) => ipcRenderer.invoke('conv:wsAdd', input),
+  wsRemove: (input: { id: string; path: string }) => ipcRenderer.invoke('conv:wsRemove', input),
   onKbProgress: (cb: (p: unknown) => void): (() => void) => {
     const h = (_e: IpcRendererEvent, p: unknown): void => cb(p)
     ipcRenderer.on('kb:progress', h)

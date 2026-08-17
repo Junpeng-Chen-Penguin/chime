@@ -7,6 +7,7 @@ import { streamText, isStepCount } from 'ai'
 import type { ModelMessage, Tool } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { randomUUID } from 'crypto'
+import { resolve } from 'path'
 import {
   resolveModelRef,
   getConversationKbSelection,
@@ -17,6 +18,9 @@ import {
   kbStatsFor,
   findToolResultIdByCallId,
   insertToolResult,
+  getConversationWs,
+  setConversationWs,
+  touchWsRecent,
   type AgentRow
 } from '../db'
 import { EMBED_MODEL_ID } from '../model'
@@ -145,6 +149,9 @@ export async function runTurn(opts: {
   emit: Emit
   saveUser?: boolean // 重试时为 false：用户消息已在库里，不重复写
   refs?: TurnItem[] // 表格行引用 chip（013 Case 2）：随用户消息落库，历史组装时展开
+  // 015 Case 1：首条消息随带的工作空间选中集合（picked = 用户勾的，要弹卡；fromAgent = Agent 默认，免卡）。
+  // 已定格（ws_list 非 NULL）的会话忽略此字段
+  ws?: { picked: string[]; fromAgent: string[] }
 }): Promise<void> {
   try {
     await runTurnBody(opts)
@@ -192,7 +199,8 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
     msgId,
     items: [],
     kbEnv,
-    agent
+    agent,
+    ws: opts.ws
   })
 }
 
@@ -206,6 +214,7 @@ async function streamCore(core: {
   items: TurnItem[]
   kbEnv: KbEnv | null
   agent: AgentRow | null
+  ws?: { picked: string[]; fromAgent: string[] }
 }): Promise<void> {
   const { streamId, convId, model, emit, msgId, items, kbEnv, agent } = core
   const p = resolveModelRef(model)
@@ -310,6 +319,46 @@ async function streamCore(core: {
       emit({ type: 'item-update', streamId, index: idx, item })
     }
   )
+
+  // 工作空间授权与定格（015 Case 1）：ws_list 为 NULL 即未定格（会话第一次跑轮）。
+  // 用户自己勾的目录弹一张卡统一确认（两按钮），Agent 默认的免卡（授权随 Agent 配置，关键设计三）；
+  // 处理完把当前集合复制为会话授权清单，从此归会话所有。授权不跨会话，无持久记录。
+  if (getConversationWs(convId) === null) {
+    const picked = [...new Set((core.ws?.picked ?? []).map((x) => resolve(x)))]
+    const fromAgent = [
+      ...new Set((core.ws?.fromAgent ?? agent?.wsSel ?? []).map((x) => resolve(x)))
+    ].filter((x) => !picked.includes(x))
+    let granted = fromAgent
+    if (picked.length) {
+      const callId = `ws-${streamId}`
+      const wsItem: Extract<TurnItem, { t: 'ws-auth' }> = {
+        t: 'ws-auth',
+        id: callId,
+        dirs: picked,
+        state: 'pending'
+      }
+      startItem('ws-auth', wsItem)
+      persistWaiting() // 弹卡即落库
+      const decision = await cards.request(callId, controller.signal, 'workspace')
+      const wsIdx = items.indexOf(wsItem)
+      if (decision === 'aborted') {
+        // 等卡时停止：卡作废、不定格——下条消息重新确认（与启动修复同语义）。
+        // 本块在 streamText 的 try 之外，清理自己做
+        wsItem.state = 'unanswered'
+        emit({ type: 'item-update', streamId, index: wsIdx, item: wsItem })
+        finish('stopped')
+        cards.dispose()
+        turns.delete(streamId)
+        return
+      }
+      wsItem.state = decision
+      emit({ type: 'item-update', streamId, index: wsIdx, item: wsItem })
+      persistWaiting()
+      if (decision === 'approved') granted = [...fromAgent, ...picked]
+    }
+    setConversationWs(convId, granted)
+    if (granted.length) touchWsRecent(granted)
+  }
 
   // 超限处理轮内状态：会话基线一次算好，本轮增量随批累计
   const overflow: OverflowCtx = { convId, refs: new Map(), turnFullChars: 0 }

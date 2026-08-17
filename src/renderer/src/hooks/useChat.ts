@@ -33,7 +33,14 @@ export interface ChatHandle {
   streamingConv: string | null
   contextRatio: Record<string, number> // 每会话最近一轮的上下文用量比例（>0.7 轻提示）
   hydrate: (convId: string, msgs: Msg[]) => void
-  send: (convId: string, model: string, text: string, refs?: RefItem[]) => void
+  // ws：首条消息随带的工作空间选中集合（015 Case 1），之后的消息不带（主进程已定格、会忽略）
+  send: (
+    convId: string,
+    model: string,
+    text: string,
+    refs?: RefItem[],
+    ws?: { picked: string[]; fromAgent: string[] }
+  ) => void
   stop: () => void
   retry: (convId: string, model: string) => void
   respondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
@@ -172,8 +179,8 @@ export function useChat(onChange?: () => void): ChatHandle {
     return streamId
   }, [])
 
-  const send: (convId: string, model: string, text: string, refs?: RefItem[]) => void = useCallback(
-    (convId: string, model: string, text: string, refs?: RefItem[]) => {
+  const send: ChatHandle['send'] = useCallback(
+    (convId, model, text, refs?: RefItem[], ws?: { picked: string[]; fromAgent: string[] }) => {
       if (routeRef.current) return
       const now = Date.now()
       const userMsg: Msg = {
@@ -194,7 +201,7 @@ export function useChat(onChange?: () => void): ChatHandle {
       }
       setThreads((t) => ({ ...t, [convId]: [...(t[convId] ?? []), userMsg, asstMsg] }))
       const streamId = begin(convId, asstMsg.id)
-      window.api.sendChat({ streamId, convId, text, model, refs })
+      window.api.sendChat({ streamId, convId, text, model, refs, ws })
     },
     [begin]
   )

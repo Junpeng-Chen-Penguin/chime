@@ -54,6 +54,14 @@ export type TurnItem =
   // 内容进模型时按行号现取。title 存快照是为渲染层不查库（与制品卡同例）；序号由数组下标推，不存
   | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
+  // 工作空间授权卡（015 Case 1，首条消息确认用户自己选上的目录）：不进模型历史，纯界面件。
+  // id 为合成 callId（卡片回应经它路由）；dirs 存绝对路径，渲染层取末段作名字
+  | {
+      t: 'ws-auth'
+      id: string
+      dirs: string[]
+      state: 'pending' | 'approved' | 'denied' | 'unanswered'
+    }
 
 // waiting = 等卡中（弹卡即落库的中间态）；interrupted = 应用退出打断、启动修复后收场
 export type TurnStatus = 'done' | 'stopped' | 'error' | 'waiting' | 'interrupted'
@@ -346,6 +354,11 @@ export function repairConversation(
   const w = getWaitingTurn(convId)
   if (!w) return
   for (const it of w.items) {
+    // 工作空间授权卡（015）：待回应即作废；ws_list 保持未定格，下条消息重新确认
+    if (it.t === 'ws-auth') {
+      if (it.state === 'pending') it.state = 'unanswered'
+      continue
+    }
     if (it.t !== 'tool' || it.result !== undefined) continue
     if (it.ask) {
       it.ask = { state: 'unanswered' }

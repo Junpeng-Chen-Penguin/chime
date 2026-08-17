@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   PanelLeft,
+  PanelRight,
   ChevronRight,
   RotateCw,
   AlertCircle,
@@ -9,6 +10,7 @@ import {
   CornerDownLeft,
   Copy,
   Check,
+  Folder,
   Info,
   Sparkles,
   FileText,
@@ -31,7 +33,8 @@ import Composer, {
   type KbOption,
   type KbSelEntry,
   type ModelGroup,
-  type ServiceStatus
+  type ServiceStatus,
+  type WsSelector
 } from './Composer'
 
 // 规则 5：单条消息上限（字符），发送前就地拦下；与主进程常量同值（engine/budget SEND_CHAR_LIMIT）
@@ -75,6 +78,9 @@ interface Props {
   onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
   onRespondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
   onOpenArtifact: (id: number, rows?: number[]) => void
+  ws?: WsSelector // 工作空间选择器（015 Case 1）
+  workPanelOpen?: boolean
+  onToggleWorkPanel?: () => void // 工作面板常驻开关（右上角）
 }
 
 export default function ChatArea({
@@ -114,7 +120,10 @@ export default function ChatArea({
   onOpenSource,
   onRespondCard,
   onRespondAsk,
-  onOpenArtifact
+  onOpenArtifact,
+  ws,
+  workPanelOpen,
+  onToggleWorkPanel
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
   const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
@@ -130,7 +139,10 @@ export default function ChatArea({
           it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending')
       )
     : undefined
-  const authWaiting = activeCard?.auth === 'pending'
+  // 工作空间授权卡等待中（015 Case 1）：与工具授权卡同样锁输入框
+  const wsAuthWaiting =
+    sending && (lastMsg?.items ?? []).some((it) => it.t === 'ws-auth' && it.state === 'pending')
+  const authWaiting = activeCard?.auth === 'pending' || wsAuthWaiting
   const askItem = activeCard?.ask?.state === 'pending' ? activeCard : undefined
 
   // 会话累计用量：各正常轮次之和（中断轮无 usage 自然不计入）
@@ -181,6 +193,7 @@ export default function ChatArea({
       onToggleService={onToggleService}
       onRetryServices={onRetryServices}
       onOpenSettings={onOpenSettings}
+      ws={ws}
     />
   )
 
@@ -203,6 +216,20 @@ export default function ChatArea({
           </button>
         )}
         <TitleBar title={title} onRename={onRename} />
+        <div className="flex-1" />
+        {/* 工作面板常驻开关（015 Case 1）：图标用「右侧面板」方向，与左侧边栏开关区分 */}
+        {onToggleWorkPanel && (
+          <button
+            onClick={onToggleWorkPanel}
+            title={workPanelOpen ? '收起工作面板' : '展开工作面板'}
+            className={cn(
+              'app-no-drag grid size-8 flex-none place-items-center rounded-md transition-colors hover:bg-black/5 hover:text-foreground',
+              workPanelOpen ? 'text-foreground' : 'text-muted-foreground'
+            )}
+          >
+            <PanelRight className="size-[18px]" />
+          </button>
+        )}
       </header>
 
       {empty ? (
@@ -415,10 +442,13 @@ function AssistantMsg({
   const streaming = m.status === 'streaming'
   const finished = m.status === 'done' || m.status === 'stopped' || m.status === 'interrupted'
   const items = m.items ?? []
-  // 卡片排队（授权 + 提问共用一条队列）：队首是授权卡时挂在调用行下方；队首是提问卡时悬浮于输入框上方（由 ChatArea 渲染）
+  // 卡片排队（授权 + 提问共用一条队列）：队首是授权卡时挂在调用行下方；队首是提问卡时悬浮于输入框上方（由 ChatArea 渲染）。
+  // 工作空间授权卡（015 Case 1）也算队首：等它时整轮暂停，进度指示不显示
   const pendingIdx = streaming
     ? items.findIndex(
-        (it) => it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending')
+        (it) =>
+          (it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending')) ||
+          (it.t === 'ws-auth' && it.state === 'pending')
       )
     : -1
   const pendingIsAuth =
@@ -491,6 +521,9 @@ function AssistantMsg({
             return it.kind === 'limit' ? (
               <PlainRow key={i} text="已达工具调用上限，基于已有结果作答" />
             ) : null // error 边界由下方错误卡片呈现
+          case 'ws-auth':
+            // 工作空间授权卡（015 Case 1）：pending 出按钮，处理后留态在对话流
+            return <WsAuthCard key={i} item={it} onRespond={onRespondCard} />
           default:
             return null // sources 在回答之后统一渲染
         }
@@ -911,6 +944,56 @@ function AuthCard({
           拒绝
         </button>
       </div>
+    </div>
+  )
+}
+
+// 工作空间授权卡（015 Case 1）：首条消息发出时确认用户自己选上的目录。与工具授权卡同一骨架，
+// 信息区换成文件夹名清单（不显示完整路径）；两按钮（拒绝/允许）；处理后卡片留态在对话流
+function WsAuthCard({
+  item,
+  onRespond
+}: {
+  item: Extract<TurnItem, { t: 'ws-auth' }>
+  onRespond: (toolCallId: string, decision: 'approved' | 'denied') => void
+}): React.JSX.Element {
+  const names = item.dirs.map((p) => p.split('/').filter(Boolean).pop() ?? p)
+  const stateText =
+    item.state === 'approved' ? '已允许' : item.state === 'denied' ? '已拒绝' : '未回应'
+  return (
+    <div className="flex max-w-[440px] flex-col gap-2.5 rounded-xl border border-border bg-background px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
+      <div className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+        {item.state === 'pending' && (
+          <span className="size-[6px] flex-none animate-pulse rounded-full bg-primary" />
+        )}
+        允许访问这些工作空间吗？
+      </div>
+      <div className="flex flex-col gap-1">
+        {names.map((n, i) => (
+          <div key={i} className="flex items-center gap-2 text-[13px] text-muted-foreground">
+            <Folder className="size-3.5 flex-none" />
+            {n}
+          </div>
+        ))}
+      </div>
+      {item.state === 'pending' ? (
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => onRespond(item.id, 'denied')}
+            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+          >
+            拒绝
+          </button>
+          <button
+            onClick={() => onRespond(item.id, 'approved')}
+            className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            允许
+          </button>
+        </div>
+      ) : (
+        <div className="text-[12px] text-muted-foreground">{stateText}</div>
+      )}
     </div>
   )
 }

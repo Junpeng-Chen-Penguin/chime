@@ -6,13 +6,33 @@ import {
   ChevronRight,
   Check,
   BookOpen,
+  Folder,
+  FolderPlus,
   Plus,
+  Search,
   Table2,
   TriangleAlert,
   Wrench,
   X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+// 工作空间选择器条目（015 Case 1）
+export interface WsUiEntry {
+  path: string
+  name: string
+  missing?: boolean
+}
+
+// 工作空间选择器的数据与回调（都由 App 持有，Composer 只管展示）
+export interface WsSelector {
+  frozen: WsUiEntry[] | null // 定格后的授权清单；null = 未定格（首条消息前，可自由勾选）
+  entries: WsUiEntry[] // 菜单清单：全局最近使用 ∪ 本会话新加 ∪ Agent 默认
+  checked: string[] // 当前选中（用户勾的 + Agent 默认的）
+  notice?: string | null // 轻提示（「已在授权范围内」）
+  onToggle: (path: string) => void
+  onAddFolder: () => void
+}
 
 // 工具菜单（Case 8）：勾选 = 本会话选用该 MCP 服务；连接状态就地显示（选用与状态一个载体）
 export interface ServiceStatus {
@@ -70,6 +90,7 @@ interface Props {
   agentServiceIds?: number[] // Agent 挂的服务（在服务菜单里标「来自 Agent」，不可取消）
   onSelectAgent?: (a: { id: number; name: string } | null) => void
   onManageAgents?: () => void // 跳设置的 Agent 栏
+  ws?: WsSelector // 工作空间选择器（015 Case 1），输入框卡片下方
 }
 
 export default function Composer({
@@ -100,13 +121,17 @@ export default function Composer({
   agentGone,
   agentServiceIds,
   onSelectAgent,
-  onManageAgents
+  onManageAgents,
+  ws
 }: Props): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [kbMenuOpen, setKbMenuOpen] = useState(false)
   // 加号菜单（014 Case 4）：一级（Agent / MCP 服务）+ 右侧二级面板
   const [plusOpen, setPlusOpen] = useState(false)
   const [plusSub, setPlusSub] = useState<'agent' | 'mcp' | null>(null)
+  // 工作空间选择器（015 Case 1）
+  const [wsOpen, setWsOpen] = useState(false)
+  const [wsQuery, setWsQuery] = useState('')
   const taRef = useRef<HTMLTextAreaElement>(null)
   const svcList = services ?? []
   const agentList = agents ?? []
@@ -540,6 +565,111 @@ export default function Composer({
             </div>
           </div>
         </div>
+        {/* 工作空间选择器（015 Case 1）：输入框下方。未定格可勾选；定格后只读，失效时变警告 */}
+        {ws && (
+          <div className="relative mt-2 mr-3 inline-block align-middle">
+            {ws.frozen !== null ? (
+              (() => {
+                const miss = ws.frozen.filter((e) => e.missing).length
+                if (!ws.frozen.length) return null
+                return (
+                  <span
+                    className={cn(
+                      'inline-flex cursor-default items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-2.5 py-1 text-[12px]',
+                      miss ? 'border-amber-300 text-amber-700' : 'text-muted-foreground'
+                    )}
+                  >
+                    {miss ? <TriangleAlert className="size-3.5" /> : <Folder className="size-3.5" />}
+                    {miss
+                      ? `${miss} 个工作空间已失效`
+                      : `${ws.frozen[0].name}${ws.frozen.length > 1 ? ` +${ws.frozen.length - 1}` : ''}`}
+                  </span>
+                )
+              })()
+            ) : (
+              <>
+                <button
+                  onClick={() => {
+                    if (sending) return // 首轮进行中（授权卡等待期）不再改选
+                    setWsQuery('')
+                    setWsOpen((o) => !o)
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <Folder className="size-3.5" />
+                  {ws.checked.length
+                    ? `${ws.entries.find((e) => e.path === ws.checked[0])?.name ?? ws.checked[0].split('/').pop()}${
+                        ws.checked.length > 1 ? ` +${ws.checked.length - 1}` : ''
+                      }`
+                    : '选择工作空间'}
+                  <ChevronDown className="size-3.5" />
+                </button>
+                {wsOpen && (
+                  <>
+                    {/* 菜单里有搜索框要抢焦点，不能用触发钮 onBlur 收起——透明遮罩点击关闭 */}
+                    <div className="fixed inset-0 z-10" onClick={() => setWsOpen(false)} />
+                    <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 w-[300px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                      <div className="flex items-center gap-1.5 border-b border-border px-2 pb-1.5">
+                        <Search className="size-3.5 text-muted-foreground" />
+                        <input
+                          value={wsQuery}
+                          onChange={(e) => setWsQuery(e.target.value)}
+                          placeholder="搜索工作空间"
+                          className="h-7 w-full bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/60"
+                        />
+                      </div>
+                      <div className="max-h-[220px] overflow-y-auto py-1">
+                        {ws.entries
+                          .filter(
+                            (e) =>
+                              !wsQuery ||
+                              e.name.toLowerCase().includes(wsQuery.toLowerCase()) ||
+                              e.path.toLowerCase().includes(wsQuery.toLowerCase())
+                          )
+                          .map((e) => (
+                            <button
+                              key={e.path}
+                              onClick={() => ws.onToggle(e.path)}
+                              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-muted"
+                            >
+                              <Folder className="size-3.5 flex-none text-muted-foreground" />
+                              <span className="flex-none">{e.name}</span>
+                              <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                                {e.path}
+                              </span>
+                              {ws.checked.includes(e.path) && (
+                                <Check className="size-3.5 flex-none text-foreground" />
+                              )}
+                            </button>
+                          ))}
+                        {!ws.entries.length && (
+                          <div className="px-2 py-2 text-[12px] text-muted-foreground">
+                            还没有用过的工作空间
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-t border-border pt-1">
+                        <button
+                          onClick={() => {
+                            setWsOpen(false)
+                            ws.onAddFolder()
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-muted"
+                        >
+                          <FolderPlus className="size-3.5 text-muted-foreground" />
+                          添加本地文件夹
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+            {ws.notice && (
+              <span className="ml-2 text-[12px] text-muted-foreground">{ws.notice}</span>
+            )}
+          </div>
+        )}
         {/* 会话累计用量（PRD Case 5）：左对齐，悬停看拆分；无正常轮次时不显示 */}
         {sessionUsage && (
           <div className="group relative mt-2 inline-block text-[11px] text-muted-foreground">

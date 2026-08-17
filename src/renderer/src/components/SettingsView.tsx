@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
-import { PanelLeft, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText, Bot, ChevronLeft, Trash2 } from 'lucide-react'
+import { PanelLeft, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, FolderOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText, Bot, ChevronLeft, Trash2, X } from 'lucide-react'
 import { estimateTokensBase } from '../../../shared/tokens'
 import { BUILTIN_TOOLS } from '../../../shared/builtinTools'
 import deepseekIcon from '@/assets/vendors/deepseek.png'
@@ -1336,10 +1336,14 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
   const [formPrompt, setFormPrompt] = useState('')
   const [formKbSel, setFormKbSel] = useState<SelEntry[]>([])
   const [formMcpSel, setFormMcpSel] = useState<SelEntry[]>([])
+  const [formWsSel, setFormWsSel] = useState<string[]>([]) // 默认工作空间（015 Case 1）
+  const [formSkillSel, setFormSkillSel] = useState<string[]>([]) // 技能（015，C4 出界面前仅透传保存）
+  const [wsError, setWsError] = useState('') // 「已在授权范围内」提示
+  const [wsMissing, setWsMissing] = useState<string[]>([]) // 已失效（磁盘上不存在）的已配目录
   const [formError, setFormError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<{ id: number; name: string; usage: number } | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<{ kind: 'kb' | 'mcp'; id: number; name: string } | null>(null)
-  const formInit = useRef({ name: '', prompt: '', kb: '[]', mcp: '[]' })
+  const formInit = useRef({ name: '', prompt: '', kb: '[]', mcp: '[]', ws: '[]' })
 
   const reload = useCallback(() => {
     window.api.agentList().then(setAgents)
@@ -1358,9 +1362,10 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
         (formName !== i.name ||
           formPrompt !== i.prompt ||
           JSON.stringify(formKbSel) !== i.kb ||
-          JSON.stringify(formMcpSel) !== i.mcp)
+          JSON.stringify(formMcpSel) !== i.mcp ||
+          JSON.stringify(formWsSel) !== i.ws)
     )
-  }, [editing, formName, formPrompt, formKbSel, formMcpSel, onDirtyChange])
+  }, [editing, formName, formPrompt, formKbSel, formMcpSel, formWsSel, onDirtyChange])
   useEffect(() => () => onDirtyChange(false), [onDirtyChange])
 
   const openEdit = (a: AgentInfo | null): void => {
@@ -1368,15 +1373,32 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     setFormPrompt(a?.prompt ?? AGENT_PROMPT_SKELETON)
     setFormKbSel(a?.kbSel ?? [])
     setFormMcpSel(a?.mcpSel ?? [])
+    setFormWsSel(a?.wsSel ?? [])
+    setFormSkillSel(a?.skillSel ?? [])
+    setWsMissing(a?.wsMissing ?? [])
+    setWsError('')
     formInit.current = {
       name: a?.name ?? '',
       prompt: a?.prompt ?? AGENT_PROMPT_SKELETON,
       kb: JSON.stringify(a?.kbSel ?? []),
-      mcp: JSON.stringify(a?.mcpSel ?? [])
+      mcp: JSON.stringify(a?.mcpSel ?? []),
+      ws: JSON.stringify(a?.wsSel ?? [])
     }
     setFormError('')
     setSub('base')
     setEditing(a ? { id: a.id } : {})
+  }
+
+  // 添加默认工作空间：亲手选文件夹；重复或已是某目录的子文件夹提示不重复添加
+  const addWs = async (): Promise<void> => {
+    const p = await window.api.kbPickFolder()
+    if (!p) return
+    if (formWsSel.some((w) => p === w || p.startsWith(w + '/'))) {
+      setWsError('已在授权范围内')
+      return
+    }
+    setWsError('')
+    setFormWsSel([...formWsSel, p])
   }
 
   const submit = async (): Promise<void> => {
@@ -1385,7 +1407,9 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
       name: formName.trim(),
       prompt: formPrompt,
       kbSel: formKbSel,
-      mcpSel: formMcpSel
+      mcpSel: formMcpSel,
+      wsSel: formWsSel,
+      skillSel: formSkillSel
     })
     if (!r.ok) {
       setFormError(r.error)
@@ -1445,17 +1469,51 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
 
           <div className="min-w-0 flex-1 overflow-y-auto px-6 pb-4">
             {sub === 'base' && (
-              <Section title="名称 *">
-                <input
-                  value={formName}
-                  onChange={(e) => {
-                    setFormName(e.target.value)
-                    setFormError('')
-                  }}
-                  className={INPUT_CLS}
-                />
-                {formError && <div className="mt-1.5 text-[13px] text-destructive">{formError}</div>}
-              </Section>
+              <>
+                <Section title="名称 *">
+                  <input
+                    value={formName}
+                    onChange={(e) => {
+                      setFormName(e.target.value)
+                      setFormError('')
+                    }}
+                    className={INPUT_CLS}
+                  />
+                  {formError && <div className="mt-1.5 text-[13px] text-destructive">{formError}</div>}
+                </Section>
+                {/* 默认工作空间（015 Case 1）：新会话选用该 Agent 时默认勾选；改动只影响之后新建的会话 */}
+                <Section title="工作空间">
+                  <div className="flex flex-col gap-1">
+                    {formWsSel.map((p) => {
+                      const name = p.split('/').filter(Boolean).pop() ?? p
+                      const missing = wsMissing.includes(p)
+                      return (
+                        <div key={p} className="group flex items-center gap-2 py-1 text-[13px]">
+                          <FolderOpen className="size-4 flex-none text-muted-foreground" />
+                          <span className="flex-none">{name}</span>
+                          {missing && <span className="flex-none text-[11px] text-amber-700">已失效</span>}
+                          <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">{p}</span>
+                          <button
+                            onClick={() => {
+                              setFormWsSel(formWsSel.filter((x) => x !== p))
+                              setWsError('')
+                            }}
+                            title="移除"
+                            className="grid size-6 flex-none place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground"
+                          >
+                            <X className="size-3.5" />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <Button variant="outline" size="sm" className="mt-1.5" onClick={() => void addWs()}>
+                    <Plus className="size-3.5" />
+                    添加
+                  </Button>
+                  {wsError && <div className="mt-1.5 text-[13px] text-muted-foreground">{wsError}</div>}
+                </Section>
+              </>
             )}
 
             {sub === 'prompt' && (

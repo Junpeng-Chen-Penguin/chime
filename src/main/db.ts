@@ -154,6 +154,19 @@ export function initDb(): void {
       // 列已存在
     }
   }
+  // 迁移（015 工作空间与技能）：Agent 默认工作空间（绝对路径数组）与技能名数组；
+  // 会话授权清单 ws_list（NULL = 未定格，首条消息发出时写入，之后只增）
+  for (const col of [
+    "ALTER TABLE agent ADD COLUMN ws_sel TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE agent ADD COLUMN skill_sel TEXT NOT NULL DEFAULT '[]'",
+    'ALTER TABLE conversation ADD COLUMN ws_list TEXT'
+  ]) {
+    try {
+      db.exec(col)
+    } catch {
+      // 列已存在
+    }
+  }
   migrateV1()
   // chunk.kb_id 索引：旧库要等迁移加上列才能建，故放建表段之后
   db.exec('CREATE INDEX IF NOT EXISTS idx_chunk_kb ON chunk (kb_id)')
@@ -1049,6 +1062,8 @@ export interface AgentRow {
   prompt: string
   kbSel: KbSelEntry[]
   mcpSel: KbSelEntry[] // 结构相同（id + 名字快照），复用同一类型
+  wsSel: string[] // 默认工作空间：绝对路径数组，不存名字快照（名字随取 basename，「已失效」现场判）
+  skillSel: string[] // 技能名数组（技能库以名字为唯一标识）
   createdAt: number
 }
 
@@ -1062,18 +1077,50 @@ function parseSel(s: string | null): KbSelEntry[] {
   }
 }
 
+function parseStrArr(s: string | null): string[] {
+  if (!s) return []
+  try {
+    const v = JSON.parse(s)
+    return Array.isArray(v) ? v.filter((e) => typeof e === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+const AGENT_COLS =
+  'id, name, prompt, kb_sel AS kbSel, mcp_sel AS mcpSel, ws_sel AS wsSel, skill_sel AS skillSel, created_at AS createdAt'
+
+interface RawAgentRow {
+  id: number
+  name: string
+  prompt: string
+  kbSel: string
+  mcpSel: string
+  wsSel: string
+  skillSel: string
+  createdAt: number
+}
+
+function hydrateAgent(r: RawAgentRow): AgentRow {
+  return {
+    ...r,
+    kbSel: parseSel(r.kbSel),
+    mcpSel: parseSel(r.mcpSel),
+    wsSel: parseStrArr(r.wsSel),
+    skillSel: parseStrArr(r.skillSel)
+  }
+}
+
 export function listAgents(): AgentRow[] {
   const rows = db
-    .prepare('SELECT id, name, prompt, kb_sel AS kbSel, mcp_sel AS mcpSel, created_at AS createdAt FROM agent ORDER BY created_at DESC')
-    .all() as { id: number; name: string; prompt: string; kbSel: string; mcpSel: string; createdAt: number }[]
-  return rows.map((r) => ({ ...r, kbSel: parseSel(r.kbSel), mcpSel: parseSel(r.mcpSel) }))
+    .prepare(`SELECT ${AGENT_COLS} FROM agent ORDER BY created_at DESC`)
+    .all() as RawAgentRow[]
+  return rows.map(hydrateAgent)
 }
 
 export function getAgent(id: number): AgentRow | null {
-  const r = db
-    .prepare('SELECT id, name, prompt, kb_sel AS kbSel, mcp_sel AS mcpSel, created_at AS createdAt FROM agent WHERE id = ?')
-    .get(id) as { id: number; name: string; prompt: string; kbSel: string; mcpSel: string; createdAt: number } | undefined
-  return r ? { ...r, kbSel: parseSel(r.kbSel), mcpSel: parseSel(r.mcpSel) } : null
+  const r = db.prepare(`SELECT ${AGENT_COLS} FROM agent WHERE id = ?`).get(id) as RawAgentRow | undefined
+  return r ? hydrateAgent(r) : null
 }
 
 export function getAgentByName(name: string): AgentRow | null {
@@ -1087,21 +1134,39 @@ export function saveAgent(a: {
   prompt: string
   kbSel: KbSelEntry[]
   mcpSel: KbSelEntry[]
+  wsSel: string[]
+  skillSel: string[]
 }): { ok: true; id: number } | { ok: false; error: string } {
   const dup = db.prepare('SELECT id FROM agent WHERE name = ? AND id != ?').get(a.name, a.id ?? -1)
   if (dup) return { ok: false, error: '已有同名 Agent' }
   if (a.id !== undefined) {
     const r = db
-      .prepare('UPDATE agent SET name = ?, prompt = ?, kb_sel = ?, mcp_sel = ? WHERE id = ?')
-      .run(a.name, a.prompt, JSON.stringify(a.kbSel), JSON.stringify(a.mcpSel), a.id)
+      .prepare('UPDATE agent SET name = ?, prompt = ?, kb_sel = ?, mcp_sel = ?, ws_sel = ?, skill_sel = ? WHERE id = ?')
+      .run(
+        a.name,
+        a.prompt,
+        JSON.stringify(a.kbSel),
+        JSON.stringify(a.mcpSel),
+        JSON.stringify(a.wsSel),
+        JSON.stringify(a.skillSel),
+        a.id
+      )
     if (!r.changes) return { ok: false, error: 'Agent 不存在' }
     // 名字改了：在用它的会话同步刷新快照名（快照的语义是「删除后仍可显示」，在世时跟随最新）
     db.prepare('UPDATE conversation SET agent_name = ? WHERE agent_id = ?').run(a.name, a.id)
     return { ok: true, id: a.id }
   }
   const r = db
-    .prepare('INSERT INTO agent (name, prompt, kb_sel, mcp_sel, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(a.name, a.prompt, JSON.stringify(a.kbSel), JSON.stringify(a.mcpSel), Date.now())
+    .prepare('INSERT INTO agent (name, prompt, kb_sel, mcp_sel, ws_sel, skill_sel, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(
+      a.name,
+      a.prompt,
+      JSON.stringify(a.kbSel),
+      JSON.stringify(a.mcpSel),
+      JSON.stringify(a.wsSel),
+      JSON.stringify(a.skillSel),
+      Date.now()
+    )
   return { ok: true, id: Number(r.lastInsertRowid) }
 }
 
@@ -1131,4 +1196,55 @@ export function getConversationAgent(id: string): { agentId: number | null; agen
     | { agentId: number | null; agentName: string | null }
     | undefined
   return r ?? { agentId: null, agentName: null }
+}
+
+// ── 会话工作空间（015 Case 1）───────────────────────────
+// ws_list = 会话的授权清单（绝对路径数组）。NULL = 未定格（首条消息还没发）；
+// 定格后只增不减（例外：磁盘上已不存在的目录可移除）。授权全部随会话，无持久授权。
+
+export function getConversationWs(id: string): string[] | null {
+  const r = db.prepare('SELECT ws_list AS wsList FROM conversation WHERE id = ?').get(id) as
+    | { wsList: string | null }
+    | undefined
+  if (!r || r.wsList === null) return null
+  return parseStrArr(r.wsList)
+}
+
+export function setConversationWs(id: string, list: string[]): void {
+  db.prepare('UPDATE conversation SET ws_list = ? WHERE id = ?').run(JSON.stringify(list), id)
+}
+
+// 选择器的全局清单：所有会话添加过的工作空间，按路径去重、最近使用在前。settings 一个键，不建表
+const WS_RECENT_KEY = 'ws_recent'
+const WS_RECENT_MAX = 50
+
+export function getWsRecent(): { path: string; at: number }[] {
+  const raw = getSetting(WS_RECENT_KEY)
+  if (!raw) return []
+  try {
+    const v = JSON.parse(raw)
+    if (!Array.isArray(v)) return []
+    return v
+      .filter((e) => e && typeof e.path === 'string' && typeof e.at === 'number')
+      .sort((a, b) => b.at - a.at)
+  } catch {
+    return []
+  }
+}
+
+export function touchWsRecent(paths: string[]): void {
+  if (!paths.length) return
+  const now = Date.now()
+  const map = new Map(getWsRecent().map((e) => [e.path, e.at]))
+  for (const p of paths) map.set(p, now)
+  const list = [...map.entries()].map(([path, at]) => ({ path, at }))
+  list.sort((a, b) => b.at - a.at)
+  setSetting(WS_RECENT_KEY, JSON.stringify(list.slice(0, WS_RECENT_MAX)))
+}
+
+// 工作面板的制品列表（015 Case 1）：只取轻量字段，columns/rows 点开详情才载
+export function listArtifacts(conversationId: string): { id: number; title: string; createdAt: number }[] {
+  return db
+    .prepare('SELECT id, title, created_at AS createdAt FROM artifact WHERE conversation_id = ? ORDER BY created_at ASC')
+    .all(conversationId) as { id: number; title: string; createdAt: number }[]
 }

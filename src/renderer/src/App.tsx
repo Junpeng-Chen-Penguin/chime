@@ -4,11 +4,12 @@ import ChatArea from './components/ChatArea'
 import SettingsView from './components/SettingsView'
 import SidePanel, { DocContent, type DocPanelData } from './components/SidePanel'
 import { ArtifactContent } from './components/ArtifactPanel'
+import { WorkContent, type WorkArtifact } from './components/WorkPanel'
 import ConfirmDialog from './components/ConfirmDialog'
-import { Download, Table2 } from 'lucide-react'
+import { ArrowLeft, Download, PanelRight, Table2 } from 'lucide-react'
 import { useChat, type Msg, type MsgStatus } from './hooks/useChat'
 import type { ChipRef, Conversation, PersistedMessage } from './types'
-import type { SourceRef, TurnItem, ArtifactView } from '../../preload/index.d'
+import type { SourceRef, TurnItem, ArtifactView, WsEntry } from '../../preload/index.d'
 
 const toMsg = (p: PersistedMessage): Msg => ({
   id: p.id,
@@ -46,14 +47,25 @@ function App(): React.JSX.Element {
   const [kbOptions, setKbOptions] = useState<
     { id: number; name: string; ready: boolean; building: boolean; folderMissing: boolean }[]
   >([])
-  // 侧板：一个容器、单一内容位（来源文档阅读 / 制品表格查看，结构上互斥）
+  // 侧板：一个容器、单一内容位（来源文档阅读 / 制品表格查看 / 工作面板，结构上互斥）
   const [panel, setPanel] = useState<
     | { kind: 'doc'; doc: DocPanelData }
     | { kind: 'artifact'; artifact: ArtifactView; highlightRows?: number[] } // 高亮：回看引用时定位
+    | { kind: 'work' } // 工作面板（015 Case 1）：制品列表 + 工作空间，常驻开关在 ChatArea 右上角
     | null
   >(null)
   const [agentSel, setAgentSel] = useState<Record<string, { id: number; name: string } | null>>({}) // 草稿会话选用的 Agent（014）
-  const [agents, setAgents] = useState<{ id: number; name: string; mcpSel: { id: number; name: string }[] }[]>([])
+  const [agents, setAgents] = useState<
+    { id: number; name: string; mcpSel: { id: number; name: string }[]; wsSel: string[] }[]
+  >([])
+  // 工作空间（015 Case 1）：定格前的勾选状态在内存，定格后以库里的 ws_list 为准
+  const [wsPicked, setWsPicked] = useState<Record<string, string[]>>({}) // 用户自己勾的
+  const [wsAgentOff, setWsAgentOff] = useState<Record<string, string[]>>({}) // 被用户取消勾选的 Agent 默认项
+  const [wsRecent, setWsRecent] = useState<WsEntry[]>([]) // 全局清单（最近使用在前）
+  const [wsLocalAdds, setWsLocalAdds] = useState<Record<string, WsEntry[]>>({}) // 本会话新加的本地文件夹（定格时才进全局清单）
+  const [wsFrozen, setWsFrozen] = useState<Record<string, WsEntry[] | null>>({}) // 定格后的授权清单
+  const [wsNotice, setWsNotice] = useState<string | null>(null) // 「已在授权范围内」一类的轻提示
+  const [workArtifacts, setWorkArtifacts] = useState<Record<string, WorkArtifact[]>>({})
   // 服务连接状态（输入框工具菜单用）：启动加载 + mcp:status 事件刷新
   const [services, setServices] = useState<
     { id: number; name: string; status: 'connected' | 'auth' | 'error' }[]
@@ -64,7 +76,11 @@ function App(): React.JSX.Element {
   const reloadKb = useCallback(() => {
     window.api.kbOptions().then(setKbOptions)
     // Agent 清单一并刷新（014）：设置里建改删了 Agent，回到会话即反映
-    window.api.agentList().then((l) => setAgents(l.map((a) => ({ id: a.id, name: a.name, mcpSel: a.mcpSel }))))
+    window.api
+      .agentList()
+      .then((l) =>
+        setAgents(l.map((a) => ({ id: a.id, name: a.name, mcpSel: a.mcpSel, wsSel: a.wsSel })))
+      )
   }, [])
 
   useEffect(() => {
@@ -103,9 +119,16 @@ function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, draftId])
 
-  // 会话变更（切换 / 新建 / 删除当前）统一关闭侧板——内容与原会话强相关
+  // 会话变更（切换 / 新建 / 删除当前）统一关闭侧板——内容与原会话强相关。
+  // 例外（015）：工作面板是常驻视图，跨会话保持开启，内容随会话
   useEffect(() => {
-    setPanel(null)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 改版前就是效应内同步 setPanel(null)，仅改成保留 work
+    setPanel((p) => (p?.kind === 'work' ? p : null))
+  }, [activeId])
+
+  // 工作空间全局清单（015 Case 1）：切会话时刷一次
+  useEffect(() => {
+    window.api.wsRecent().then(setWsRecent)
   }, [activeId])
 
   useEffect(() => window.api.onFullscreen(setFullscreen), [])
@@ -177,6 +200,24 @@ function App(): React.JSX.Element {
   const chat = useChat(refresh)
   const didInit = useRef(false)
 
+  // 本会话定格后的授权清单（015 Case 1）：轮次结束（streamingConv 归 null）时重取——
+  // 首条消息定格、轮内申请授权通过都发生在轮中，轮结束刷新即可
+  useEffect(() => {
+    if (!activeId || activeId === draftId) return
+    window.api.getConversationWs(activeId).then((list) => {
+      setWsFrozen((m) => ({ ...m, [activeId]: list }))
+      if (list !== null) window.api.wsRecent().then(setWsRecent)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, draftId, chat.streamingConv])
+
+  // 工作面板的制品列表（015 Case 1）：面板开着时按会话取，轮次结束刷新（本轮可能新生成了制品）
+  useEffect(() => {
+    if (panel?.kind !== 'work' || !activeId || activeId === draftId) return
+    window.api.listArtifacts(activeId).then((list) => setWorkArtifacts((m) => ({ ...m, [activeId]: list })))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panel?.kind, activeId, draftId, chat.streamingConv])
+
   // ⌘. 收起/展开侧边栏：按钮提示一直写着这个快捷键，实现是 1.12.0 补的（此前从未生效）
   useEffect(() => {
     const h = (e: KeyboardEvent): void => {
@@ -239,6 +280,88 @@ function App(): React.JSX.Element {
   const agentGone = !!curAgent && !agents.some((a) => a.id === curAgent.id)
   const agentServiceIds = curAgent ? (agents.find((a) => a.id === curAgent.id)?.mcpSel.map((e) => e.id) ?? []) : []
 
+  // ── 工作空间派生与操作（015 Case 1）────────────────────
+  const wsNameOf = (p: string): string => p.split('/').filter(Boolean).pop() ?? p
+  const agentWs = curAgent ? (agents.find((a) => a.id === curAgent.id)?.wsSel ?? []) : []
+  const wsOff = wsAgentOff[activeId] ?? []
+  const fromAgentWs = agentWs.filter((p) => !wsOff.includes(p)) // Agent 默认且仍勾选的（免卡）
+  const pickedWs = wsPicked[activeId] ?? []
+  const wsChecked = [...new Set([...pickedWs, ...fromAgentWs])]
+  const frozenWs = wsFrozen[activeId] ?? null
+  // 菜单清单：全局最近使用 ∪ 本会话新加 ∪ Agent 默认（按路径去重，顺序即优先级）
+  const wsEntries = ((): WsEntry[] => {
+    const seen = new Set<string>()
+    const out: WsEntry[] = []
+    for (const e of [
+      ...wsRecent,
+      ...(wsLocalAdds[activeId] ?? []),
+      ...agentWs.map((p) => ({ path: p, name: wsNameOf(p), missing: false }))
+    ]) {
+      if (seen.has(e.path)) continue
+      seen.add(e.path)
+      out.push(e)
+    }
+    return out
+  })()
+  const notify = (t: string): void => {
+    setWsNotice(t)
+    window.setTimeout(() => setWsNotice(null), 2500)
+  }
+  const coveredByChecked = (path: string): boolean =>
+    wsChecked.some((p) => path === p || path.startsWith(p + '/'))
+  const toggleWs = (path: string): void => {
+    if (agentWs.includes(path)) {
+      // Agent 默认项：勾选状态由 off 名单表达；同时从 picked 清掉避免双重身份
+      setWsAgentOff((m) => {
+        const cur = m[activeId] ?? []
+        return { ...m, [activeId]: cur.includes(path) ? cur.filter((x) => x !== path) : [...cur, path] }
+      })
+      setWsPicked((m) => ({ ...m, [activeId]: (m[activeId] ?? []).filter((x) => x !== path) }))
+    } else {
+      setWsPicked((m) => {
+        const cur = m[activeId] ?? []
+        return { ...m, [activeId]: cur.includes(path) ? cur.filter((x) => x !== path) : [...cur, path] }
+      })
+    }
+  }
+  // 定格前「添加本地文件夹」：亲手选进清单并勾选；重复或已是子目录提示不重复添加
+  const addWsFolder = async (): Promise<void> => {
+    const p = await window.api.kbPickFolder()
+    if (!p) return
+    if (coveredByChecked(p)) {
+      notify('已在授权范围内')
+      return
+    }
+    setWsLocalAdds((m) => {
+      const cur = m[activeId] ?? []
+      return cur.some((e) => e.path === p)
+        ? m
+        : { ...m, [activeId]: [...cur, { path: p, name: wsNameOf(p), missing: false }] }
+    })
+    setWsPicked((m) => {
+      const cur = m[activeId] ?? []
+      return cur.includes(p) ? m : { ...m, [activeId]: [...cur, p] }
+    })
+  }
+  // 定格后经工作面板添加（唯一入口）：选的动作即授权，不弹卡
+  const addWsToConv = async (): Promise<void> => {
+    const p = await window.api.kbPickFolder()
+    if (!p) return
+    const r = await window.api.wsAdd({ id: activeId, path: p })
+    if (!r.ok && r.reason === 'covered') {
+      notify('已在授权范围内')
+      return
+    }
+    const list = await window.api.getConversationWs(activeId)
+    setWsFrozen((m) => ({ ...m, [activeId]: list }))
+    window.api.wsRecent().then(setWsRecent)
+  }
+  const removeWsFromConv = async (path: string): Promise<void> => {
+    await window.api.wsRemove({ id: activeId, path })
+    const list = await window.api.getConversationWs(activeId)
+    setWsFrozen((m) => ({ ...m, [activeId]: list }))
+  }
+
   const submit = async (): Promise<void> => {
     const text = input.trim()
     if (!text) return
@@ -277,7 +400,12 @@ function App(): React.JSX.Element {
       setDraftId(null)
     }
     clearPending()
-    chat.send(activeId, activeModel, text, refs.length ? refs : undefined)
+    // 首条消息随带工作空间选中集合（015 Case 1）：未定格才带，主进程据此弹卡确认并定格
+    const wsPayload =
+      frozenWs === null
+        ? { picked: wsChecked.filter((p) => !fromAgentWs.includes(p)), fromAgent: fromAgentWs }
+        : undefined
+    chat.send(activeId, activeModel, text, refs.length ? refs : undefined, wsPayload)
   }
 
   const confirmDelete = async (): Promise<void> => {
@@ -401,6 +529,19 @@ function App(): React.JSX.Element {
         onRespondCard={chat.respondCard}
         onRespondAsk={chat.respondAsk}
         onOpenArtifact={openArtifact}
+        ws={{
+          frozen: frozenWs,
+          entries: wsEntries,
+          checked: wsChecked,
+          notice: wsNotice,
+          onToggle: toggleWs,
+          onAddFolder: () => void addWsFolder()
+        }}
+        workPanelOpen={panel?.kind === 'work'}
+        onToggleWorkPanel={() => {
+          setPanel((p) => (p?.kind === 'work' ? null : { kind: 'work' }))
+          setCollapsed(true)
+        }}
       />
       )}
 
@@ -409,29 +550,61 @@ function App(): React.JSX.Element {
           icon={
             panel.kind === 'artifact' ? (
               <Table2 className="size-4 flex-none text-muted-foreground" />
+            ) : panel.kind === 'work' ? (
+              <PanelRight className="size-4 flex-none text-muted-foreground" />
             ) : undefined
           }
           title={
             panel.kind === 'doc'
               ? (panel.doc.file.split('/').pop() ?? '').replace(/\.md$/, '')
-              : panel.artifact.title
+              : panel.kind === 'work'
+                ? '工作面板'
+                : panel.artifact.title
           }
-          subtitle={panel.kind === 'doc' ? panel.doc.file : `${panel.artifact.totalRows} 行`}
+          subtitle={
+            panel.kind === 'doc'
+              ? panel.doc.file
+              : panel.kind === 'work'
+                ? undefined
+                : `${panel.artifact.totalRows} 行`
+          }
           actions={
             panel.kind === 'artifact' ? (
-              <button
-                onClick={() => void window.api.exportArtifact(panel.artifact.id)}
-                title="导出 CSV（完整数据）"
-                className="grid size-8 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <Download className="size-[18px]" />
-              </button>
+              <>
+                {/* 制品详情 → 工作面板列表（015 Case 1 功能点 15）：对话流制品卡直达详情，从详情同样可回列表 */}
+                <button
+                  onClick={() => setPanel({ kind: 'work' })}
+                  title="返回工作面板"
+                  className="grid size-8 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <ArrowLeft className="size-[18px]" />
+                </button>
+                <button
+                  onClick={() => void window.api.exportArtifact(panel.artifact.id)}
+                  title="导出 CSV（完整数据）"
+                  className="grid size-8 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <Download className="size-[18px]" />
+                </button>
+              </>
             ) : undefined
           }
           onClose={() => setPanel(null)}
         >
           {panel.kind === 'doc' ? (
             <DocContent doc={panel.doc} />
+          ) : panel.kind === 'work' ? (
+            <WorkContent
+              artifacts={workArtifacts[activeId] ?? []}
+              ws={
+                frozenWs ??
+                wsChecked.map((p) => ({ path: p, name: wsNameOf(p), missing: false }))
+              }
+              frozen={frozenWs !== null}
+              onOpenArtifact={openArtifact}
+              onAddWs={() => void addWsToConv()}
+              onRemoveWs={(p) => void removeWsFromConv(p)}
+            />
           ) : (
             <ArtifactContent
               key={panel.artifact.id} // 按制品重建：不加 key 时 A 切 B 组件不重挂，A 的勾选会串给 B

@@ -14,8 +14,14 @@ import {
   deleteAgent,
   agentUsageCount,
   setConversationAgent,
-  ackMcpToolsChanged
+  ackMcpToolsChanged,
+  getConversationWs,
+  setConversationWs,
+  getWsRecent,
+  touchWsRecent,
+  listArtifacts
 } from './db'
+import { coveredBy, wsName } from './engine/fs-tools'
 import { detect, listModels, generateTitle, vendorHealth, markVendorHealth, humanize } from './ai'
 import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
 import { respondCard, respondAskCard, type AskOutcome } from './engine/cards'
@@ -164,6 +170,8 @@ export function registerIpc(): void {
         text: string
         model: string
         refs?: { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }[]
+        // 015 Case 1：首条消息随带工作空间选中集合（picked = 用户自己勾的，弹卡确认；fromAgent = Agent 默认，免卡）
+        ws?: { picked: string[]; fromAgent: string[] }
       }
     ) => {
       const wc = e.sender
@@ -209,11 +217,25 @@ export function registerIpc(): void {
     }
   )
 
-  // 自定义 Agent（014 Case 2）
-  ipcMain.handle('agent:list', () => listAgents())
+  // 自定义 Agent（014 Case 2；015 Case 1 加默认工作空间 wsSel、技能 skillSel）。
+  // wsMissing：已配目录里磁盘上不存在的（编辑页「已失效」标注用，现场判不存快照）
+  ipcMain.handle('agent:list', () =>
+    listAgents().map((a) => ({ ...a, wsMissing: a.wsSel.filter((p) => !existsSync(p)) }))
+  )
   ipcMain.handle(
     'agent:save',
-    (_e, a: { id?: number; name: string; prompt: string; kbSel: KbSelEntry[]; mcpSel: KbSelEntry[] }) => saveAgent(a)
+    (
+      _e,
+      a: {
+        id?: number
+        name: string
+        prompt: string
+        kbSel: KbSelEntry[]
+        mcpSel: KbSelEntry[]
+        wsSel: string[]
+        skillSel: string[]
+      }
+    ) => saveAgent(a)
   )
   ipcMain.handle('agent:delete', (_e, id: number) => deleteAgent(id))
   ipcMain.handle('agent:usage', (_e, id: number) => agentUsageCount(id))
@@ -341,6 +363,41 @@ export function registerIpc(): void {
     setConversationMcpSelection(input.id, input.serviceIds)
   )
   ipcMain.handle('conv:getMcpSel', (_e, id: string) => getConversationMcpSelection(id))
+
+  // ── 会话工作空间（015 Case 1）──────────────────────
+  // 选择器的全局清单：所有会话用过的工作空间，按最近使用排序，带展示名与是否已失效
+  ipcMain.handle('ws:recent', () =>
+    getWsRecent().map((e) => ({ path: e.path, name: wsName(e.path), missing: !existsSync(e.path) }))
+  )
+  // 会话授权清单（null = 未定格）：工作面板与定格后的选择器只读态都读它
+  ipcMain.handle('conv:getWs', (_e, id: string) => {
+    const list = getConversationWs(id)
+    if (list === null) return null
+    return list.map((p) => ({ path: p, name: wsName(p), missing: !existsSync(p) }))
+  })
+  // 首条消息后添加的唯一入口（工作面板）：亲手选的动作即授权，不弹卡；重复或子目录拒收
+  ipcMain.handle('conv:wsAdd', (_e, input: { id: string; path: string }) => {
+    const list = getConversationWs(input.id)
+    if (list === null) return { ok: false, reason: 'not-frozen' } // 首条消息前经选择器，不走这里
+    if (coveredBy(input.path, list)) return { ok: false, reason: 'covered' }
+    const next = [...list, resolve(input.path)]
+    setConversationWs(input.id, next)
+    touchWsRecent([resolve(input.path)])
+    return { ok: true }
+  })
+  // 只增不减的唯一例外：磁盘上已不存在的目录可移除（授权指向的东西没了）
+  ipcMain.handle('conv:wsRemove', (_e, input: { id: string; path: string }) => {
+    const list = getConversationWs(input.id)
+    if (list === null) return { ok: false }
+    if (existsSync(input.path)) return { ok: false } // 仅失效条目可移除
+    setConversationWs(
+      input.id,
+      list.filter((p) => p !== input.path)
+    )
+    return { ok: true }
+  })
+  // 工作面板的制品列表
+  ipcMain.handle('artifact:list', (_e, conversationId: string) => listArtifacts(conversationId))
 
   // ── MCP 服务 ──────────────────────────────────────
   // 重试连接（输入框状态标识的入口）：重连全部已启用服务，完成后 mcp:status 事件自会刷新界面
