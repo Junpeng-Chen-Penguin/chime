@@ -10,7 +10,6 @@ import {
   CornerDownLeft,
   Copy,
   Check,
-  Folder,
   Info,
   Sparkles,
   FileText,
@@ -139,10 +138,7 @@ export default function ChatArea({
           it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending')
       )
     : undefined
-  // 工作空间授权卡等待中（015 Case 1）：与工具授权卡同样锁输入框
-  const wsAuthWaiting =
-    sending && (lastMsg?.items ?? []).some((it) => it.t === 'ws-auth' && it.state === 'pending')
-  const authWaiting = activeCard?.auth === 'pending' || wsAuthWaiting
+  const authWaiting = activeCard?.auth === 'pending'
   const askItem = activeCard?.ask?.state === 'pending' ? activeCard : undefined
 
   // 会话累计用量：各正常轮次之和（中断轮无 usage 自然不计入）
@@ -442,13 +438,10 @@ function AssistantMsg({
   const streaming = m.status === 'streaming'
   const finished = m.status === 'done' || m.status === 'stopped' || m.status === 'interrupted'
   const items = m.items ?? []
-  // 卡片排队（授权 + 提问共用一条队列）：队首是授权卡时挂在调用行下方；队首是提问卡时悬浮于输入框上方（由 ChatArea 渲染）。
-  // 工作空间授权卡（015 Case 1）也算队首：等它时整轮暂停，进度指示不显示
+  // 卡片排队（授权 + 提问共用一条队列）：队首是授权卡时挂在调用行下方；队首是提问卡时悬浮于输入框上方（由 ChatArea 渲染）
   const pendingIdx = streaming
     ? items.findIndex(
-        (it) =>
-          (it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending')) ||
-          (it.t === 'ws-auth' && it.state === 'pending')
+        (it) => it.t === 'tool' && (it.auth === 'pending' || it.ask?.state === 'pending')
       )
     : -1
   const pendingIsAuth =
@@ -521,11 +514,8 @@ function AssistantMsg({
             return it.kind === 'limit' ? (
               <PlainRow key={i} text="已达工具调用上限，基于已有结果作答" />
             ) : null // error 边界由下方错误卡片呈现
-          case 'ws-auth':
-            // 工作空间授权卡（015 Case 1）：pending 出按钮，处理后留态在对话流
-            return <WsAuthCard key={i} item={it} onRespond={onRespondCard} />
           default:
-            return null // sources 在回答之后统一渲染
+            return null // sources 在回答之后统一渲染（历史数据里可能残留已废弃的 item 类型，一并静默跳过）
         }
       })}
       {/* 整轮进度指示：挂在当前助手消息末尾，紧随已有内容——无内容时就贴着用户消息，不留空隙。
@@ -944,56 +934,6 @@ function AuthCard({
           拒绝
         </button>
       </div>
-    </div>
-  )
-}
-
-// 工作空间授权卡（015 Case 1）：首条消息发出时确认用户自己选上的目录。与工具授权卡同一骨架，
-// 信息区换成文件夹名清单（不显示完整路径）；两按钮（拒绝/允许）；处理后卡片留态在对话流
-function WsAuthCard({
-  item,
-  onRespond
-}: {
-  item: Extract<TurnItem, { t: 'ws-auth' }>
-  onRespond: (toolCallId: string, decision: 'approved' | 'denied') => void
-}): React.JSX.Element {
-  const names = item.dirs.map((p) => p.split('/').filter(Boolean).pop() ?? p)
-  const stateText =
-    item.state === 'approved' ? '已允许' : item.state === 'denied' ? '已拒绝' : '未回应'
-  return (
-    <div className="flex max-w-[440px] flex-col gap-2.5 rounded-xl border border-border bg-background px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
-      <div className="flex items-center gap-2 text-[13px] font-medium text-foreground">
-        {item.state === 'pending' && (
-          <span className="size-[6px] flex-none animate-pulse rounded-full bg-primary" />
-        )}
-        允许访问这些工作空间吗？
-      </div>
-      <div className="flex flex-col gap-1">
-        {names.map((n, i) => (
-          <div key={i} className="flex items-center gap-2 text-[13px] text-muted-foreground">
-            <Folder className="size-3.5 flex-none" />
-            {n}
-          </div>
-        ))}
-      </div>
-      {item.state === 'pending' ? (
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={() => onRespond(item.id, 'denied')}
-            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
-          >
-            拒绝
-          </button>
-          <button
-            onClick={() => onRespond(item.id, 'approved')}
-            className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            允许
-          </button>
-        </div>
-      ) : (
-        <div className="text-[12px] text-muted-foreground">{stateText}</div>
-      )}
     </div>
   )
 }

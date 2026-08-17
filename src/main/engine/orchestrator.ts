@@ -320,10 +320,9 @@ async function streamCore(core: {
     }
   )
 
-  // 工作空间授权与定格（015 Case 1）：ws_list 为 NULL 即未定格（会话第一次跑轮）。
-  // 当前选中的全部工作空间（含 Agent 默认勾选的）弹一张卡统一确认（两按钮）——
-  // Agent 配置只是默认勾选值，不构成授权，授权一律在会话内确认（2026-08-17 拍板）。
-  // 处理完把结果复制为会话授权清单，从此归会话所有。授权不跨会话，无持久记录。
+  // 工作空间定格（015 Case 1，2026-08-17 拍板修订）：授权已在目录进入选中集合那一刻由界面弹窗完成
+  //（勾选清单项、Agent 带入默认、亲手选文件夹都先确认），首条消息静默把选中集合复制为会话授权清单。
+  // 驱动会话（--eval）无界面：Agent 默认目录随创建定格即授权（驱动线预期）。授权不跨会话，无持久记录
   if (getConversationWs(convId) === null) {
     const allSel = [
       ...new Set(
@@ -332,36 +331,8 @@ async function streamCore(core: {
         )
       )
     ]
-    let granted: string[] = []
-    if (allSel.length) {
-      const callId = `ws-${streamId}`
-      const wsItem: Extract<TurnItem, { t: 'ws-auth' }> = {
-        t: 'ws-auth',
-        id: callId,
-        dirs: allSel,
-        state: 'pending'
-      }
-      startItem('ws-auth', wsItem)
-      persistWaiting() // 弹卡即落库
-      const decision = await cards.request(callId, controller.signal, 'workspace')
-      const wsIdx = items.indexOf(wsItem)
-      if (decision === 'aborted') {
-        // 等卡时停止：卡作废、不定格——下条消息重新确认（与启动修复同语义）。
-        // 本块在 streamText 的 try 之外，清理自己做
-        wsItem.state = 'unanswered'
-        emit({ type: 'item-update', streamId, index: wsIdx, item: wsItem })
-        finish('stopped')
-        cards.dispose()
-        turns.delete(streamId)
-        return
-      }
-      wsItem.state = decision
-      emit({ type: 'item-update', streamId, index: wsIdx, item: wsItem })
-      persistWaiting()
-      if (decision === 'approved') granted = allSel
-    }
-    setConversationWs(convId, granted)
-    if (granted.length) touchWsRecent(granted)
+    setConversationWs(convId, allSel)
+    if (allSel.length) touchWsRecent(allSel)
   }
 
   // 超限处理轮内状态：会话基线一次算好，本轮增量随批累计

@@ -80,8 +80,6 @@ export type TurnItem =
   | { t: 'artifact'; id: number; title: string; rowCount: number; result?: string } // 制品卡
   | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] } // 表格行引用（013，user 消息专用）
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
-  // 工作空间授权卡（015 Case 1）：dirs 存绝对路径，渲染层取末段作名字
-  | { t: 'ws-auth'; id: string; dirs: string[]; state: 'pending' | 'approved' | 'denied' | 'unanswered' }
 
 export type ChatEvent =
   | { type: 'turn-start'; streamId: string }

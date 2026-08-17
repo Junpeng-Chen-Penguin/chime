@@ -7,6 +7,7 @@ interface Props {
   body: string
   confirmText: string
   cancelText?: string // 缺省「取消」
+  confirmVariant?: 'default' | 'destructive' // 缺省 destructive（既有调用方全是删除类确认）
   onConfirm: () => void
   onCancel: () => void
 }
@@ -17,6 +18,7 @@ export default function ConfirmDialog({
   body,
   confirmText,
   cancelText,
+  confirmVariant,
   onConfirm,
   onCancel
 }: Props): React.JSX.Element | null {
@@ -49,7 +51,7 @@ export default function ConfirmDialog({
           <Button variant="outline" onClick={onCancel} className="h-9">
             {cancelText ?? '取消'}
           </Button>
-          <Button variant="destructive" onClick={onConfirm} className="h-9">
+          <Button variant={confirmVariant ?? 'destructive'} onClick={onConfirm} className="h-9">
             {confirmText}
           </Button>
         </div>

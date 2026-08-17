@@ -65,6 +65,9 @@ function App(): React.JSX.Element {
   const [wsLocalAdds, setWsLocalAdds] = useState<Record<string, WsEntry[]>>({}) // 本会话新加的本地文件夹（定格时才进全局清单）
   const [wsFrozen, setWsFrozen] = useState<Record<string, WsEntry[] | null>>({}) // 定格后的授权清单
   const [wsNotice, setWsNotice] = useState<string | null>(null) // 「已在授权范围内」一类的轻提示
+  // 工作空间授权弹窗（2026-08-17 拍板）：授权发生在进入选中集合那一刻——勾选清单项、Agent 带入默认、
+  // 亲手选文件夹，一律先弹确认；允许即勾上，拒绝即不勾（想要就再勾一次重新授权）。首条消息不再有授权卡
+  const [wsAuthAsk, setWsAuthAsk] = useState<{ names: string[]; onOk: () => void } | null>(null)
   const [workArtifacts, setWorkArtifacts] = useState<Record<string, WorkArtifact[]>>({})
   // 服务连接状态（输入框工具菜单用）：启动加载 + mcp:status 事件刷新
   const [services, setServices] = useState<
@@ -309,22 +312,45 @@ function App(): React.JSX.Element {
   }
   const coveredByChecked = (path: string): boolean =>
     wsChecked.some((p) => path === p || path.startsWith(p + '/'))
+  // 授权即勾选（2026-08-17 拍板）：任何目录进入选中集合前弹确认，允许才执行 apply
+  const askWsAuth = (paths: string[], apply: () => void): void =>
+    setWsAuthAsk({ names: paths.map(wsNameOf), onOk: apply })
   const toggleWs = (path: string): void => {
-    if (agentWs.includes(path)) {
-      // Agent 默认项：勾选状态由 off 名单表达；同时从 picked 清掉避免双重身份
-      setWsAgentOff((m) => {
-        const cur = m[activeId] ?? []
-        return { ...m, [activeId]: cur.includes(path) ? cur.filter((x) => x !== path) : [...cur, path] }
-      })
+    const isAgentDefault = agentWs.includes(path)
+    if (wsChecked.includes(path)) {
+      // 取消勾选不需要确认
+      if (isAgentDefault)
+        setWsAgentOff((m) => ({ ...m, [activeId]: [...new Set([...(m[activeId] ?? []), path])] }))
       setWsPicked((m) => ({ ...m, [activeId]: (m[activeId] ?? []).filter((x) => x !== path) }))
-    } else {
-      setWsPicked((m) => {
-        const cur = m[activeId] ?? []
-        return { ...m, [activeId]: cur.includes(path) ? cur.filter((x) => x !== path) : [...cur, path] }
-      })
+      return
     }
+    askWsAuth([path], () => {
+      if (isAgentDefault)
+        setWsAgentOff((m) => ({ ...m, [activeId]: (m[activeId] ?? []).filter((x) => x !== path) }))
+      else
+        setWsPicked((m) => {
+          const cur = m[activeId] ?? []
+          return cur.includes(path) ? m : { ...m, [activeId]: [...cur, path] }
+        })
+    })
   }
-  // 定格前「添加本地文件夹」：亲手选进清单并勾选；重复或已是子目录提示不重复添加
+  // 选用 Agent：默认工作空间不直接勾上——先弹一张确认列出全部，允许才勾（默认值不构成授权）
+  const selectAgent = (a: { id: number; name: string } | null): void => {
+    setAgentSel((m) => ({ ...m, [activeId]: a }))
+    if (!a) return
+    const defaults = (agents.find((x) => x.id === a.id)?.wsSel ?? []).filter(
+      (p) => !pickedWs.includes(p)
+    )
+    if (!defaults.length) return
+    setWsAgentOff((m) => ({ ...m, [activeId]: [...new Set([...(m[activeId] ?? []), ...defaults])] }))
+    askWsAuth(defaults, () => {
+      setWsAgentOff((m) => ({
+        ...m,
+        [activeId]: (m[activeId] ?? []).filter((x) => !defaults.includes(x))
+      }))
+    })
+  }
+  // 定格前「添加本地文件夹」：亲手选后同样弹授权确认（规则统一）；重复或已是子目录提示不重复添加
   const addWsFolder = async (): Promise<void> => {
     const p = await window.api.kbPickFolder()
     if (!p) return
@@ -332,29 +358,35 @@ function App(): React.JSX.Element {
       notify('已在授权范围内')
       return
     }
-    setWsLocalAdds((m) => {
-      const cur = m[activeId] ?? []
-      return cur.some((e) => e.path === p)
-        ? m
-        : { ...m, [activeId]: [...cur, { path: p, name: wsNameOf(p), missing: false }] }
-    })
-    setWsPicked((m) => {
-      const cur = m[activeId] ?? []
-      return cur.includes(p) ? m : { ...m, [activeId]: [...cur, p] }
+    askWsAuth([p], () => {
+      setWsLocalAdds((m) => {
+        const cur = m[activeId] ?? []
+        return cur.some((e) => e.path === p)
+          ? m
+          : { ...m, [activeId]: [...cur, { path: p, name: wsNameOf(p), missing: false }] }
+      })
+      setWsPicked((m) => {
+        const cur = m[activeId] ?? []
+        return cur.includes(p) ? m : { ...m, [activeId]: [...cur, p] }
+      })
     })
   }
-  // 定格后经工作面板添加（唯一入口）：选的动作即授权，不弹卡
+  // 定格后经工作面板添加（唯一入口）：同样先弹授权确认，允许才进清单
   const addWsToConv = async (): Promise<void> => {
     const p = await window.api.kbPickFolder()
     if (!p) return
-    const r = await window.api.wsAdd({ id: activeId, path: p })
-    if (!r.ok && r.reason === 'covered') {
-      notify('已在授权范围内')
-      return
-    }
-    const list = await window.api.getConversationWs(activeId)
-    setWsFrozen((m) => ({ ...m, [activeId]: list }))
-    window.api.wsRecent().then(setWsRecent)
+    askWsAuth([p], () => {
+      void (async () => {
+        const r = await window.api.wsAdd({ id: activeId, path: p })
+        if (!r.ok && r.reason === 'covered') {
+          notify('已在授权范围内')
+          return
+        }
+        const list = await window.api.getConversationWs(activeId)
+        setWsFrozen((m) => ({ ...m, [activeId]: list }))
+        window.api.wsRecent().then(setWsRecent)
+      })()
+    })
   }
   const removeWsFromConv = async (path: string): Promise<void> => {
     await window.api.wsRemove({ id: activeId, path })
@@ -501,7 +533,7 @@ function App(): React.JSX.Element {
         agentLocked={agentLocked}
         agentGone={agentGone}
         agentServiceIds={agentServiceIds}
-        onSelectAgent={(a) => setAgentSel((m) => ({ ...m, [activeId]: a }))}
+        onSelectAgent={selectAgent}
         onManageAgents={() => openSettings('agent')}
         services={services}
         selectedServiceIds={mcpSel[activeId] ?? []}
@@ -626,6 +658,21 @@ function App(): React.JSX.Element {
         confirmText="删除"
         onConfirm={confirmDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      {/* 工作空间授权确认（015，2026-08-17 拍板）：目录进入选中集合那一刻确认，允许即勾上 */}
+      <ConfirmDialog
+        open={!!wsAuthAsk}
+        title="允许访问这些工作空间吗？"
+        body={wsAuthAsk?.names.join('、') ?? ''}
+        confirmText="允许"
+        cancelText="拒绝"
+        confirmVariant="default"
+        onConfirm={() => {
+          wsAuthAsk?.onOk()
+          setWsAuthAsk(null)
+        }}
+        onCancel={() => setWsAuthAsk(null)}
       />
 
       {/* 设置里有未保存内容时的离开确认（Case 1 功能点 5）；取消即留在设置页继续编辑 */}
