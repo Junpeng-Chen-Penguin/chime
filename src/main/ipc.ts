@@ -198,7 +198,10 @@ export function registerIpc(): void {
   // 授权卡回应：路由到该轮的卡片队列（只认队首，过期回应静默忽略）
   ipcMain.on(
     'chat:card-response',
-    (_e, payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' }) => {
+    (
+      _e,
+      payload: { streamId: string; toolCallId: string; decision: 'approved' | 'denied' | 'always' }
+    ) => {
       respondCard(payload.streamId, payload.toolCallId, payload.decision)
     }
   )
@@ -240,8 +243,10 @@ export function registerIpc(): void {
   ipcMain.handle('agent:delete', (_e, id: number) => deleteAgent(id))
   ipcMain.handle('agent:usage', (_e, id: number) => agentUsageCount(id))
   ipcMain.handle('mcp:ackToolsChanged', (_e, id: number) => ackMcpToolsChanged(id))
-  ipcMain.handle('conv:setAgent', (_e, input: { id: string; agentId: number | null; agentName: string | null }) =>
-    setConversationAgent(input.id, input.agentId, input.agentName)
+  ipcMain.handle(
+    'conv:setAgent',
+    (_e, input: { id: string; agentId: number | null; agentName: string | null }) =>
+      setConversationAgent(input.id, input.agentId, input.agentName)
   )
 
   // 会话管理

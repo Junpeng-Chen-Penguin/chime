@@ -18,7 +18,8 @@ export const AUTH_DENIED =
 export const ASK_INTERRUPTED = '用户中断了本次提问'
 export const ASK_INTERRUPTED_EXIT = '这次提问未收到回应（应用退出）。需要时可重新发起。'
 
-export type CardDecision = 'approved' | 'denied' | 'aborted'
+// 'always' 仅写授权卡产生（015 C3）：放行本次并记住目录（会话级，记录动作在发起处的 execute 里）
+export type CardDecision = 'approved' | 'denied' | 'always' | 'aborted'
 
 // 提问卡出路（PRD 出路表）：作答 / 放弃整卡 / 中断（停止或主输入框发新消息，均为 aborted）
 export type AskOutcome =
@@ -92,7 +93,11 @@ export class CardQueue {
   }
 
   // 提问卡：同一条队列排队；questions 供代答用
-  requestAsk(toolCallId: string, questions: AskQuestion[], signal: AbortSignal): Promise<AskOutcome> {
+  requestAsk(
+    toolCallId: string,
+    questions: AskQuestion[],
+    signal: AbortSignal
+  ): Promise<AskOutcome> {
     return new Promise((resolve) => {
       if (signal.aborted) return resolve({ kind: 'aborted' })
       // 评估代答（按应答档案；应答器可能要调兜底模型，容许异步）
@@ -109,7 +114,13 @@ export class CardQueue {
       if (auto === 'answer' || auto === 'decline') {
         const o: AskOutcome =
           auto === 'answer'
-            ? { kind: 'answers', answers: questions.map((q) => ({ question: q.question, answer: q.options[0]?.label ?? null })) }
+            ? {
+                kind: 'answers',
+                answers: questions.map((q) => ({
+                  question: q.question,
+                  answer: q.options[0]?.label ?? null
+                }))
+              }
             : { kind: 'declined' }
         this.onAsk(toolCallId, o)
         return resolve(o)
@@ -118,7 +129,7 @@ export class CardQueue {
     })
   }
 
-  respond(toolCallId: string, decision: 'approved' | 'denied'): void {
+  respond(toolCallId: string, decision: 'approved' | 'denied' | 'always'): void {
     // 只认队首：一次只有一张活跃卡，防过期/重复点击
     const head = this.pending[0]
     if (head?.toolCallId !== toolCallId || head.kind !== 'auth') return
@@ -154,7 +165,11 @@ export class CardQueue {
   }
 }
 
-export function respondCard(streamId: string, toolCallId: string, decision: 'approved' | 'denied'): void {
+export function respondCard(
+  streamId: string,
+  toolCallId: string,
+  decision: 'approved' | 'denied' | 'always'
+): void {
   queues.get(streamId)?.respond(toolCallId, decision)
 }
 

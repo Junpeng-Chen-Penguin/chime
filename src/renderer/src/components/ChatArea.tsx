@@ -74,7 +74,7 @@ interface Props {
   onRetryServices: () => void
   onOpenSettings: () => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
-  onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
+  onRespondCard: (toolCallId: string, decision: 'approved' | 'denied' | 'always') => void
   onRespondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
   onOpenArtifact: (id: number, rows?: number[]) => void
   ws?: WsSelector // 工作空间选择器（015 Case 1）
@@ -432,7 +432,7 @@ function AssistantMsg({
   isLast: boolean
   onRetry: () => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
-  onRespondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
+  onRespondCard: (toolCallId: string, decision: 'approved' | 'denied' | 'always') => void
   onOpenArtifact: (id: number) => void
 }): React.JSX.Element {
   const streaming = m.status === 'streaming'
@@ -760,8 +760,12 @@ function GenericToolRow({
   // fetch_tool_result 为退役工具名，仅历史会话的旧调用行
   const isFetch =
     item.name === 'fetch_tool_result' || item.name === 'grep_result' || item.name === 'read_result'
-  // 文件工具（015 C2）：概要只给最后一段名字（Case 2 Feature 3「操作加对象」），完整路径在展开详情里
-  const isFs = item.name === 'read_file' || item.name === 'list_dir'
+  // 文件工具（015 C2/C3）：概要只给最后一段名字（「操作加对象」），完整路径在展开详情里
+  const isFs =
+    item.name === 'read_file' ||
+    item.name === 'list_dir' ||
+    item.name === 'write_file' ||
+    item.name === 'edit_file'
   // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")；取数工具用人话概要
   const firstArg = args.length ? args[0][1] : undefined
   const argPreview = isFs
@@ -916,22 +920,40 @@ function AuthCard({
   onRespond
 }: {
   item: Extract<TurnItem, { t: 'tool' }>
-  onRespond: (toolCallId: string, decision: 'approved' | 'denied') => void
+  onRespond: (toolCallId: string, decision: 'approved' | 'denied' | 'always') => void
 }): React.JSX.Element {
-  const respond = (d: 'approved' | 'denied'): void => {
+  const respond = (d: 'approved' | 'denied' | 'always'): void => {
     if (item.id) onRespond(item.id, d)
   }
-  // 申请授权卡（015 功能点 18，2026-08-17 验收拍板）：与工具授权卡同一张卡，只换问句——
-  // 问句带上要授权的文件夹名（授权对象是目录不是这一次调用）；操作与完整路径已在工具行展开
-  const question =
-    item.fsCard?.mode === 'ws-request'
-      ? `允许访问工作空间「${item.fsCard.dirs.map((d) => d.split('/').filter(Boolean).pop() ?? d).join('、')}」吗？`
-      : '允许执行这次操作吗？'
+  // 文件卡与工具卡同一张单行决策条（2026-08-17 验收拍板：授权卡样式全部统一），只换问句——
+  // 申请授权卡带文件夹名（授权对象是目录不是这一次调用）；写授权卡带操作类型与文件名，
+  // 覆盖已有文件加重标示（警示色）；完整路径与将写入的内容都在工具行的展开里
+  const fs = item.fsCard
+  const fname = fs?.path?.split('/').filter(Boolean).pop() ?? ''
+  const question: ReactNode =
+    fs?.mode === 'ws-request' ? (
+      `允许访问工作空间「${(fs.dirs ?? []).map((d) => d.split('/').filter(Boolean).pop() ?? d).join('、')}」吗？`
+    ) : fs?.mode === 'write' ? (
+      <>
+        允许
+        {fs.op === '覆盖' ? (
+          <span className="text-destructive">覆盖已有文件</span>
+        ) : fs.op === '新建' ? (
+          '新建文件'
+        ) : (
+          '修改文件'
+        )}
+        「{fname}」吗？
+      </>
+    ) : (
+      '允许执行这次操作吗？'
+    )
+  const isWrite = fs?.mode === 'write'
   return (
     <div className="ml-4 flex max-w-[440px] items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
       <div
         className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-foreground"
-        title={item.fsCard?.dirs.join('、')}
+        title={fs?.path ?? fs?.dirs?.join('、')}
       >
         <span className="size-[6px] flex-none animate-pulse rounded-full bg-primary" />
         <span className="min-w-0 truncate">{question}</span>
@@ -943,6 +965,15 @@ function AuthCard({
         >
           允许
         </button>
+        {/* 「总是允许」只在写授权卡出现（Case 3 功能点 2）：放行本次并记住该目录，本会话内有效 */}
+        {isWrite && (
+          <button
+            onClick={() => respond('always')}
+            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+          >
+            总是允许
+          </button>
+        )}
         <button
           onClick={() => respond('denied')}
           className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"

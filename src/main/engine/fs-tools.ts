@@ -1,7 +1,17 @@
-// 本地文件能力（015）。C1 落路径判定助手；C2 加读文件 / 列目录两个工具与申请授权卡；写/编辑在 C3 加入。
+// 本地文件能力（015）。C1 落路径判定助手；C2 读文件 / 列目录与申请授权卡；C3 写入 / 编辑与写授权卡。
 // 白名单语义：会话 ws_list（授权清单）∪ 技能库根目录；路径先 resolve 归一再判前缀，防「../」逃逸。
-import { existsSync, statSync, readFileSync, readdirSync, openSync, readSync, closeSync } from 'fs'
-import { resolve, basename, dirname, isAbsolute, join } from 'path'
+import {
+  existsSync,
+  statSync,
+  readFileSync,
+  readdirSync,
+  openSync,
+  readSync,
+  closeSync,
+  writeFileSync,
+  mkdirSync
+} from 'fs'
+import { resolve, basename, dirname, isAbsolute, join, relative } from 'path'
 import { app } from 'electron'
 import { tool, jsonSchema } from 'ai'
 import type { Tool } from 'ai'
@@ -43,9 +53,39 @@ function markRead(convId: string, abs: string): void {
   }
 }
 
+// 「已读过」是否仍有效：读过且磁盘现值与标记一致（Case 3 三个关键定义之一）
+function readFresh(convId: string, abs: string): boolean {
+  const m = readMarks.get(convId)?.get(abs)
+  if (!m) return false
+  try {
+    const st = statSync(abs)
+    return st.mtimeMs === m.mtime && st.size === m.size
+  } catch {
+    return false
+  }
+}
+
+// 写「总是允许」（Case 3）：会话级内存记录，挂在白名单目录上（含子目录命中），会话结束 / 应用重启即失效
+const alwaysDirs = new Map<string, Set<string>>()
+function alwaysHit(convId: string, abs: string): boolean {
+  const s = alwaysDirs.get(convId)
+  return !!s && coveredBy(abs, [...s])
+}
+function recordAlways(convId: string, abs: string): void {
+  // 记挂到覆盖目标的那个白名单目录（每目录至多一条）；兜底记文件所在目录
+  const dir = (getConversationWs(convId) ?? []).find((p) => coveredBy(abs, [p])) ?? dirname(abs)
+  let s = alwaysDirs.get(convId)
+  if (!s) alwaysDirs.set(convId, (s = new Set()))
+  s.add(resolve(dir))
+}
+
 // 拒绝申请授权的收场文案（功能点 20）：照 AUTH_DENIED 的写法——报错 + 行为指令一体
 export const WS_DENIED =
   '用户拒绝了这次访问申请，操作没有执行。不要重发同一个调用，也不要虚构文件内容；先在回复里明确告诉用户这件事没有做，需要时请用户从工作面板添加工作空间、或改用已授权工作空间内的路径，然后停下等用户指示。'
+
+// 拒绝写授权的收场文案（Case 3 功能点 3）
+export const WRITE_DENIED =
+  '用户拒绝了这次写入，文件没有改动。不要重发同一个调用，也不要谎称已写入；先在回复里明确告诉用户这件事没有做，可以调整方案再征询，或请用户手动处理，然后停下等用户指示。'
 
 // 文本判定：读头部 8KB 找 \0 字节，含则按二进制拒绝（git 同款启发式）
 function isBinary(abs: string): boolean {
@@ -63,6 +103,18 @@ const LINE_CHAR_LIMIT = 2000 // 单行超长截断（字符）
 const LIST_LIMIT = 100 // 列目录条数上限
 const LIST_DEPTH_MAX = 5
 
+const WRITE_TOOL_DESCRIPTION = `把完整内容写入工作空间内的文件：文件不存在即新建（父目录自动创建），已存在即整个覆盖。
+
+- path 必须是绝对路径；可用的工作空间目录（绝对路径）在系统提示词的环境信息里
+- 覆盖已有文件前必须先用 read_file 读过它（本会话内，且读后文件没被外部改过）
+- 修改已有文件优先用 edit_file 定点替换，不要整文件重写`
+
+const EDIT_TOOL_DESCRIPTION = `对工作空间内已有文件做定点替换：把 old_string 换成 new_string。
+
+- path 必须是绝对路径；编辑前必须先用 read_file 读过该文件（本会话内，且读后文件没被外部改过）
+- old_string 必须与文件原文精确一致（含缩进与换行；read_file 返回里的行号前缀不算内容），且在文件中唯一——不唯一时补足前后文，或传 replace_all 全部替换
+- 新建文件用 write_file`
+
 const READ_TOOL_DESCRIPTION = `读取工作空间内的文本文件，返回带行号的内容。
 
 - path 必须是绝对路径；可用的工作空间目录（绝对路径）在系统提示词的环境信息里
@@ -75,11 +127,14 @@ const LIST_TOOL_DESCRIPTION = `列出工作空间内某个目录的内容：目�
 - path 必须是绝对路径；可用的工作空间目录（绝对路径）在系统提示词的环境信息里
 - depth：递归层数（默认 1 只列一层，最多 ${LIST_DEPTH_MAX}）；超过 ${LIST_LIMIT} 条会截断并提示`
 
-// 申请授权卡载荷（挂在 tool item 上随落库，渲染层不反查主进程内存；C3 的写授权卡扩展 mode: 'write'）
+// 授权卡载荷（挂在 tool item 上随落库，渲染层不反查主进程内存）。
+// ws-request = 申请授权卡（C2）；write = 写授权卡三按钮（C3）。
+// 同一次调用可先后两张卡（白名单外的写：申请授权 → 写授权）= 同一 item 的 fsCard 随 item-update 切换
 export interface FsCard {
-  mode: 'ws-request'
-  dirs: string[] // 申请的目录（绝对路径），渲染层取 basename 展示
-  op: string // 触发申请的操作，如「读取 用例草稿.md」
+  mode: 'ws-request' | 'write'
+  dirs?: string[] // ws-request：申请的目录（绝对路径），渲染层取 basename 展示
+  op: string // ws-request：触发申请的操作，如「读取 用例草稿.md」；write：'新建' | '覆盖' | '修改'
+  path?: string // write：目标文件绝对路径
 }
 
 // 读文件 / 列目录（Case 2）。白名单外 → 拦截式申请授权卡（功能点 18）：
@@ -242,5 +297,162 @@ export function makeFsTools(opts: {
     }
   })
 
-  return { read_file, list_dir }
+  // ── 写入 / 编辑（Case 3）────────────────────────────────
+  // 返回里的相对路径：相对所属白名单目录（三个关键定义「工具返回与上下文」）
+  const relPath = (abs: string): string => {
+    const root = (getConversationWs(convId) ?? []).find((p) => coveredBy(abs, [p]))
+    return root ? relative(resolve(root), abs) || basename(abs) : basename(abs)
+  }
+  const lineCount = (text: string): number => {
+    if (!text) return 0
+    const all = text.split('\n')
+    if (all[all.length - 1] === '') all.pop()
+    return all.length
+  }
+  // 写授权判定（图二后半）：总是允许命中即免卡；否则弹写授权卡，'always' 放行本次并记住目录。
+  // 通过返回 null，未通过返回该次调用的收场结果
+  const ensureWriteAuth = async (
+    abs: string,
+    op: '新建' | '覆盖' | '修改',
+    toolCallId: string,
+    toolName: string
+  ): Promise<{ denied: string } | { interrupted: string } | null> => {
+    if (alwaysHit(convId, abs)) return null
+    onFsCard(toolCallId, { mode: 'write', op, path: abs })
+    const decision = await cards.request(toolCallId, signal, toolName)
+    if (decision === 'denied') return { denied: WRITE_DENIED }
+    if (decision === 'aborted') return { interrupted: INTERRUPT_NOT_STARTED }
+    if (decision === 'always') recordAlways(convId, abs)
+    return null
+  }
+  // 技能目录只读（图二第二判）：白名单校验会放行技能目录，写操作在其后单独拦
+  const skillReadonly = (abs: string): { error: string } | null =>
+    coveredBy(abs, [skillsRoot()])
+      ? { error: '技能目录只读，不能直接写入或修改。要改技能，请用户在设置里重新导入' }
+      : null
+
+  const write_file = tool({
+    description: WRITE_TOOL_DESCRIPTION,
+    inputSchema: jsonSchema<{ path: string; content: string }>({
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '要写入的文件的绝对路径' },
+        content: { type: 'string', description: '写入的完整内容（已有文件会被整个覆盖）' }
+      },
+      required: ['path', 'content']
+    }),
+    execute: async (args, { toolCallId }) => {
+      const a = (args ?? {}) as { path?: string; content?: string }
+      const bad = badPath(a.path)
+      if (bad) return bad
+      if (typeof a.content !== 'string')
+        return { error: '缺少 content 参数：请带上要写入的完整内容重新调用' }
+      const abs = resolve(a.path!)
+      const gate = await ensureAccess(
+        abs,
+        dirname(abs),
+        `写入 ${basename(abs)}`,
+        toolCallId,
+        'write_file'
+      )
+      if (gate) return gate
+      const ro = skillReadonly(abs)
+      if (ro) return ro
+      const exists = existsSync(abs)
+      if (exists && statSync(abs).isDirectory())
+        return { error: '这个路径是一个目录，不能作为文件写入' }
+      // 覆盖前置：本会话读过且磁盘没再变过，防止用旧内容的记忆覆盖新文件
+      if (exists && !readFresh(convId, abs))
+        return {
+          error:
+            '目标文件已存在且你在本会话内还没读过它（或读后它被改动过）。先用 read_file 读取，再决定怎么改；修改已有文件优先用 edit_file'
+        }
+      const auth = await ensureWriteAuth(abs, exists ? '覆盖' : '新建', toolCallId, 'write_file')
+      if (auth) return auth
+      mkdirSync(dirname(abs), { recursive: true })
+      writeFileSync(abs, a.content, 'utf8')
+      markRead(convId, abs) // 落盘后刷新「已读过」：紧接的 edit_file 不被自己的写拦下
+      return `${exists ? '已更新' : '已新建'} ${relPath(abs)}（${lineCount(a.content)} 行）`
+    }
+  })
+
+  const edit_file = tool({
+    description: EDIT_TOOL_DESCRIPTION,
+    inputSchema: jsonSchema<{
+      path: string
+      old_string: string
+      new_string: string
+      replace_all?: boolean
+    }>({
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '要编辑的文件的绝对路径' },
+        old_string: { type: 'string', description: '要替换的原文片段，须与文件内容精确一致且唯一' },
+        new_string: { type: 'string', description: '替换后的新内容' },
+        replace_all: {
+          type: 'boolean',
+          description: '原文片段出现多处时全部替换（默认只允许唯一匹配）'
+        }
+      },
+      required: ['path', 'old_string', 'new_string']
+    }),
+    execute: async (args, { toolCallId }) => {
+      const a = (args ?? {}) as {
+        path?: string
+        old_string?: string
+        new_string?: string
+        replace_all?: boolean
+      }
+      const bad = badPath(a.path)
+      if (bad) return bad
+      if (typeof a.old_string !== 'string' || typeof a.new_string !== 'string')
+        return {
+          error: '缺少 old_string / new_string 参数：请带上要替换的原文片段与新内容重新调用'
+        }
+      const abs = resolve(a.path!)
+      const gate = await ensureAccess(
+        abs,
+        dirname(abs),
+        `编辑 ${basename(abs)}`,
+        toolCallId,
+        'edit_file'
+      )
+      if (gate) return gate
+      const ro = skillReadonly(abs)
+      if (ro) return ro
+      if (!existsSync(abs))
+        return { error: `文件不存在：${abs}。新文件请用 write_file 写入，不要虚构编辑结果` }
+      if (statSync(abs).isDirectory()) return { error: '这个路径是一个目录，不是文件' }
+      if (!readFresh(convId, abs))
+        return {
+          error:
+            '你在本会话内还没读过这个文件（或读后它被改动过）。先用 read_file 读取当前内容，再按原文编辑'
+        }
+      if (a.old_string === a.new_string)
+        return { error: '编辑无效：old_string 与 new_string 相同，没有任何改动' }
+      const before = readFileSync(abs, 'utf8')
+      const n = before.split(a.old_string).length - 1
+      if (a.old_string === '' || n === 0)
+        return {
+          error:
+            '旧片段在文件中找不到。请重新 read_file 核对原文（返回里的行号前缀不算内容），按文件里的实际文本重新调用'
+        }
+      if (n > 1 && !a.replace_all)
+        return {
+          error: `旧片段在文件中出现 ${n} 处，无法定点替换。请补足前后文让它唯一，或传 replace_all 全部替换`
+        }
+      const auth = await ensureWriteAuth(abs, '修改', toolCallId, 'edit_file')
+      if (auth) return auth
+      const after = a.replace_all
+        ? before.split(a.old_string).join(a.new_string)
+        : before.replace(a.old_string, a.new_string)
+      writeFileSync(abs, after, 'utf8')
+      markRead(convId, abs)
+      const b = lineCount(before)
+      const c = lineCount(after)
+      return `已更新 ${relPath(abs)}（替换 ${a.replace_all ? n : 1} 处${b === c ? `，${c} 行` : `，${b} 行 → ${c} 行`}）`
+    }
+  })
+
+  return { read_file, list_dir, write_file, edit_file }
 }

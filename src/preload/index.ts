@@ -56,11 +56,11 @@ const api = {
   retryChat: (payload: { streamId: string; convId: string; model: string }) =>
     ipcRenderer.send('chat:retry', payload),
   stopChat: (streamId: string) => ipcRenderer.send('chat:stop', streamId),
-  // 授权卡回应（同意 / 拒绝）
+  // 授权卡回应（同意 / 拒绝；写授权卡另有「总是允许」）
   cardRespond: (payload: {
     streamId: string
     toolCallId: string
-    decision: 'approved' | 'denied'
+    decision: 'approved' | 'denied' | 'always'
   }) => ipcRenderer.send('chat:card-response', payload),
   // 提问卡回应（作答 / 直接打字 / 放弃整卡）
   askRespond: (payload: { streamId: string; toolCallId: string; outcome: unknown }) =>

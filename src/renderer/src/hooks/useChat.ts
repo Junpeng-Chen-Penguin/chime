@@ -43,7 +43,7 @@ export interface ChatHandle {
   ) => void
   stop: () => void
   retry: (convId: string, model: string) => void
-  respondCard: (toolCallId: string, decision: 'approved' | 'denied') => void
+  respondCard: (toolCallId: string, decision: 'approved' | 'denied' | 'always') => void
   respondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
   interruptAskAndSend: (convId: string, model: string, text: string, refs?: RefItem[]) => void
 }
@@ -234,10 +234,13 @@ export function useChat(onChange?: () => void): ChatHandle {
   }, [])
 
   // 授权卡回应：路由到当前流（等待期间没有活跃请求，但轮未结束、streamId 仍有效）
-  const respondCard = useCallback((toolCallId: string, decision: 'approved' | 'denied') => {
-    const r = routeRef.current
-    if (r) window.api.cardRespond({ streamId: r.streamId, toolCallId, decision })
-  }, [])
+  const respondCard = useCallback(
+    (toolCallId: string, decision: 'approved' | 'denied' | 'always') => {
+      const r = routeRef.current
+      if (r) window.api.cardRespond({ streamId: r.streamId, toolCallId, decision })
+    },
+    []
+  )
 
   // 提问卡回应（作答 / 放弃整卡）
   const respondAsk = useCallback((toolCallId: string, outcome: AskOutcomePayload) => {

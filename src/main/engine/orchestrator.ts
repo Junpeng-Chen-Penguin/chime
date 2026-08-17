@@ -291,7 +291,7 @@ async function streamCore(core: {
   const earlyAuth = new Map<string, 'approved' | 'denied' | 'unanswered'>()
   const earlyAsk = new Map<string, Extract<TurnItem, { t: 'tool' }>['ask']>()
   const authOf = (d: CardDecision): 'approved' | 'denied' | 'unanswered' =>
-    d === 'aborted' ? 'unanswered' : d
+    d === 'aborted' ? 'unanswered' : d === 'always' ? 'approved' : d // 「总是允许」的记录动作在发起处，这里只是状态展示
   const askOf = (o: AskOutcome): Extract<TurnItem, { t: 'tool' }>['ask'] =>
     o.kind === 'answers'
       ? { state: 'answered', answers: o.answers }

@@ -17,7 +17,17 @@ export const BUILTIN_TOOLS: BuiltinToolEntry[] = [
   },
   { name: 'read_result', display: '读结果集', desc: '按定位到的位置，读取该段落的完整原文' },
   { name: 'read_file', display: '读取文件', desc: '读取工作空间里的文本文件内容' },
-  { name: 'list_dir', display: '列出目录', desc: '查看工作空间目录里有哪些文件' }
+  { name: 'list_dir', display: '列出目录', desc: '查看工作空间目录里有哪些文件' },
+  {
+    name: 'write_file',
+    display: '写入文件',
+    desc: '把内容写进工作空间里的文件，写入前征求你的同意'
+  },
+  {
+    name: 'edit_file',
+    display: '编辑文件',
+    desc: '对工作空间里的文件做定点修改，修改前征求你的同意'
+  }
 ]
 
 export function builtinDisplay(name: string): string | undefined {

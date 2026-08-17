@@ -71,8 +71,8 @@ export type TurnItem =
         state: 'pending' | 'answered' | 'skipped' | 'unanswered'
         answers?: { question: string; answer: string | null }[]
       }
-      // 申请授权卡载荷（015 C2，仅文件工具白名单外的调用有）
-      fsCard?: { mode: 'ws-request'; dirs: string[]; op: string }
+      // 文件工具授权卡载荷（015 C2/C3）：ws-request = 申请授权卡；write = 写授权卡（op 为新建/覆盖/修改）
+      fsCard?: { mode: 'ws-request' | 'write'; dirs?: string[]; op: string; path?: string }
       args: Record<string, unknown>
       result?: SearchToolResult | GenericToolResult
       resultRef?: number // 超限结果的结果编号（result 存摘要，全量在结果库）
@@ -275,7 +275,7 @@ export interface ChimeApi {
   cardRespond: (payload: {
     streamId: string
     toolCallId: string
-    decision: 'approved' | 'denied'
+    decision: 'approved' | 'denied' | 'always'
   }) => void
   askRespond: (payload: {
     streamId: string
