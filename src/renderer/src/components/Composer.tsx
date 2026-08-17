@@ -565,28 +565,11 @@ export default function Composer({
             </div>
           </div>
         </div>
-        {/* 工作空间选择器（015 Case 1）：输入框下方。未定格可勾选；定格后只读，失效时变警告 */}
-        {ws && (
+        {/* 工作空间选择器（015 Case 1）：输入框下方，只在未定格（首条消息前）显示——
+            定格后隐藏，查看与添加统一走工作面板（2026-08-17 验收拍板） */}
+        {ws && ws.frozen === null && (
           <div className="relative mt-2 mr-3 inline-block align-middle">
-            {ws.frozen !== null ? (
-              (() => {
-                const miss = ws.frozen.filter((e) => e.missing).length
-                if (!ws.frozen.length) return null
-                return (
-                  <span
-                    className={cn(
-                      'inline-flex cursor-default items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-2.5 py-1 text-[12px]',
-                      miss ? 'border-amber-300 text-amber-700' : 'text-muted-foreground'
-                    )}
-                  >
-                    {miss ? <TriangleAlert className="size-3.5" /> : <Folder className="size-3.5" />}
-                    {miss
-                      ? `${miss} 个工作空间已失效`
-                      : `${ws.frozen[0].name}${ws.frozen.length > 1 ? ` +${ws.frozen.length - 1}` : ''}`}
-                  </span>
-                )
-              })()
-            ) : (
+            {(
               <>
                 <button
                   onClick={() => {
