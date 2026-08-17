@@ -13,7 +13,6 @@ import {
   Info,
   Sparkles,
   FileText,
-  Folder,
   Table,
   Table2,
   X
@@ -922,45 +921,20 @@ function AuthCard({
   const respond = (d: 'approved' | 'denied'): void => {
     if (item.id) onRespond(item.id, d)
   }
-  // 申请授权卡（015 功能点 18）：同一骨架样式，信息区换成文件夹名称 + 触发申请的操作
-  if (item.fsCard?.mode === 'ws-request') {
-    return (
-      <div className="ml-4 flex max-w-[440px] flex-col gap-2.5 rounded-xl border border-border bg-background px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
-        <div className="flex items-center gap-2 text-[13px] font-medium text-foreground">
-          <span className="size-[6px] flex-none animate-pulse rounded-full bg-primary" />
-          模型申请访问工作空间
-        </div>
-        <div className="flex flex-col gap-1.5">
-          {item.fsCard.dirs.map((d) => (
-            <div key={d} title={d} className="flex items-center gap-2 text-[13px] text-foreground">
-              <Folder className="size-4 flex-none text-muted-foreground" />
-              <span className="min-w-0 truncate">{d.split('/').filter(Boolean).pop() ?? d}</span>
-            </div>
-          ))}
-          <div className="text-[13px] text-muted-foreground">操作：{item.fsCard.op}</div>
-        </div>
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={() => respond('denied')}
-            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
-          >
-            拒绝
-          </button>
-          <button
-            onClick={() => respond('approved')}
-            className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >
-            允许
-          </button>
-        </div>
-      </div>
-    )
-  }
+  // 申请授权卡（015 功能点 18，2026-08-17 验收拍板）：与工具授权卡同一张卡，只换问句——
+  // 问句带上要授权的文件夹名（授权对象是目录不是这一次调用）；操作与完整路径已在工具行展开
+  const question =
+    item.fsCard?.mode === 'ws-request'
+      ? `允许访问工作空间「${item.fsCard.dirs.map((d) => d.split('/').filter(Boolean).pop() ?? d).join('、')}」吗？`
+      : '允许执行这次操作吗？'
   return (
     <div className="ml-4 flex max-w-[440px] items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
-      <div className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+      <div
+        className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-foreground"
+        title={item.fsCard?.dirs.join('、')}
+      >
         <span className="size-[6px] flex-none animate-pulse rounded-full bg-primary" />
-        允许执行这次操作吗？
+        <span className="min-w-0 truncate">{question}</span>
       </div>
       <div className="flex flex-none gap-2">
         <button
