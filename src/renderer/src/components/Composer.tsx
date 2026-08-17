@@ -171,9 +171,18 @@ export default function Composer({
   const kbUnavailable = kbSel.filter((s) => kbStatusOf(s).dot === 'red').length
 
   return (
-    // 输入框比对话流宽（840 > 内容 760），像托着对话；带柔和阴影浮起，不再是单纯描边
+    // 输入框比对话流宽（840 > 内容 760），像托着对话；带柔和阴影浮起，不再是单纯描边。
+    // 未定格时外面套一层连体壳（照 Claude 桌面端）：输入卡片 + 底部工作空间栏同属一张卡，
+    // 体现「对同一个会话的设置」；定格后底栏消失，壳的样式一并去掉
     <div className="flex-none pt-2 pb-4">
       <div className="mx-auto w-full max-w-[840px] px-8">
+        <div
+          className={cn(
+            ws &&
+              ws.frozen === null &&
+              'rounded-[22px] border border-border/60 bg-black/[0.025] shadow-[0_1px_3px_rgba(0,0,0,0.03),0_8px_28px_-10px_rgba(0,0,0,0.10)]'
+          )}
+        >
         <div className="rounded-2xl border border-input bg-background shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_28px_-8px_rgba(0,0,0,0.14)] transition focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15">
           {/* 待发送的表格行引用（013 Case 2）：横排、放不下换行；不带序号——一个制品
               最多一个 chip，模型与用户都靠标题分辨。点击回看（模块三）尚未接上 */}
@@ -565,27 +574,27 @@ export default function Composer({
             </div>
           </div>
         </div>
-        {/* 工作空间选择器（015 Case 1）：输入框下方，只在未定格（首条消息前）显示——
+        {/* 工作空间底栏（015 Case 1）：连体壳的下半部分，只在未定格（首条消息前）显示——
             定格后隐藏，查看与添加统一走工作面板（2026-08-17 验收拍板） */}
         {ws && ws.frozen === null && (
-          <div className="relative mt-2 mr-3 inline-block align-middle">
-            {(
+          <div className="flex items-center gap-3 px-4 py-2">
+            <div className="relative">
               <>
                 <button
                   onClick={() => {
-                    if (sending) return // 首轮进行中（授权卡等待期）不再改选
+                    if (sending) return // 首轮进行中不再改选
                     setWsQuery('')
                     setWsOpen((o) => !o)
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  className="flex items-center gap-1.5 text-[13px] text-foreground/75 transition-colors hover:text-foreground"
                 >
-                  <Folder className="size-3.5" />
+                  <Folder className="size-4" />
                   {ws.checked.length
                     ? `${ws.entries.find((e) => e.path === ws.checked[0])?.name ?? ws.checked[0].split('/').pop()}${
                         ws.checked.length > 1 ? ` +${ws.checked.length - 1}` : ''
                       }`
                     : '选择工作空间'}
-                  <ChevronDown className="size-3.5" />
+                  <ChevronDown className="size-3.5 text-muted-foreground" />
                 </button>
                 {wsOpen && (
                   <>
@@ -612,7 +621,11 @@ export default function Composer({
                           .map((e) => (
                             <button
                               key={e.path}
-                              onClick={() => ws.onToggle(e.path)}
+                              onClick={() => {
+                                // 未勾选项点击会弹授权确认：菜单先收起（允许后即添加成功，不留着菜单）
+                                if (!ws.checked.includes(e.path)) setWsOpen(false)
+                                ws.onToggle(e.path)
+                              }}
                               className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-muted"
                             >
                               <Folder className="size-3.5 flex-none text-muted-foreground" />
@@ -647,12 +660,13 @@ export default function Composer({
                   </>
                 )}
               </>
-            )}
+            </div>
             {ws.notice && (
-              <span className="ml-2 text-[12px] text-muted-foreground">{ws.notice}</span>
+              <span className="text-[12px] text-muted-foreground">{ws.notice}</span>
             )}
           </div>
         )}
+        </div>
         {/* 会话累计用量（PRD Case 5）：左对齐，悬停看拆分；无正常轮次时不显示 */}
         {sessionUsage && (
           <div className="group relative mt-2 inline-block text-[11px] text-muted-foreground">
