@@ -53,7 +53,20 @@ export function WorkContent({
 
       {(ws.length > 0 || frozen) && (
         <div>
-          <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">工作空间</div>
+          {/* 添加入口与标题同一行（验收意见 #6） */}
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[12px] font-medium text-muted-foreground">工作空间</span>
+            {frozen && (
+              <button
+                onClick={onAddWs}
+                title="添加工作空间"
+                className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <FolderPlus className="size-3.5" />
+                添加
+              </button>
+            )}
+          </div>
           <div className="flex flex-col">
             {ws.map((e) => (
               <div
@@ -83,15 +96,6 @@ export function WorkContent({
               </div>
             ))}
           </div>
-          {frozen && (
-            <button
-              onClick={onAddWs}
-              className="mt-1 flex w-full items-center gap-2 rounded-lg border-t border-border px-2 pt-2.5 pb-1.5 text-left text-[13px] text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <FolderPlus className="size-4 flex-none" />
-              添加
-            </button>
-          )}
         </div>
       )}
     </div>

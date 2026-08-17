@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
-import { PanelLeft, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, FolderOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText, Bot, ChevronLeft, Trash2, X } from 'lucide-react'
+import { PanelLeft, Eye, EyeOff, Check, Loader2, Boxes, BookOpen, FolderOpen, Plus, MoreHorizontal, Wrench, Search, MessageCircleQuestion, Table2, TextSearch, FileText, Bot, ChevronLeft, Trash2, TriangleAlert, X } from 'lucide-react'
 import { estimateTokensBase } from '../../../shared/tokens'
 import { BUILTIN_TOOLS } from '../../../shared/builtinTools'
 import deepseekIcon from '@/assets/vendors/deepseek.png'
@@ -1376,6 +1376,12 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
     setFormWsSel(a?.wsSel ?? [])
     setFormSkillSel(a?.skillSel ?? [])
     setWsMissing(a?.wsMissing ?? [])
+    // 失效状态现查（验收意见 #2：列表缓存慢一拍——目录刚在磁盘上改名，第一次进来要立即看到）
+    if (a)
+      void window.api.agentList().then((l) => {
+        const fresh = l.find((x) => x.id === a.id)
+        if (fresh) setWsMissing(fresh.wsMissing ?? [])
+      })
     setWsError('')
     formInit.current = {
       name: a?.name ?? '',
@@ -1491,7 +1497,12 @@ function AgentPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }):
                         <div key={p} className="group flex items-center gap-2 py-1 text-[13px]">
                           <FolderOpen className="size-4 flex-none text-muted-foreground" />
                           <span className="flex-none">{name}</span>
-                          {missing && <span className="flex-none text-[11px] text-amber-700">已失效</span>}
+                          {missing && (
+                            <span className="flex flex-none items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700">
+                              <TriangleAlert className="size-3" />
+                              已失效
+                            </span>
+                          )}
                           <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">{p}</span>
                           <button
                             onClick={() => {

@@ -29,7 +29,6 @@ export interface WsSelector {
   frozen: WsUiEntry[] | null // 定格后的授权清单；null = 未定格（首条消息前，可自由勾选）
   entries: WsUiEntry[] // 菜单清单：全局最近使用 ∪ 本会话新加 ∪ Agent 默认
   checked: string[] // 当前选中（用户勾的 + Agent 默认的）
-  notice?: string | null // 轻提示（「已在授权范围内」）
   onToggle: (path: string) => void
   onAddFolder: () => void
 }
@@ -611,14 +610,24 @@ export default function Composer({
                         />
                       </div>
                       <div className="max-h-[220px] overflow-y-auto py-1">
-                        {ws.entries
-                          .filter(
+                        {(() => {
+                          const q = wsQuery.trim().toLowerCase()
+                          const hits = ws.entries.filter(
                             (e) =>
-                              !wsQuery ||
-                              e.name.toLowerCase().includes(wsQuery.toLowerCase()) ||
-                              e.path.toLowerCase().includes(wsQuery.toLowerCase())
+                              !q ||
+                              e.name.toLowerCase().includes(q) ||
+                              e.path.toLowerCase().includes(q)
                           )
-                          .map((e) => (
+                          // 空清单与搜索无匹配是两个态，各给各的话（验收意见 #3）
+                          if (!hits.length)
+                            return (
+                              <div className="px-2 py-2.5 text-[12px] text-muted-foreground">
+                                {ws.entries.length
+                                  ? `未找到与「${wsQuery.trim()}」匹配的工作空间`
+                                  : '暂无可选的工作空间，可在下方添加本地文件夹'}
+                              </div>
+                            )
+                          return hits.map((e) => (
                             <button
                               key={e.path}
                               onClick={() => {
@@ -637,12 +646,8 @@ export default function Composer({
                                 <Check className="size-3.5 flex-none text-foreground" />
                               )}
                             </button>
-                          ))}
-                        {!ws.entries.length && (
-                          <div className="px-2 py-2 text-[12px] text-muted-foreground">
-                            还没有用过的工作空间
-                          </div>
-                        )}
+                          ))
+                        })()}
                       </div>
                       <div className="border-t border-border pt-1">
                         <button
@@ -661,9 +666,6 @@ export default function Composer({
                 )}
               </>
             </div>
-            {ws.notice && (
-              <span className="text-[12px] text-muted-foreground">{ws.notice}</span>
-            )}
           </div>
         )}
         </div>

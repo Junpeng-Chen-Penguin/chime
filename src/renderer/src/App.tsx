@@ -64,10 +64,10 @@ function App(): React.JSX.Element {
   const [wsRecent, setWsRecent] = useState<WsEntry[]>([]) // 全局清单（最近使用在前）
   const [wsLocalAdds, setWsLocalAdds] = useState<Record<string, WsEntry[]>>({}) // 本会话新加的本地文件夹（定格时才进全局清单）
   const [wsFrozen, setWsFrozen] = useState<Record<string, WsEntry[] | null>>({}) // 定格后的授权清单
-  const [wsNotice, setWsNotice] = useState<string | null>(null) // 「已在授权范围内」一类的轻提示
   // 工作空间授权弹窗（2026-08-17 拍板）：授权发生在进入选中集合那一刻——勾选清单项、Agent 带入默认、
   // 亲手选文件夹，一律先弹确认；允许即勾上，拒绝即不勾（想要就再勾一次重新授权）。首条消息不再有授权卡
   const [wsAuthAsk, setWsAuthAsk] = useState<{ names: string[]; onOk: () => void } | null>(null)
+  const [wsDupAlert, setWsDupAlert] = useState(false) // 判重提示弹窗（验收意见：页面文案易被忽略）
   const [workArtifacts, setWorkArtifacts] = useState<Record<string, WorkArtifact[]>>({})
   // 服务连接状态（输入框工具菜单用）：启动加载 + mcp:status 事件刷新
   const [services, setServices] = useState<
@@ -306,10 +306,6 @@ function App(): React.JSX.Element {
     }
     return out
   })()
-  const notify = (t: string): void => {
-    setWsNotice(t)
-    window.setTimeout(() => setWsNotice(null), 2500)
-  }
   const coveredByChecked = (path: string): boolean =>
     wsChecked.some((p) => path === p || path.startsWith(p + '/'))
   // 授权即勾选（2026-08-17 拍板）：任何目录进入选中集合前弹确认，允许才执行 apply
@@ -355,7 +351,7 @@ function App(): React.JSX.Element {
     const p = await window.api.kbPickFolder()
     if (!p) return
     if (coveredByChecked(p)) {
-      notify('已在授权范围内')
+      setWsDupAlert(true)
       return
     }
     askWsAuth([p], () => {
@@ -379,7 +375,7 @@ function App(): React.JSX.Element {
       void (async () => {
         const r = await window.api.wsAdd({ id: activeId, path: p })
         if (!r.ok && r.reason === 'covered') {
-          notify('已在授权范围内')
+          setWsDupAlert(true)
           return
         }
         const list = await window.api.getConversationWs(activeId)
@@ -565,7 +561,6 @@ function App(): React.JSX.Element {
           frozen: frozenWs,
           entries: wsEntries,
           checked: wsChecked,
-          notice: wsNotice,
           onToggle: toggleWs,
           onAddFolder: () => void addWsFolder()
         }}
@@ -673,6 +668,18 @@ function App(): React.JSX.Element {
           setWsAuthAsk(null)
         }}
         onCancel={() => setWsAuthAsk(null)}
+      />
+
+      {/* 判重提示（验收意见 #1）：弹窗告知，不用页面文案 */}
+      <ConfirmDialog
+        open={wsDupAlert}
+        title="已在授权范围内"
+        body="所选文件夹与已添加的工作空间重复，或是其中某个的子文件夹，无需重复添加。"
+        confirmText="知道了"
+        confirmVariant="default"
+        alertOnly
+        onConfirm={() => setWsDupAlert(false)}
+        onCancel={() => setWsDupAlert(false)}
       />
 
       {/* 设置里有未保存内容时的离开确认（Case 1 功能点 5）；取消即留在设置页继续编辑 */}

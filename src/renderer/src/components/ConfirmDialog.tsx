@@ -8,6 +8,7 @@ interface Props {
   confirmText: string
   cancelText?: string // 缺省「取消」
   confirmVariant?: 'default' | 'destructive' // 缺省 destructive（既有调用方全是删除类确认）
+  alertOnly?: boolean // 仅告知：只有确认键（如「已在授权范围内」），Esc 与确认同效
   onConfirm: () => void
   onCancel: () => void
 }
@@ -19,6 +20,7 @@ export default function ConfirmDialog({
   confirmText,
   cancelText,
   confirmVariant,
+  alertOnly,
   onConfirm,
   onCancel
 }: Props): React.JSX.Element | null {
@@ -48,9 +50,11 @@ export default function ConfirmDialog({
         <div className="mb-2 text-[15px] font-semibold">{title}</div>
         <div className="mb-5 text-[13px] leading-[1.6] text-muted-foreground">{body}</div>
         <div className="flex justify-end gap-2.5">
-          <Button variant="outline" onClick={onCancel} className="h-9">
-            {cancelText ?? '取消'}
-          </Button>
+          {!alertOnly && (
+            <Button variant="outline" onClick={onCancel} className="h-9">
+              {cancelText ?? '取消'}
+            </Button>
+          )}
           <Button variant={confirmVariant ?? 'destructive'} onClick={onConfirm} className="h-9">
             {confirmText}
           </Button>
