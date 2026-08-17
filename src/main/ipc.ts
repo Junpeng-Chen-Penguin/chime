@@ -170,7 +170,7 @@ export function registerIpc(): void {
         text: string
         model: string
         refs?: { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }[]
-        // 015 Case 1：首条消息随带工作空间选中集合（picked = 用户自己勾的，弹卡确认；fromAgent = Agent 默认，免卡）
+        // 015 Case 1：首条消息随带工作空间选中集合（picked 与 fromAgent 合并后全部上授权卡统一确认）
         ws?: { picked: string[]; fromAgent: string[] }
       }
     ) => {

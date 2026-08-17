@@ -149,7 +149,7 @@ export async function runTurn(opts: {
   emit: Emit
   saveUser?: boolean // 重试时为 false：用户消息已在库里，不重复写
   refs?: TurnItem[] // 表格行引用 chip（013 Case 2）：随用户消息落库，历史组装时展开
-  // 015 Case 1：首条消息随带的工作空间选中集合（picked = 用户勾的，要弹卡；fromAgent = Agent 默认，免卡）。
+  // 015 Case 1：首条消息随带的工作空间选中集合（合并后全部上授权卡统一确认，Agent 默认值不构成授权）。
   // 已定格（ws_list 非 NULL）的会话忽略此字段
   ws?: { picked: string[]; fromAgent: string[] }
 }): Promise<void> {
@@ -321,20 +321,24 @@ async function streamCore(core: {
   )
 
   // 工作空间授权与定格（015 Case 1）：ws_list 为 NULL 即未定格（会话第一次跑轮）。
-  // 用户自己勾的目录弹一张卡统一确认（两按钮），Agent 默认的免卡（授权随 Agent 配置，关键设计三）；
-  // 处理完把当前集合复制为会话授权清单，从此归会话所有。授权不跨会话，无持久记录。
+  // 当前选中的全部工作空间（含 Agent 默认勾选的）弹一张卡统一确认（两按钮）——
+  // Agent 配置只是默认勾选值，不构成授权，授权一律在会话内确认（2026-08-17 拍板）。
+  // 处理完把结果复制为会话授权清单，从此归会话所有。授权不跨会话，无持久记录。
   if (getConversationWs(convId) === null) {
-    const picked = [...new Set((core.ws?.picked ?? []).map((x) => resolve(x)))]
-    const fromAgent = [
-      ...new Set((core.ws?.fromAgent ?? agent?.wsSel ?? []).map((x) => resolve(x)))
-    ].filter((x) => !picked.includes(x))
-    let granted = fromAgent
-    if (picked.length) {
+    const allSel = [
+      ...new Set(
+        [...(core.ws?.picked ?? []), ...(core.ws?.fromAgent ?? agent?.wsSel ?? [])].map((x) =>
+          resolve(x)
+        )
+      )
+    ]
+    let granted: string[] = []
+    if (allSel.length) {
       const callId = `ws-${streamId}`
       const wsItem: Extract<TurnItem, { t: 'ws-auth' }> = {
         t: 'ws-auth',
         id: callId,
-        dirs: picked,
+        dirs: allSel,
         state: 'pending'
       }
       startItem('ws-auth', wsItem)
@@ -354,7 +358,7 @@ async function streamCore(core: {
       wsItem.state = decision
       emit({ type: 'item-update', streamId, index: wsIdx, item: wsItem })
       persistWaiting()
-      if (decision === 'approved') granted = [...fromAgent, ...picked]
+      if (decision === 'approved') granted = allSel
     }
     setConversationWs(convId, granted)
     if (granted.length) touchWsRecent(granted)
