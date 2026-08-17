@@ -44,6 +44,7 @@ import {
   STEP_COUNT_LIMIT,
   type TurnToolContext
 } from './tools'
+import { makeFsTools, type FsCard } from './fs-tools'
 import { sessionFullResultChars, applyTotalGate, type OverflowCtx } from './overflow'
 import {
   CardQueue,
@@ -120,7 +121,11 @@ function deriveAgent(convId: string): AgentRow | null {
   return agentId === null ? null : getAgent(agentId)
 }
 
-function deriveKbEnv(convId: string, agent: AgentRow | null, notice?: (text: string) => void): KbEnv | null {
+function deriveKbEnv(
+  convId: string,
+  agent: AgentRow | null,
+  notice?: (text: string) => void
+): KbEnv | null {
   // 知识库来源两条：历史会话自带的 kb_selection + Agent 挂的（合并去重；Agent 会话通常只有后者）
   const own = getConversationKbSelection(convId)
   const sel = [...own, ...(agent?.kbSel ?? []).filter((a) => !own.some((o) => o.id === a.id))]
@@ -320,6 +325,22 @@ async function streamCore(core: {
     }
   )
 
+  // 申请授权卡载荷（015 C2）：文件工具 execute 判定白名单外时挂载载荷并置 pending（弹卡即落库）。
+  // 与 earlyAuth 同因：execute 的判定可能先于 tool-call 事件到达消费循环
+  const earlyFsCard = new Map<string, FsCard>()
+  const onFsCard = (toolCallId: string, card: FsCard): void => {
+    const idx = toolItemIndex.get(toolCallId)
+    if (idx === undefined) {
+      earlyFsCard.set(toolCallId, card)
+      return
+    }
+    const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
+    item.fsCard = card
+    item.auth = 'pending'
+    persistWaiting()
+    emit({ type: 'item-update', streamId, index: idx, item })
+  }
+
   // 工作空间定格（015 Case 1，2026-08-17 拍板修订）：授权已在目录进入选中集合那一刻由界面弹窗完成
   //（勾选清单项、Agent 带入默认、亲手选文件夹都先确认），首条消息静默把选中集合复制为会话授权清单。
   // 驱动会话（--eval）无界面：Agent 默认目录随创建定格即授权（驱动线预期）。授权不跨会话，无持久记录
@@ -357,11 +378,22 @@ async function streamCore(core: {
   turnTools[ARTIFACT_TOOL_NAME] = makeArtifactTool(convId, (toolCallId, info) =>
     artifacts.set(toolCallId, info)
   )
+  // 文件工具（015 C2 读/列；C3 加写/编辑）：无条件挂载，白名单校验在 execute 内
+  Object.assign(
+    turnTools,
+    makeFsTools({ convId, signal: controller.signal, cards, overflow, onFsCard })
+  )
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
   // 已启用但连不上的服务：工具静默不挂载，不进对话流提醒（07-13 修订——状态常驻输入框标识，与主流一致）
 
   // 组装：系统提示词（身份段 + 固定主干 + 输出约定 +（关联知识库）条件段 + 环境信息）+ 消息序列
-  const system = buildSystemPrompt(kbEnv, getMcpInstructions(mcpSelection), agent?.prompt ?? null)
+  // 会话授权目录清单进环境信息（Case 2）：定格块已跑过，此处非 NULL；轮内申请授权通过的下一轮生效
+  const system = buildSystemPrompt(
+    kbEnv,
+    getMcpInstructions(mcpSelection),
+    agent?.prompt ?? null,
+    getConversationWs(convId) ?? []
+  )
   const budget = budgetFor(model)
   // 历史加载放在 turnTools 组装之后（014 Case 5）：把本轮实际挂载的工具名传进去，
   // 已消失的工具在历史返回里标「已不可用」——模型会把历史当成当前能力的依据（实测）
@@ -558,13 +590,18 @@ async function streamCore(core: {
           // 工具步骤无 delta：item-start 即「执行中」；需授权/提问的调用初始为 pending（排队/弹卡由渲染层从 items 推导）
           const meta = mcp.meta.get(part.toolName)
           const isAsk = part.toolName === ASK_TOOL_NAME
+          const fsEarly = earlyFsCard.get(part.toolCallId) // 文件工具的申请授权卡先于本事件挂载时
           startItem('tool', {
             t: 'tool',
             name: part.toolName,
             id: part.toolCallId,
             display: builtinDisplay(part.toolName) ?? meta?.display,
             desc: meta?.needsAuth ? meta.desc : undefined,
-            auth: meta?.needsAuth ? (earlyAuth.get(part.toolCallId) ?? 'pending') : undefined,
+            auth:
+              meta?.needsAuth || fsEarly
+                ? (earlyAuth.get(part.toolCallId) ?? 'pending')
+                : undefined,
+            fsCard: fsEarly,
             ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
             args: (part.input ?? {}) as Record<string, unknown>
           })
@@ -596,7 +633,11 @@ async function streamCore(core: {
           const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
           // 提问卡被校验拦下（014 Case 7）：卡片没弹出，tool-call 时预置的 pending 状态必须收掉，
           // 否则界面留一张永远等不到回应的假卡，且落库后重开会话还在
-          if (item.name === ASK_TOOL_NAME && typeof part.output === 'string' && part.output.startsWith('这次提问没有发出'))
+          if (
+            item.name === ASK_TOOL_NAME &&
+            typeof part.output === 'string' &&
+            part.output.startsWith('这次提问没有发出')
+          )
             delete item.ask
           // 超限结果：item 存摘要（全量在结果库），resultRef 指向结果编号
           item.result = lateSummaries.get(part.toolCallId) ?? part.output

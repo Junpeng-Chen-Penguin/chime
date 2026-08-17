@@ -10,8 +10,14 @@ export const BUILTIN_TOOLS: BuiltinToolEntry[] = [
   { name: 'search_knowledge_base', display: '检索知识库', desc: '在你选用的知识库中查找业务资料' },
   { name: 'ask_user_question', display: '询问用户', desc: '缺少关键信息时弹出选择卡片让你定夺' },
   { name: 'create_artifact', display: '生成制品', desc: '成批数据整理成表格，在侧板查看全貌' },
-  { name: 'grep_result', display: '搜结果集', desc: '一次取回的资料超出篇幅时，按关键词定位到相关段落' },
-  { name: 'read_result', display: '读结果集', desc: '按定位到的位置，读取该段落的完整原文' }
+  {
+    name: 'grep_result',
+    display: '搜结果集',
+    desc: '一次取回的资料超出篇幅时，按关键词定位到相关段落'
+  },
+  { name: 'read_result', display: '读结果集', desc: '按定位到的位置，读取该段落的完整原文' },
+  { name: 'read_file', display: '读取文件', desc: '读取工作空间里的文本文件内容' },
+  { name: 'list_dir', display: '列出目录', desc: '查看工作空间目录里有哪些文件' }
 ]
 
 export function builtinDisplay(name: string): string | undefined {

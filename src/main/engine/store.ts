@@ -33,6 +33,8 @@ export type TurnItem =
         state: 'pending' | 'answered' | 'skipped' | 'unanswered'
         answers?: { question: string; answer: string | null }[]
       }
+      // 申请授权卡载荷（015 C2，仅文件工具白名单外的调用有）：随 item 落库，渲染层不反查主进程内存
+      fsCard?: { mode: 'ws-request'; dirs: string[]; op: string }
       args: Record<string, unknown>
       result?: unknown
       resultRef?: number // 超限结果的结果编号（全量在结果库，result 存摘要）
@@ -298,7 +300,10 @@ function expandRefs(items: TurnItem[], text: string): string {
 // 知识库检索定点转换为命中文档名。
 // 定点转换跟随当前能力（014 Case 5）：检索工具已不在清单时，不能再让历史文本指示模型「重新检索」——
 // 那是让它做一件做不到的事；其他已消失的工具在返回末尾附一句不可用声明
-function historyToolOutput(it: Extract<TurnItem, { t: 'tool' }>, currentTools?: Set<string>): string {
+function historyToolOutput(
+  it: Extract<TurnItem, { t: 'tool' }>,
+  currentTools?: Set<string>
+): string {
   const gone = currentTools !== undefined && !currentTools.has(it.name)
   const r = it.result
   if (it.name === 'search_knowledge_base' && r && typeof r === 'object' && 'results' in r) {
@@ -311,7 +316,8 @@ function historyToolOutput(it: Extract<TurnItem, { t: 'tool' }>, currentTools?: 
       ? `${hit}。本会话已不再挂知识库`
       : `${hit}。片段原文不跨轮保留（资料会更新），追问业务问题时本轮重新检索后作答`
   }
-  const base = typeof r === 'string' ? r : r === undefined ? '（本次调用未产生结果）' : JSON.stringify(r)
+  const base =
+    typeof r === 'string' ? r : r === undefined ? '（本次调用未产生结果）' : JSON.stringify(r)
   return gone ? `${base}\n（该工具在本会话已不可用）` : base
 }
 

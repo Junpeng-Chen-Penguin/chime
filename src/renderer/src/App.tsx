@@ -34,7 +34,9 @@ function App(): React.JSX.Element {
   const settingsDirty = useRef(false) // 设置里有未保存表单内容（只在离开瞬间读，不需要触发渲染）
   const [leaveTarget, setLeaveTarget] = useState<(() => void) | null>(null) // 未保存拦截：确认后要执行的离开动作
   // 设置打开时直达的分区：侧栏入口用默认分区，服务状态面板的「前往设置」直达 MCP 分区
-  const [settingsTab, setSettingsTab] = useState<'provider' | 'kb' | 'mcp' | 'agent' | undefined>(undefined)
+  const [settingsTab, setSettingsTab] = useState<'provider' | 'kb' | 'mcp' | 'agent' | undefined>(
+    undefined
+  )
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
   const [defaultModel, setDefaultModel] = useState('deepseek-v4-pro')
   const [models, setModels] = useState<import('./components/Composer').ModelGroup[]>([])
@@ -217,7 +219,9 @@ function App(): React.JSX.Element {
   // 工作面板的制品列表（015 Case 1）：面板开着时按会话取，轮次结束刷新（本轮可能新生成了制品）
   useEffect(() => {
     if (panel?.kind !== 'work' || !activeId || activeId === draftId) return
-    window.api.listArtifacts(activeId).then((list) => setWorkArtifacts((m) => ({ ...m, [activeId]: list })))
+    window.api
+      .listArtifacts(activeId)
+      .then((list) => setWorkArtifacts((m) => ({ ...m, [activeId]: list })))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panel?.kind, activeId, draftId, chat.streamingConv])
 
@@ -281,7 +285,9 @@ function App(): React.JSX.Element {
       : null
     : (agentSel[activeId] ?? null)
   const agentGone = !!curAgent && !agents.some((a) => a.id === curAgent.id)
-  const agentServiceIds = curAgent ? (agents.find((a) => a.id === curAgent.id)?.mcpSel.map((e) => e.id) ?? []) : []
+  const agentServiceIds = curAgent
+    ? (agents.find((a) => a.id === curAgent.id)?.mcpSel.map((e) => e.id) ?? [])
+    : []
 
   // ── 工作空间派生与操作（015 Case 1）────────────────────
   const wsNameOf = (p: string): string => p.split('/').filter(Boolean).pop() ?? p
@@ -338,7 +344,10 @@ function App(): React.JSX.Element {
       (p) => !pickedWs.includes(p)
     )
     if (!defaults.length) return
-    setWsAgentOff((m) => ({ ...m, [activeId]: [...new Set([...(m[activeId] ?? []), ...defaults])] }))
+    setWsAgentOff((m) => ({
+      ...m,
+      [activeId]: [...new Set([...(m[activeId] ?? []), ...defaults])]
+    }))
     askWsAuth(defaults, () => {
       setWsAgentOff((m) => ({
         ...m,
@@ -416,7 +425,11 @@ function App(): React.JSX.Element {
       const c = await window.api.createConversation({ id: activeId, model: activeModel })
       const agent = agentSel[activeId] ?? null
       if (agent)
-        await window.api.setConversationAgent({ id: activeId, agentId: agent.id, agentName: agent.name })
+        await window.api.setConversationAgent({
+          id: activeId,
+          agentId: agent.id,
+          agentName: agent.name
+        })
       // 草稿期勾选的服务随会话落库（Case 8）
       const sel = mcpSel[activeId]
       if (sel?.length)
@@ -504,72 +517,81 @@ function App(): React.JSX.Element {
           }}
         />
       ) : (
-      <ChatArea
-        title={active?.title ?? '新对话'}
-        convId={activeId}
-        collapsed={collapsed}
-        fullscreen={fullscreen}
-        onExpand={() => setCollapsed(false)}
-        messages={messages}
-        sending={sending}
-        contextRatio={chat.contextRatio[activeId] ?? 0}
-        input={input}
-        onInput={(v) => setInputs((m) => ({ ...m, [activeId]: v }))}
-        chips={chips[activeId] ?? []}
-        onRemoveChip={(idx) =>
-          setChips((m) => ({ ...m, [activeId]: (m[activeId] ?? []).filter((_, i) => i !== idx) }))
-        }
-        onSubmit={submit}
-        onStop={chat.stop}
-        onRetry={() => chat.retry(activeId, activeModel)}
-        kbOptions={kbOptions}
-        kbSel={kbSel}
-        agents={agents}
-        agentSel={curAgent}
-        agentLocked={agentLocked}
-        agentGone={agentGone}
-        agentServiceIds={agentServiceIds}
-        onSelectAgent={selectAgent}
-        onManageAgents={() => openSettings('agent')}
-        services={services}
-        selectedServiceIds={mcpSel[activeId] ?? []}
-        onToggleService={(id) => {
-          const cur = mcpSel[activeId] ?? []
-          const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
-          setMcpSel((m) => ({ ...m, [activeId]: next }))
-          // 真实会话立即持久化；草稿会话等发首条消息时随会话落库
-          if (activeId !== draftId)
-            window.api.setConversationMcpSelection({ id: activeId, serviceIds: next })
-        }}
-        onRetryServices={() => {
-          window.api.mcpRetry().then(reloadServices)
-        }}
-        onOpenSettings={() => openSettings('mcp')}
-        onRename={(t) => {
-          if (!activeId || activeId === draftId) return
-          setConversations((cs) => cs.map((c) => (c.id === activeId ? { ...c, title: t } : c)))
-          window.api.renameConversation(activeId, t)
-        }}
-        model={activeModel}
-        models={models}
-        onPickModel={(m) => setConvModel((cm) => ({ ...cm, [activeId]: m }))}
-        onOpenSource={openSource}
-        onRespondCard={chat.respondCard}
-        onRespondAsk={chat.respondAsk}
-        onOpenArtifact={openArtifact}
-        ws={{
-          frozen: frozenWs,
-          entries: wsEntries,
-          checked: wsChecked,
-          onToggle: toggleWs,
-          onAddFolder: () => void addWsFolder()
-        }}
-        workPanelOpen={panel?.kind === 'work'}
-        onToggleWorkPanel={() => {
-          setPanel((p) => (p?.kind === 'work' ? null : { kind: 'work' }))
-          setCollapsed(true)
-        }}
-      />
+        <ChatArea
+          title={active?.title ?? '新对话'}
+          convId={activeId}
+          collapsed={collapsed}
+          fullscreen={fullscreen}
+          onExpand={() => setCollapsed(false)}
+          messages={messages}
+          sending={sending}
+          contextRatio={chat.contextRatio[activeId] ?? 0}
+          input={input}
+          onInput={(v) => setInputs((m) => ({ ...m, [activeId]: v }))}
+          chips={chips[activeId] ?? []}
+          onRemoveChip={(idx) =>
+            setChips((m) => ({ ...m, [activeId]: (m[activeId] ?? []).filter((_, i) => i !== idx) }))
+          }
+          onSubmit={submit}
+          onStop={chat.stop}
+          onRetry={() => chat.retry(activeId, activeModel)}
+          kbOptions={kbOptions}
+          kbSel={kbSel}
+          agents={agents}
+          agentSel={curAgent}
+          agentLocked={agentLocked}
+          agentGone={agentGone}
+          agentServiceIds={agentServiceIds}
+          onSelectAgent={selectAgent}
+          onManageAgents={() => openSettings('agent')}
+          services={services}
+          selectedServiceIds={mcpSel[activeId] ?? []}
+          onToggleService={(id) => {
+            const cur = mcpSel[activeId] ?? []
+            const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
+            setMcpSel((m) => ({ ...m, [activeId]: next }))
+            // 真实会话立即持久化；草稿会话等发首条消息时随会话落库
+            if (activeId !== draftId)
+              window.api.setConversationMcpSelection({ id: activeId, serviceIds: next })
+          }}
+          onRetryServices={() => {
+            window.api.mcpRetry().then(reloadServices)
+          }}
+          onOpenSettings={() => openSettings('mcp')}
+          onRename={(t) => {
+            if (!activeId || activeId === draftId) return
+            setConversations((cs) => cs.map((c) => (c.id === activeId ? { ...c, title: t } : c)))
+            window.api.renameConversation(activeId, t)
+          }}
+          model={activeModel}
+          models={models}
+          onPickModel={(m) => setConvModel((cm) => ({ ...cm, [activeId]: m }))}
+          onOpenSource={openSource}
+          onRespondCard={(toolCallId, decision) => {
+            chat.respondCard(toolCallId, decision)
+            // 申请授权允许后清单当场变化（015 功能点 19：面板同步出现该条）；轮结束的刷新是兜底
+            if (decision === 'approved' && activeId && activeId !== draftId)
+              setTimeout(() => {
+                window.api.getConversationWs(activeId).then((list) => {
+                  setWsFrozen((m) => ({ ...m, [activeId]: list }))
+                })
+              }, 300)
+          }}
+          onRespondAsk={chat.respondAsk}
+          onOpenArtifact={openArtifact}
+          ws={{
+            frozen: frozenWs,
+            entries: wsEntries,
+            checked: wsChecked,
+            onToggle: toggleWs,
+            onAddFolder: () => void addWsFolder()
+          }}
+          workPanelOpen={panel?.kind === 'work'}
+          onToggleWorkPanel={() => {
+            setPanel((p) => (p?.kind === 'work' ? null : { kind: 'work' }))
+            setCollapsed(true)
+          }}
+        />
       )}
 
       {panel && (
@@ -624,8 +646,7 @@ function App(): React.JSX.Element {
             <WorkContent
               artifacts={workArtifacts[activeId] ?? []}
               ws={
-                frozenWs ??
-                wsChecked.map((p) => ({ path: p, name: wsNameOf(p), missing: false }))
+                frozenWs ?? wsChecked.map((p) => ({ path: p, name: wsNameOf(p), missing: false }))
               }
               frozen={frozenWs !== null}
               onOpenArtifact={openArtifact}

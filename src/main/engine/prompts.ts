@@ -1,6 +1,8 @@
 // 提示词资产（PRD v0.4.0 定稿文案）：固定主干 + 知识库条件段 + 检索工具描述。
 // 分节组装：会话挂知识库才追加条件段；环境信息独立成节，不混进规则。
 
+import { basename } from 'path'
+
 // 身份段（014 Case 3）：选了 Agent 且写了提示词时用用户那一整段（含身份句与业务规则），
 // 否则用产品自带这句。用户段在最前——身份不先立，后面的机制规则是在替谁办事就不清楚
 const IDENTITY_DEFAULT = '你是 Chime，面向业务答疑的桌面 AI 助手。'
@@ -76,13 +78,16 @@ export interface McpInstructionEntry {
 export function buildSystemPrompt(
   kb: KbEnv | null,
   mcpInstructions: McpInstructionEntry[] = [],
-  agentPrompt: string | null = null
+  agentPrompt: string | null = null,
+  wsDirs: string[] = []
 ): string {
   const d = new Date()
   const envLines: string[] = []
   if (kb)
     for (const lib of kb.libraries)
       envLines.push(`知识库：${lib.name}（${lib.docCount} 篇文档）——${lib.intro}`)
+  // 会话授权目录清单（015 Case 2）：模型据此知道文件工具可用哪些目录；技能目录不列（仅校验时放行）
+  for (const dir of wsDirs) envLines.push(`工作空间：${basename(dir)}（${dir}）`)
   envLines.push(`当前日期：${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`)
 
   const parts = [agentPrompt?.trim() ? agentPrompt.trim() : IDENTITY_DEFAULT]

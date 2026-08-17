@@ -71,6 +71,8 @@ export type TurnItem =
         state: 'pending' | 'answered' | 'skipped' | 'unanswered'
         answers?: { question: string; answer: string | null }[]
       }
+      // 申请授权卡载荷（015 C2，仅文件工具白名单外的调用有）
+      fsCard?: { mode: 'ws-request'; dirs: string[]; op: string }
       args: Record<string, unknown>
       result?: SearchToolResult | GenericToolResult
       resultRef?: number // 超限结果的结果编号（result 存摘要，全量在结果库）
@@ -295,7 +297,11 @@ export interface ChimeApi {
   }) => Promise<{ ok: true; id: number } | { ok: false; error: string }>
   agentDelete: (id: number) => Promise<void>
   agentUsage: (id: number) => Promise<number>
-  setConversationAgent: (input: { id: string; agentId: number | null; agentName: string | null }) => Promise<void>
+  setConversationAgent: (input: {
+    id: string
+    agentId: number | null
+    agentName: string | null
+  }) => Promise<void>
   mcpAckToolsChanged: (id: number) => Promise<void>
   mcpSetTrusted: (input: { id: number; trusted: boolean }) => Promise<void>
   mcpRetry: () => Promise<void>
@@ -329,10 +335,7 @@ export interface ChimeApi {
     path: string
   }) => Promise<{ ok: boolean; error?: string; rebuilt?: boolean }>
   kbRemove: (id: number) => Promise<{ ok: boolean; error?: string }>
-  kbBuild: (input: {
-    id: number
-    force?: boolean
-  }) => Promise<{
+  kbBuild: (input: { id: number; force?: boolean }) => Promise<{
     ok: boolean
     error?: string
     confirmRequired?: { deleted: number; kept: number }
@@ -360,10 +363,15 @@ export interface ChimeApi {
   openDoc: (input: { kbId: number; filePath: string }) => Promise<DocOpenResult>
   getArtifact: (id: number) => Promise<ArtifactView | null>
   exportArtifact: (id: number) => Promise<{ ok: boolean }>
-  listArtifacts: (conversationId: string) => Promise<{ id: number; title: string; createdAt: number }[]>
+  listArtifacts: (
+    conversationId: string
+  ) => Promise<{ id: number; title: string; createdAt: number }[]>
   wsRecent: () => Promise<WsEntry[]>
   getConversationWs: (id: string) => Promise<WsEntry[] | null>
-  wsAdd: (input: { id: string; path: string }) => Promise<{ ok: boolean; reason?: 'covered' | 'not-frozen' }>
+  wsAdd: (input: {
+    id: string
+    path: string
+  }) => Promise<{ ok: boolean; reason?: 'covered' | 'not-frozen' }>
   wsRemove: (input: { id: string; path: string }) => Promise<{ ok: boolean }>
   onKbProgress: (cb: (p: KbProgress) => void) => () => void
 }

@@ -13,6 +13,7 @@ import {
   Info,
   Sparkles,
   FileText,
+  Folder,
   Table,
   Table2,
   X
@@ -760,29 +761,36 @@ function GenericToolRow({
   // fetch_tool_result 为退役工具名，仅历史会话的旧调用行
   const isFetch =
     item.name === 'fetch_tool_result' || item.name === 'grep_result' || item.name === 'read_result'
+  // 文件工具（015 C2）：概要只给最后一段名字（Case 2 Feature 3「操作加对象」），完整路径在展开详情里
+  const isFs = item.name === 'read_file' || item.name === 'list_dir'
   // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")；取数工具用人话概要
   const firstArg = args.length ? args[0][1] : undefined
-  const argPreview = isFetch
-    ? (() => {
-        const a = item.args as {
-          resultId?: number
-          mode?: string
-          pattern?: string
-          keyword?: string
-          startLine?: number
-          offset?: number
-        }
-        if (item.name === 'grep_result')
-          return `${a.resultId != null ? `#${a.resultId}` : '全部结果'} 搜"${a.pattern ?? ''}"`
-        if (item.name === 'read_result') return `#${a.resultId} 读第 ${a.offset ?? 1} 行起`
-        if (a.mode === 'search') return `#${a.resultId} 搜"${a.pattern ?? a.keyword ?? ''}"`
-        if (a.startLine !== undefined || a.mode === 'read')
-          return `#${a.resultId} 读第 ${a.startLine ?? 1} 行起`
-        return `#${a.resultId} 按位置读取` // 历史轮的旧参数形态
-      })()
-    : firstArg === undefined
-      ? ''
-      : JSON.stringify(firstArg)
+  const argPreview = isFs
+    ? (String((item.args as { path?: string }).path ?? '')
+        .split('/')
+        .filter(Boolean)
+        .pop() ?? '')
+    : isFetch
+      ? (() => {
+          const a = item.args as {
+            resultId?: number
+            mode?: string
+            pattern?: string
+            keyword?: string
+            startLine?: number
+            offset?: number
+          }
+          if (item.name === 'grep_result')
+            return `${a.resultId != null ? `#${a.resultId}` : '全部结果'} 搜"${a.pattern ?? ''}"`
+          if (item.name === 'read_result') return `#${a.resultId} 读第 ${a.offset ?? 1} 行起`
+          if (a.mode === 'search') return `#${a.resultId} 搜"${a.pattern ?? a.keyword ?? ''}"`
+          if (a.startLine !== undefined || a.mode === 'read')
+            return `#${a.resultId} 读第 ${a.startLine ?? 1} 行起`
+          return `#${a.resultId} 按位置读取` // 历史轮的旧参数形态
+        })()
+      : firstArg === undefined
+        ? ''
+        : JSON.stringify(firstArg)
   // 卡片收场折叠为记录：行首加授权去向（已授权 / 已拒绝 / 未回应）
   const prefix =
     item.auth === 'denied'
@@ -913,6 +921,40 @@ function AuthCard({
 }): React.JSX.Element {
   const respond = (d: 'approved' | 'denied'): void => {
     if (item.id) onRespond(item.id, d)
+  }
+  // 申请授权卡（015 功能点 18）：同一骨架样式，信息区换成文件夹名称 + 触发申请的操作
+  if (item.fsCard?.mode === 'ws-request') {
+    return (
+      <div className="ml-4 flex max-w-[440px] flex-col gap-2.5 rounded-xl border border-border bg-background px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
+        <div className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+          <span className="size-[6px] flex-none animate-pulse rounded-full bg-primary" />
+          模型申请访问工作空间
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {item.fsCard.dirs.map((d) => (
+            <div key={d} title={d} className="flex items-center gap-2 text-[13px] text-foreground">
+              <Folder className="size-4 flex-none text-muted-foreground" />
+              <span className="min-w-0 truncate">{d.split('/').filter(Boolean).pop() ?? d}</span>
+            </div>
+          ))}
+          <div className="text-[13px] text-muted-foreground">操作：{item.fsCard.op}</div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => respond('denied')}
+            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+          >
+            拒绝
+          </button>
+          <button
+            onClick={() => respond('approved')}
+            className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            允许
+          </button>
+        </div>
+      </div>
+    )
   }
   return (
     <div className="ml-4 flex max-w-[440px] items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
