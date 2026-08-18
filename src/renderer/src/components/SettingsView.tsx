@@ -15,7 +15,11 @@ import {
   MessageCircleQuestion,
   Table2,
   TextSearch,
+  TextSelect,
   FileText,
+  FolderTree,
+  FilePen,
+  Replace,
   Bot,
   ChevronLeft,
   ChevronDown,
@@ -968,12 +972,19 @@ function ToolsPanel({
 
 // 内置工具：只展示（图标 + 中文名 + 函数名 + 一句话用途），无开关无配置（PRD Case 4）。
 // 名称与用途来自登记表（与时间线、测试记录同一份）；函数名一并展示——写用例断言时照抄
+// 图标跟随工具的实际能力（验收意见 2026-08-18）：检索放大镜、结果集搜/读成对、
+// 文件读/列/写/改各自成形，激活技能与设置的技能分区同用拼图
 const TOOL_ICONS: Record<string, typeof Search> = {
   search_knowledge_base: Search,
   ask_user_question: MessageCircleQuestion,
   create_artifact: Table2,
   grep_result: TextSearch,
-  read_result: FileText
+  read_result: TextSelect,
+  read_file: FileText,
+  list_dir: FolderTree,
+  write_file: FilePen,
+  edit_file: Replace,
+  activate_skill: Puzzle
 }
 
 function BuiltinToolsPane(): React.JSX.Element {

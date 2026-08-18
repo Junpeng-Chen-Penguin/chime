@@ -468,29 +468,16 @@ function AssistantMsg({
     // 回复右侧留出缩进，右边缘不顶齐用户气泡右边（参照 Claude）
     <div className="flex flex-col gap-2 pr-10 text-foreground select-text">
       {m.notice && <NoticeRow text={m.notice} />}
-      {/* 技能激活标识行（015 C5）：块顶部逐个列出本轮成功激活的技能——只标名字，无悬停无展开。
-          成功 = 返回以正文头部标注开头；重复激活（返回「已激活」提示）与被拦下的不出行 */}
-      {items
-        .filter(
-          (it): it is Extract<TurnItem, { t: 'tool' }> =>
-            it.t === 'tool' &&
-            it.name === 'activate_skill' &&
-            typeof it.result === 'string' &&
-            it.result.startsWith('【技能：')
-        )
-        .map((it, i) => (
-          <div
-            key={`skill-${i}`}
-            className="flex items-center gap-2 text-[13px] text-muted-foreground"
-          >
-            <span className="text-primary">✦</span>
-            <span>技能激活：{String(it.args?.name ?? '')}</span>
-          </div>
-        ))}
       {items.map((it, i) => {
         if ((it.t === 'text' || it.t === 'reasoning') && !it.text.trim()) return null
-        // 激活工具的调用行本体不渲染（数据照常落库）：它的展示形态就是上面的标识行
-        if (it.t === 'tool' && it.name === 'activate_skill') return null
+        // 技能激活标识行（015 C5，验收修订）：在模型发起调用的节点原位出一行，样式与其他工具行
+        // 同框架（圆点 + 一行字），只标名字、无展开。成功 = 返回以正文头部标注开头；
+        // 重复激活（返回「已激活」提示）与被拦下的不出行
+        if (it.t === 'tool' && it.name === 'activate_skill') {
+          const ok = typeof it.result === 'string' && it.result.startsWith('【技能：')
+          if (!ok && it.result !== undefined) return null
+          return <PlainRow key={i} text={`技能激活：${String(it.args?.name ?? '')}`} />
+        }
         switch (it.t) {
           case 'reasoning':
             return <ThinkRow key={i} text={it.text} running={streaming && i === items.length - 1} />
