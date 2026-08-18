@@ -295,6 +295,9 @@ app.whenReady().then(() => {
           model?: string
           messages: string[]
           conv?: string // 往既有会话续发（跨重启多轮自测）；缺省新建会话
+          // 会话工作空间（015 Case 10）：创建会话时直接写授权清单并定格（驱动会话无界面，
+          // 创建即授权，与工作面板添加同一内部数据）；与 Agent 的默认目录合并
+          workspace?: string[]
           mcpSelected?: boolean // Case 8：false = 服务启用但本会话未选用；缺省 = 声明的服务全部选入
           stopAfterMs?: number // 停止路径自测：每轮开跑后定时触发停止（同用户点停止）
           // 前置条件与策略（v1.1.1）：授权按策略消费（缺省全通过），提问按应答档案作答（缺省整卡跳过）
@@ -595,6 +598,14 @@ app.whenReady().then(() => {
           if (evalAgent) {
             const { setConversationAgent } = await import('./db')
             setConversationAgent(convId, evalAgent.id, evalAgent.name)
+          }
+          // 工作空间定格（015 Case 10）：声明了 workspace 才在创建时定格（并入 Agent 默认目录）；
+          // 未声明维持现状——首轮由 orchestrator 按 Agent 默认静默定格
+          if (spec.workspace?.length) {
+            const { setConversationWs } = await import('./db')
+            setConversationWs(convId, [
+              ...new Set([...spec.workspace, ...(evalAgent?.wsSel ?? [])].map((d) => resolve(d)))
+            ])
           }
           // 环境快照（kb === true）：选中全部已构建的库；string[] 按名选中；对象形式按名选中该库
           if (spec.kb === true) {
