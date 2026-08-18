@@ -45,6 +45,7 @@ import {
   type TurnToolContext
 } from './tools'
 import { makeFsTools, type FsCard } from './fs-tools'
+import { listSkills, makeActivateSkillTool, ACTIVATE_TOOL_NAME } from '../skills'
 import { sessionFullResultChars, applyTotalGate, type OverflowCtx } from './overflow'
 import {
   CardQueue,
@@ -383,6 +384,18 @@ async function streamCore(core: {
     turnTools,
     makeFsTools({ convId, signal: controller.signal, cards, overflow, onFsCard })
   )
+  // 技能（015 C5）：Agent 清单现场对库过滤（已删除的自然剔除），非空才注册激活工具与提示词清单段。
+  // history 在下方组装后才赋值，激活工具经 getHistory 延迟取（执行必在流式循环内，晚于赋值）
+  let history: ModelMessage[] = []
+  const skillLib = new Map(listSkills().map((s) => [s.name, s.description]))
+  const turnSkills = (agent?.skillSel ?? [])
+    .filter((n) => skillLib.has(n))
+    .map((n) => ({ name: n, description: skillLib.get(n)! }))
+  if (turnSkills.length)
+    turnTools[ACTIVATE_TOOL_NAME] = makeActivateSkillTool({
+      names: turnSkills.map((s) => s.name),
+      getHistory: () => history
+    })
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
   // 已启用但连不上的服务：工具静默不挂载，不进对话流提醒（07-13 修订——状态常驻输入框标识，与主流一致）
 
@@ -392,13 +405,14 @@ async function streamCore(core: {
     kbEnv,
     getMcpInstructions(mcpSelection),
     agent?.prompt ?? null,
-    getConversationWs(convId) ?? []
+    getConversationWs(convId) ?? [],
+    turnSkills
   )
   const budget = budgetFor(model)
   // 历史加载放在 turnTools 组装之后（014 Case 5）：把本轮实际挂载的工具名传进去，
   // 已消失的工具在历史返回里标「已不可用」——模型会把历史当成当前能力的依据（实测）
   const bundle = loadHistoryMessages(convId, new Set(Object.keys(turnTools)))
-  let history = bundle.messages
+  history = bundle.messages
   const sizeOf = (m: ModelMessage): number =>
     estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
   const estimate = (): number => estimateTokens(system) + history.reduce((s, m) => s + sizeOf(m), 0)
@@ -406,12 +420,13 @@ async function streamCore(core: {
   // 压力分级（07-14 核心改造，Claude Code 微压缩同构）：
   // L0 压力低不动；L1 超 70% 从最老的工具返回清起、换原地指针——只清数据不动对话主干，
   // 保最近 5 条；可省不足 2 万 token 不动手（清除打破服务端缓存，要么省一大笔要么不折腾）；
-  // 检索返回不清（已定点转换成文档名）、提问卡问答不清（体积小且是关键上下文）。
+  // 检索返回不清（已定点转换成文档名）、提问卡问答不清（体积小且是关键上下文）、
+  // 技能正文不清（是行事指令不是外部数据；清了摘要样例仍带头部标注，去重会误判已激活）。
   // 被清内容幂等入库（同一调用复用编号），模型凭编号随时查回，不必重调外部接口。
   const L1_PRESSURE = 0.7
   const RELIEF_KEEP_RECENT = 5
   const RELIEF_MIN_SAVE_TOKENS = 20_000
-  const RELIEF_SKIP = new Set(['search_knowledge_base', ASK_TOOL_NAME])
+  const RELIEF_SKIP = new Set(['search_knowledge_base', ASK_TOOL_NAME, ACTIVATE_TOOL_NAME])
   if (estimate() > budget * L1_PRESSURE) {
     const candidates = bundle.toolOutputs.filter((c) => !RELIEF_SKIP.has(c.toolName))
     const clearable = candidates.slice(0, Math.max(0, candidates.length - RELIEF_KEEP_RECENT))
@@ -441,10 +456,14 @@ async function streamCore(core: {
       }
     }
   }
-  // L2 最后防线：清完仍超预算才丢最旧消息对，且不再静默——丢的可能是任务开头的指令，用户须知情
+  // L2 最后防线：清完仍超预算才丢最旧消息对，且不再静默——丢的可能是任务开头的指令，用户须知情。
+  // 切口修整（V1 实测 2026-08-18）：盲切两条可能把带 tool_calls 的 assistant 消息切掉、留下孤立的
+  // tool 消息在队首，DeepSeek 对此报 400（tool 消息必须跟在 tool_calls 之后）——切完把队首孤立 tool 丢掉
   let droppedOldest = false
   while (history.length > 2 && estimate() > budget) {
     history = history.slice(2)
+    while (history.length && (history[0] as { role?: string }).role === 'tool')
+      history = history.slice(1)
     droppedOldest = true
   }
   if (droppedOldest)
@@ -495,6 +514,7 @@ async function streamCore(core: {
                 tr.toolName !== GREP_TOOL_NAME &&
                 tr.toolName !== READ_TOOL_NAME && // 豁免：取数工具取回的片段不再落库
                 tr.toolName !== ASK_TOOL_NAME && // 用户的回答不是外部数据
+                tr.toolName !== ACTIVATE_TOOL_NAME && // 技能正文是指令不是外部数据，与 ask 同理
                 !overflow.refs.has(tr.toolCallId) // 单结果闸已处理的不重复
             )
             .map((tr) => ({

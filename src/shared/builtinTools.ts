@@ -27,6 +27,11 @@ export const BUILTIN_TOOLS: BuiltinToolEntry[] = [
     name: 'edit_file',
     display: '编辑文件',
     desc: '对工作空间里的文件做定点修改，修改前征求你的同意'
+  },
+  {
+    name: 'activate_skill',
+    display: '激活技能',
+    desc: '当前任务匹配某个技能时，取得该技能的完整做法说明并照着执行'
   }
 ]
 

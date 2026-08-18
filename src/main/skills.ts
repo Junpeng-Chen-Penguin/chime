@@ -17,6 +17,8 @@ import { join, resolve, basename, extname, relative } from 'path'
 import { tmpdir } from 'os'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { tool, jsonSchema } from 'ai'
+import type { Tool, ModelMessage } from 'ai'
 import { load as yamlLoad } from 'js-yaml'
 import { skillsRoot } from './engine/fs-tools'
 
@@ -143,6 +145,79 @@ function validate(
   if (!description) errs.push('SKILL.md 的 YAML 头缺少 description')
   else if (description.length > 1024) errs.push('description 超过 1024 字符')
   return errs
+}
+
+// ── 激活工具（015 Case 5 Feature 3）────────────────────────
+// 正文以工具返回身份进对话记录（与检索返回同一通道），此后随历史逐轮发出，不进系统提示词。
+// 压缩豁免（L1 不清、总量闸不落库）在 orchestrator 按工具名挂，这里只管激活语义。
+
+export const ACTIVATE_TOOL_NAME = 'activate_skill'
+
+// 描述是行为指引的主要载体（清单管发现，工具描述管怎么用——产品方案 Case 5 原文）
+const ACTIVATE_TOOL_DESCRIPTION = `激活一个技能，取得它的完整正文。技能是针对某类任务的成套做法说明。
+当前任务与「可用技能」清单中某条适用说明匹配时，先调用本工具再动手：正文返回后按它的流程执行，替代你默认的做法。不要凭清单里的一句适用说明猜测内容，也不要在没有匹配技能时强行激活。
+入参 name：清单中的技能名。`
+
+// 正文外层包装的头部标注：去重判定（轮内 Set + 历史扫描）都以这个前缀识别一次成功激活，
+// 渲染层的标识行判定同一前缀——改这里三处一起改
+export const SKILL_BODY_PREFIX = (name: string): string => `【技能：${name}】`
+
+export function makeActivateSkillTool(opts: {
+  names: string[] // 本轮可激活范围：Agent 清单现场对库过滤后的名字（C6 点名并入此处）
+  getHistory: () => ModelMessage[] // 轮初组装、L2 裁剪后的历史——去重只认还在上下文里的正文
+}): Tool {
+  const { names, getHistory } = opts
+  const activated = new Set<string>() // 轮内已激活：同轮第二次激活时第一次的返回不在轮初历史里
+  // 该技能正文已在对话记录里且没被压缩掉（流程第 2 步）：扫历史 tool 消息里本工具的成功返回。
+  // L1 与总量闸都豁免本工具，正文只要还在就一定是全文前缀可辨；L2 丢弃的消息已不在数组里
+  const inHistory = (name: string): boolean =>
+    getHistory().some((m) => {
+      if ((m as { role: string }).role !== 'tool' || !Array.isArray(m.content)) return false
+      return (
+        m.content as { type?: string; toolName?: string; output?: { value?: unknown } }[]
+      ).some(
+        (p) =>
+          p.type === 'tool-result' &&
+          p.toolName === ACTIVATE_TOOL_NAME &&
+          typeof p.output?.value === 'string' &&
+          p.output.value.startsWith(SKILL_BODY_PREFIX(name))
+      )
+    })
+  return tool({
+    description: ACTIVATE_TOOL_DESCRIPTION,
+    inputSchema: jsonSchema<{ name: string }>({
+      type: 'object',
+      properties: {
+        name: { type: 'string', enum: names, description: '技能名，须在「可用技能」清单中' }
+      },
+      required: ['name']
+    }),
+    execute: async (args) => {
+      const name = (args as { name?: unknown } | null)?.name
+      // schema 里的 enum 只是给模型看的声明，SDK 不做运行时拦截（提问卡 minItems 先例）——显式校验
+      if (typeof name !== 'string' || !names.includes(name))
+        return {
+          error: `技能「${typeof name === 'string' ? name : ''}」不在本轮可激活的范围内（可激活：${names.join('、')}）。不要虚构技能内容；没有匹配的技能就按你默认的方式处理`
+        }
+      if (activated.has(name) || inHistory(name))
+        return `技能「${name}」已激活，完整正文已在上下文中，直接按正文行事，不必重复激活`
+      const detail = getSkill(name)
+      if (!detail)
+        return {
+          error: `技能「${name}」在技能库里已不存在。如实告知用户这个技能无法使用，不要虚构技能内容`
+        }
+      activated.add(name)
+      const dir = join(skillsRoot(), name)
+      const md = detail.files.find((f) => f.path === 'SKILL.md')?.content ?? ''
+      const extras = detail.files.filter((f) => f.path !== 'SKILL.md')
+      let out = `${SKILL_BODY_PREFIX(name)}以下是该技能的完整正文，按它的流程执行：\n\n${md}`
+      if (extras.length)
+        out += `\n\n—— 附带资源 ——\n该技能还带有以下文件，正文提到或需要时用 read_file 按路径读取（技能目录已授权）：\n${extras.map((f) => `- ${join(dir, f.path)}`).join('\n')}`
+      if (detail.hasScripts)
+        out += `\n\n—— 脚本说明 ——\n该技能带有 scripts/ 目录，但你没有执行脚本的能力：可以用 read_file 读脚本源码理解意图、用你可用的工具达成同样目的、或如实告知用户做不了；不得虚构脚本执行结果。`
+      return out
+    }
+  })
 }
 
 // 导入（功能点 5 顺序执行，命中即出口）。input 为文件夹或 zip 的绝对路径

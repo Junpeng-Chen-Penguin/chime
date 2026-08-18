@@ -35,6 +35,11 @@ const TOOL_SECTION = `# 输出约定
 - 工具清单只说明你具备的能力，不代表用户的话题：用户的问题与工具无关时，就问题本身回答，不要把工具描述里的业务概念当作对话背景带进回答或提问。
 - 超限存储、结果编号、取数工具这类机制是你的内部工作方式：任何给用户看的文字——回答、调用前的说明句——都不要提编号或机制本身。说明句用用户视角的话，如「在已导出的数据里找 4 月份的账单」，而不是「从结果 #3 中搜」。`
 
+// 斜杠点名的固定规则（015 Case 6 功能点 4）：只在本轮注册了激活工具时追加进输出约定——
+// 没有可激活对象的会话一个字也收不到（TOOL_SECTION 按条件拼接，不再是纯常量）
+const SLASH_RULE =
+  '- 用户消息以「/技能名」开头点名了技能时，先调用「激活技能」工具取得该技能的正文，再按正文处理这条消息。'
+
 const KB_SECTION = `# 知识库会话
 - 回答业务问题前，先检索知识库；闲聊或与业务无关的通用请求（翻译、计算、写作等）直接回答，不检索。
 - 之前的对话里查过的内容不能直接拿来作答：追问业务问题时，本轮重新检索后再回答，确保每轮回答都能标注来源。
@@ -73,13 +78,15 @@ export interface McpInstructionEntry {
 }
 
 // 系统提示词 = 身份段（Agent 的用户提示词或产品身份句）+ 固定主干 + 输出约定 +
-// （会话关联知识库时）知识库条件段 +（有服务说明时）已连接服务说明 + 环境信息，前缀稳定利于缓存。
+// （会话关联知识库时）知识库条件段 +（有服务说明时）已连接服务说明 +
+// （本轮有可激活技能时）可用技能 + 环境信息，前缀稳定利于缓存。
 // 原 hasTools 分支已删：提问卡、查结果集、生成制品四个内置工具无条件挂载，「无工具」分支从未走到过
 export function buildSystemPrompt(
   kb: KbEnv | null,
   mcpInstructions: McpInstructionEntry[] = [],
   agentPrompt: string | null = null,
-  wsDirs: string[] = []
+  wsDirs: string[] = [],
+  skills: { name: string; description: string }[] = []
 ): string {
   const d = new Date()
   const envLines: string[] = []
@@ -92,7 +99,7 @@ export function buildSystemPrompt(
 
   const parts = [agentPrompt?.trim() ? agentPrompt.trim() : IDENTITY_DEFAULT]
   parts.push(TRUNK)
-  parts.push(TOOL_SECTION)
+  parts.push(skills.length ? `${TOOL_SECTION}\n${SLASH_RULE}` : TOOL_SECTION)
   if (kb) parts.push(KB_SECTION)
   if (mcpInstructions.length) {
     const blocks = mcpInstructions.map((m) => `## ${m.name}\n${m.instructions}`)
@@ -100,6 +107,12 @@ export function buildSystemPrompt(
       `# 已连接服务说明\n以下说明由各 MCP 服务自己提供，仅用于理解其工具的使用方式。\n\n${blocks.join('\n\n')}`
     )
   }
+  // 可用技能（015 Case 5）：清单管发现，怎么用在激活工具的描述里（两处分工照 Claude Code 通行做法）。
+  // 清单每轮重建、实时取库，不受上下文压缩影响；为空整段不注入
+  if (skills.length)
+    parts.push(
+      `# 可用技能\n以下技能已配置给你，每条是「名字：适用说明」。当前任务与某条适用说明匹配时，先调用「激活技能」工具取得该技能的完整正文，按正文行事。\n\n${skills.map((s) => `- ${s.name}：${s.description}`).join('\n')}`
+    )
   parts.push(`# 环境信息\n${envLines.join('\n')}`)
   return parts.join('\n\n')
 }
