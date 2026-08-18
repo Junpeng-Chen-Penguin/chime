@@ -27,7 +27,7 @@ import { EMBED_MODEL_ID } from '../model'
 import { humanize, markVendorHealth } from '../ai'
 import { builtinDisplay } from '../../shared/builtinTools'
 import { buildSystemPrompt, type KbEnv } from './prompts'
-import { getMcpInstructions } from '../mcp/client'
+import { getMcpInstructions, setActiveRootsProvider } from '../mcp/client'
 import { budgetFor, estimateTokens, recordUsage } from './budget'
 import {
   makeSearchTool,
@@ -279,6 +279,9 @@ async function streamCore(core: {
 
   const controller = new AbortController()
   turns.set(streamId, controller)
+  // roots 登记（015 T1）：本轮内 MCP 服务端反查 roots 时，返回本会话的授权目录清单（现查，
+  // 轮内新授权的目录立即可见）；轮结束在 finally 注销
+  setActiveRootsProvider(() => getConversationWs(convId) ?? [])
 
   // 轮内状态：检索计数与来源池（连续编号）；limitHit = 触接口级禁止（触边界强制作答）
   const toolCtx: TurnToolContext = {
@@ -748,6 +751,7 @@ async function streamCore(core: {
       finish('error', msg, undefined, contextRatio)
     }
   } finally {
+    setActiveRootsProvider(null)
     cards.dispose()
     turns.delete(streamId)
   }

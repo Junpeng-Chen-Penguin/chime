@@ -3,11 +3,25 @@
 // 失败语义从简：调用失败标脏、下次调用前重连；缓存不持久化，启动连不上即当次「服务不可用」。
 
 import { app } from 'electron'
+import { pathToFileURL } from 'url'
+import { basename } from 'path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
+import {
+  ToolListChangedNotificationSchema,
+  ListRootsRequestSchema
+} from '@modelcontextprotocol/sdk/types.js'
 import { createHash } from 'crypto'
 import { listMcpServices, markMcpToolsChanged, setMcpFingerprint, type McpServiceRow } from '../db'
+
+// roots 支持（015 T1，协议标准能力）：服务端可反查「当前会话授权了哪些目录」（Tuner 校验工具
+// 靠它划边界，对所有 MCP 服务通用）。清单取自当前活跃轮次的会话 ws_list——orchestrator 在轮次
+// 开始/结束时登记。单用户单活跃会话；两个会话同时流式的极端情况下可能取到另一个会话的清单，
+// 两者都是用户亲手授权过的目录，风险面不变
+let activeRootsProvider: (() => string[]) | null = null
+export function setActiveRootsProvider(fn: (() => string[]) | null): void {
+  activeRootsProvider = fn
+}
 
 // SDK 默认 60s 对数据导出类工具不足；有进度通知时重置计时
 export const MCP_CALL_TIMEOUT_MS = 120_000
@@ -58,7 +72,16 @@ function shortMessage(e: unknown): string {
 }
 
 function makeClient(config: McpServiceRow): { client: Client; transport: StreamableHTTPClientTransport } {
-  const client = new Client({ name: 'chime', version: app.getVersion() })
+  const client = new Client(
+    { name: 'chime', version: app.getVersion() },
+    { capabilities: { roots: {} } }
+  )
+  client.setRequestHandler(ListRootsRequestSchema, async () => ({
+    roots: (activeRootsProvider?.() ?? []).map((dir) => ({
+      uri: pathToFileURL(dir).href,
+      name: basename(dir)
+    }))
+  }))
   const transport = new StreamableHTTPClientTransport(new URL(config.url), {
     requestInit: { headers: config.headers }
   })
