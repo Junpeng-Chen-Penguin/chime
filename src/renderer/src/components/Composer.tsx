@@ -181,8 +181,9 @@ export default function Composer({
     onChange(`/${name} `)
     taRef.current?.focus()
   }
-  // 有效点名的输入框内反馈（验收意见 2026-08-18）：开头「/技能名」命中库里的名字时，
-  // 文字底下垫一条高亮底色（文字本身仍是输入框的黑字），表示已识别为点名而非普通文本
+  // 有效点名的输入框内反馈（验收二轮拍板 2026-08-18）：开头「/技能名」命中库里的名字时文字显示主色，
+  // 与消息气泡上的点名同一个样式（一个功能一种表达）。textarea 做不了部分变色，镜像层用完全相同的
+  // 字体字重把主色字盖在黑字正上方——字重必须与正文一致，否则字宽不同盖不严
   const mentionLen = (() => {
     const m = /^\/([^\s/]+)(\s|$)/.exec(value)
     return m && skillList?.some((s) => s.name === m[1]) ? m[1].length + 1 : 0
@@ -273,15 +274,15 @@ export default function Composer({
             </div>
           )}
           <div className="relative">
-          {/* 点名高亮底垫：与 textarea 同字体同内边距的镜像层，全部文字透明、只给点名段上底色，
-              黑字由上层 textarea 照常绘制（文字不动，反馈只加一层底色）。滚动由 onScroll 同步 */}
+          {/* 点名主色覆盖层：与 textarea 同字体同内边距同字重的镜像层，点名段用主色字精确盖在
+              黑字正上方（z-10 在 textarea 之上、不接事件），其余文字透明只占位。滚动由 onScroll 同步 */}
           {mentionLen > 0 && (
             <div
               ref={hlRef}
               aria-hidden
-              className="pointer-events-none absolute inset-0 max-h-40 overflow-hidden px-5 pt-4 pb-2.5 text-[14px] leading-[1.6] break-words whitespace-pre-wrap text-transparent"
+              className="pointer-events-none absolute inset-0 z-10 max-h-40 overflow-hidden px-5 pt-4 pb-2.5 text-[14px] leading-[1.6] break-words whitespace-pre-wrap text-transparent"
             >
-              <span className="rounded-[5px] bg-primary/15">{value.slice(0, mentionLen)}</span>
+              <span className="text-primary">{value.slice(0, mentionLen)}</span>
               {value.slice(mentionLen)}
             </div>
           )}

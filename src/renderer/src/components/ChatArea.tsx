@@ -386,7 +386,7 @@ function UserMsg({
       <div className="max-w-[82%] rounded-[18px] bg-[#f0f0ee] px-4 py-2.5 text-[16px] leading-[1.7] whitespace-pre-wrap text-foreground select-text">
         {slashLen ? (
           <>
-            <span title={skill!.desc} className="font-medium text-primary">
+            <span title={skill!.desc} className="text-primary">
               {m.content.slice(0, slashLen)}
             </span>
             {m.content.slice(slashLen)}
