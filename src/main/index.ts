@@ -698,13 +698,22 @@ app.whenReady().then(() => {
             }
           }
         }
+        // 斜杠点名（015 Case 6）：与界面同一套解析——开头「/技能名」且库里存在才算，
+        // 无效点名不设字段、文本原样发出
+        const { listSkills } = await import('./skills')
+        const slashOf = (text: string): string | undefined => {
+          if (!text.startsWith('/')) return undefined
+          const name = text.slice(1).split(/\s+/)[0]
+          return name && listSkills().some((s) => s.name === name) ? name : undefined
+        }
         let turnNo = 0
         for (let i = 0; i < spec.messages.length; i++) {
           turnNo++
           const streamId = `t${turnNo}`
           currentStreamId = streamId
           if (spec.stopAfterMs) setTimeout(() => stopTurn(streamId), spec.stopAfterMs)
-          await runTurn({ streamId, convId, text: spec.messages[i], model, emit })
+          const text = spec.messages[i]
+          await runTurn({ streamId, convId, text, model, emit, slashSkill: slashOf(text) })
         }
         // agent 模式：列表耗尽后逐轮从 stdin 取下一句，EOF 即收尾（分叉点只有这一处）
         if (agentMode) {
@@ -714,7 +723,7 @@ app.whenReady().then(() => {
             turnNo++
             const streamId = `t${turnNo}`
             currentStreamId = streamId
-            await runTurn({ streamId, convId, text, model, emit })
+            await runTurn({ streamId, convId, text, model, emit, slashSkill: slashOf(text) })
           }
         }
         await closeAllMcp() // 关闭 SSE 长连接，评估进程干净退出

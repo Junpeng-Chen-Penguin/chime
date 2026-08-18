@@ -34,7 +34,7 @@ function App(): React.JSX.Element {
   const settingsDirty = useRef(false) // 设置里有未保存表单内容（只在离开瞬间读，不需要触发渲染）
   const [leaveTarget, setLeaveTarget] = useState<(() => void) | null>(null) // 未保存拦截：确认后要执行的离开动作
   // 设置打开时直达的分区：侧栏入口用默认分区，服务状态面板的「前往设置」直达 MCP 分区
-  const [settingsTab, setSettingsTab] = useState<'provider' | 'kb' | 'mcp' | 'agent' | undefined>(
+  const [settingsTab, setSettingsTab] = useState<'provider' | 'kb' | 'mcp' | 'skill' | 'agent' | undefined>(
     undefined
   )
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
@@ -403,19 +403,40 @@ function App(): React.JSX.Element {
     const text = input.trim()
     if (!text) return
     // 表格行引用随消息发出（013 Case 2）：chars 是渲染层的估算件，落库前剥掉
-    const refs = (chips[activeId] ?? []).map(({ artifactId, title, rowIndexes }) => ({
-      t: 'ref' as const,
-      artifactId,
-      title,
-      rowIndexes
-    }))
+    const refs: import('@/hooks/useChat').UserItem[] = (chips[activeId] ?? []).map(
+      ({ artifactId, title, rowIndexes }) => ({
+        t: 'ref' as const,
+        artifactId,
+        title,
+        rowIndexes
+      })
+    )
+    // 斜杠点名（015 Case 6）：开头「/技能名」对库校验——存在的计入本轮点名并存 chip 渲染件
+    //（简介存发出时的快照）；不存在的当普通文本，不设字段
+    let slashSkill: string | undefined
+    if (text.startsWith('/')) {
+      const name = text.slice(1).split(/\s+/)[0]
+      if (name) {
+        const hit = (await window.api.skillList()).find((s) => s.name === name)
+        if (hit) {
+          slashSkill = name
+          refs.push({ t: 'skillref', name, desc: hit.description })
+        }
+      }
+    }
     const clearPending = (): void => {
       setInputs((m) => ({ ...m, [activeId]: '' }))
       setChips((m) => ({ ...m, [activeId]: [] }))
     }
     // 提问卡等待中打字发送 = 中断提问 + 开启新一轮（Claude 同此；想回答问题用卡内作答）
     if (askActive) {
-      chat.interruptAskAndSend(activeId, activeModel, text, refs.length ? refs : undefined)
+      chat.interruptAskAndSend(
+        activeId,
+        activeModel,
+        text,
+        refs.length ? refs : undefined,
+        slashSkill
+      )
       clearPending()
       return
     }
@@ -446,7 +467,7 @@ function App(): React.JSX.Element {
       frozenWs === null
         ? { picked: wsChecked.filter((p) => !fromAgentWs.includes(p)), fromAgent: fromAgentWs }
         : undefined
-    chat.send(activeId, activeModel, text, refs.length ? refs : undefined, wsPayload)
+    chat.send(activeId, activeModel, text, refs.length ? refs : undefined, wsPayload, slashSkill)
   }
 
   const confirmDelete = async (): Promise<void> => {
@@ -482,7 +503,7 @@ function App(): React.JSX.Element {
     then?.()
   }
 
-  const openSettings = (tab?: 'provider' | 'kb' | 'mcp' | 'agent'): void => {
+  const openSettings = (tab?: 'provider' | 'kb' | 'mcp' | 'skill' | 'agent'): void => {
     setSettingsTab(tab)
     setPanel(null) // 设置占用主区域，侧板一并收起（退出后不自动恢复）
     setSettingsOpen(true)
@@ -544,6 +565,7 @@ function App(): React.JSX.Element {
           agentServiceIds={agentServiceIds}
           onSelectAgent={selectAgent}
           onManageAgents={() => openSettings('agent')}
+          onManageSkills={() => openSettings('skill')}
           services={services}
           selectedServiceIds={mcpSel[activeId] ?? []}
           onToggleService={(id) => {

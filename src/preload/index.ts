@@ -50,8 +50,12 @@ const api = {
     convId: string
     text: string
     model: string
-    refs?: { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }[]
+    refs?: (
+      | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }
+      | { t: 'skillref'; name: string; desc: string }
+    )[]
     ws?: { picked: string[]; fromAgent: string[] }
+    slashSkill?: string
   }) => ipcRenderer.send('chat:send', payload),
   retryChat: (payload: { streamId: string; convId: string; model: string }) =>
     ipcRenderer.send('chat:retry', payload),

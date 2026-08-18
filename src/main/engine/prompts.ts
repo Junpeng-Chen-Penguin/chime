@@ -86,7 +86,10 @@ export function buildSystemPrompt(
   mcpInstructions: McpInstructionEntry[] = [],
   agentPrompt: string | null = null,
   wsDirs: string[] = [],
-  skills: { name: string; description: string }[] = []
+  skills: { name: string; description: string }[] = [],
+  // 激活工具是否注册（015 C6）：斜杠点名的会话清单段可能为空（通用对话点名），但斜杠规则要在——
+  // 缺省跟随清单非空（C5 语义不变）
+  hasActivate?: boolean
 ): string {
   const d = new Date()
   const envLines: string[] = []
@@ -99,7 +102,7 @@ export function buildSystemPrompt(
 
   const parts = [agentPrompt?.trim() ? agentPrompt.trim() : IDENTITY_DEFAULT]
   parts.push(TRUNK)
-  parts.push(skills.length ? `${TOOL_SECTION}\n${SLASH_RULE}` : TOOL_SECTION)
+  parts.push((hasActivate ?? skills.length > 0) ? `${TOOL_SECTION}\n${SLASH_RULE}` : TOOL_SECTION)
   if (kb) parts.push(KB_SECTION)
   if (mcpInstructions.length) {
     const blocks = mcpInstructions.map((m) => `## ${m.name}\n${m.instructions}`)

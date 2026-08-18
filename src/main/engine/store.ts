@@ -56,6 +56,9 @@ export type TurnItem =
   // 表格行引用 chip（013 Case 2，用户消息专用）：只存指向不抄数据——制品是不变快照，行号稳定，
   // 内容进模型时按行号现取。title 存快照是为渲染层不查库（与制品卡同例）；序号由数组下标推，不存
   | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }
+  // 斜杠点名 chip（015 Case 6，用户消息专用）：点名文字原样留在 content 里进模型，这里只存
+  // 渲染件——名字定位替换位置，简介存发出时的快照（技能之后删除或更新不回改历史消息）
+  | { t: 'skillref'; name: string; desc: string }
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
 // waiting = 等卡中（弹卡即落库的中间态）；interrupted = 应用退出打断、启动修复后收场
@@ -69,8 +72,11 @@ export function saveUserMessage(convId: string, text: string, refs?: TurnItem[])
   const db = getDb()
   const now = Date.now()
   const clean = (refs ?? [])
-    .filter((r): r is Extract<TurnItem, { t: 'ref' }> => r.t === 'ref')
-    .map((r) => ({ ...r, rowIndexes: r.rowIndexes.slice(0, REF_ROWS_MAX) }))
+    .filter(
+      (r): r is Extract<TurnItem, { t: 'ref' } | { t: 'skillref' }> =>
+        r.t === 'ref' || r.t === 'skillref'
+    )
+    .map((r) => (r.t === 'ref' ? { ...r, rowIndexes: r.rowIndexes.slice(0, REF_ROWS_MAX) } : r))
   db.prepare(
     'INSERT INTO message (id, conversation_id, role, content, items, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
   ).run(

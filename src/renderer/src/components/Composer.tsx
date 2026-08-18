@@ -9,6 +9,7 @@ import {
   Folder,
   FolderPlus,
   Plus,
+  Puzzle,
   Search,
   Table2,
   TriangleAlert,
@@ -89,6 +90,7 @@ interface Props {
   agentServiceIds?: number[] // Agent 挂的服务（在服务菜单里标「来自 Agent」，不可取消）
   onSelectAgent?: (a: { id: number; name: string } | null) => void
   onManageAgents?: () => void // 跳设置的 Agent 栏
+  onManageSkills?: () => void // 跳设置的技能分区（斜杠面板空库态，015 Case 6）
   ws?: WsSelector // 工作空间选择器（015 Case 1），输入框卡片下方
 }
 
@@ -121,6 +123,7 @@ export default function Composer({
   agentServiceIds,
   onSelectAgent,
   onManageAgents,
+  onManageSkills,
   ws
 }: Props): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -154,6 +157,35 @@ export default function Composer({
     ta.style.overflowY = ta.scrollHeight > 160 ? 'auto' : 'hidden'
   }, [value])
 
+  // 斜杠技能面板（015 Case 6）：输入框为空时输入「/」触发（即整个 value 形如 /部分名字、无空格）。
+  // 选中落纯文本「/技能名 」带空格——之后 value 含空格，面板自然收起；句中的「/」不匹配开头，
+  // 一条消息一个点名由此天然成立。清单每次唤出时现拉（导入新技能立即可见），前缀过滤纯前端
+  const [skillList, setSkillList] = useState<{ name: string }[] | null>(null)
+  const [slashIdx, setSlashIdx] = useState(0)
+  const slashQuery = /^\/([^\s/]*)$/.exec(value)?.[1]
+  const slashPrev = useRef(false)
+  useEffect(() => {
+    const active = slashQuery !== undefined
+    if (active && !slashPrev.current) {
+      setSkillList(null)
+      setSlashIdx(0)
+      window.api.skillList().then((l) => setSkillList(l.map((s) => ({ name: s.name }))))
+    }
+    slashPrev.current = active
+  }, [slashQuery])
+  useEffect(() => setSlashIdx(0), [slashQuery])
+  const slashHits =
+    slashQuery !== undefined && skillList
+      ? skillList.filter((s) => s.name.startsWith(slashQuery))
+      : []
+  // 面板可见：斜杠态且（库空显示空态引导，否则有命中才显示——无匹配收起、输入保留）
+  const slashPanel =
+    slashQuery !== undefined && skillList !== null && (skillList.length === 0 || slashHits.length > 0)
+  const pickSkill = (name: string): void => {
+    onChange(`/${name} `)
+    taRef.current?.focus()
+  }
+
   // 提问卡等待中输入框开放：有内容时可发送（中断提问、开新一轮），空时右下仍是停止
   const canSend = value.trim().length > 0 && (!sending || askWaiting)
   // 库状态三档（PRD Case 3）：红 = 不可用（已移除 / 尚未构建），黄 = 文件夹不可用（仍可检索），绿 = 正常
@@ -182,7 +214,45 @@ export default function Composer({
               'rounded-[22px] border border-border/60 bg-black/[0.025] shadow-[0_1px_3px_rgba(0,0,0,0.03),0_8px_28px_-10px_rgba(0,0,0,0.10)]'
           )}
         >
-        <div className="rounded-2xl border border-input bg-background shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_28px_-8px_rgba(0,0,0,0.14)] transition focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15">
+        <div className="relative rounded-2xl border border-input bg-background shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_28px_-8px_rgba(0,0,0,0.14)] transition focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15">
+          {/* 斜杠技能面板（015 Case 6）：输入框上方，只列技能名（不限当前 Agent）；
+              库空给空态与去导入入口。mousedown 选中（blur 前生效），悬停同步高亮 */}
+          {slashPanel && (
+            <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 max-h-[240px] w-[240px] overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+              {skillList!.length === 0 ? (
+                <>
+                  <div className="px-2.5 pt-1.5 pb-0.5 text-[13px]">还没有技能</div>
+                  <button
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      onManageSkills?.()
+                    }}
+                    className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted"
+                  >
+                    去设置导入
+                  </button>
+                </>
+              ) : (
+                slashHits.map((s, i) => (
+                  <button
+                    key={s.name}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      pickSkill(s.name)
+                    }}
+                    onMouseEnter={() => setSlashIdx(i)}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
+                      i === slashIdx && 'bg-muted'
+                    )}
+                  >
+                    <Puzzle className="size-3.5 flex-none text-muted-foreground" />
+                    <span className="min-w-0 truncate">/{s.name}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
           {/* 待发送的表格行引用（013 Case 2）：横排、放不下换行；不带序号——一个制品
               最多一个 chip，模型与用户都靠标题分辨。点击回看（模块三）尚未接上 */}
           {!!chips?.length && (
@@ -223,6 +293,24 @@ export default function Composer({
             onKeyDown={(e) => {
               // 输入法合成中（选拼音/英文候选词）的 Enter 是确认候选，不该触发发送
               if (e.nativeEvent.isComposing || e.keyCode === 229) return
+              // 斜杠面板打开时接管方向键与回车：回车 = 选中当前项（不发送）
+              if (slashPanel && slashHits.length) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setSlashIdx((i) => (i + 1) % slashHits.length)
+                  return
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setSlashIdx((i) => (i - 1 + slashHits.length) % slashHits.length)
+                  return
+                }
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  pickSkill(slashHits[Math.min(slashIdx, slashHits.length - 1)].name)
+                  return
+                }
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 onSubmit()

@@ -4,8 +4,10 @@ import type { TurnItem, AskOutcomePayload } from '../../../preload/index.d'
 // interrupted = 应用退出打断、启动修复后收场（仅出现在水合的历史消息里）
 export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error' | 'interrupted'
 
-// 表格行引用（013 Case 2）：随消息发送的 TurnItem ref 分支
+// 表格行引用（013 Case 2）与斜杠点名 chip（015 Case 6）：随用户消息发送的 TurnItem 分支
 export type RefItem = Extract<TurnItem, { t: 'ref' }>
+export type SkillRefItem = Extract<TurnItem, { t: 'skillref' }>
+export type UserItem = RefItem | SkillRefItem
 
 export interface Usage {
   input: number
@@ -33,19 +35,27 @@ export interface ChatHandle {
   streamingConv: string | null
   contextRatio: Record<string, number> // 每会话最近一轮的上下文用量比例（>0.7 轻提示）
   hydrate: (convId: string, msgs: Msg[]) => void
-  // ws：首条消息随带的工作空间选中集合（015 Case 1），之后的消息不带（主进程已定格、会忽略）
+  // ws：首条消息随带的工作空间选中集合（015 Case 1），之后的消息不带（主进程已定格、会忽略）；
+  // slashSkill：本轮消息的有效斜杠点名（015 Case 6，App 已对库校验）
   send: (
     convId: string,
     model: string,
     text: string,
-    refs?: RefItem[],
-    ws?: { picked: string[]; fromAgent: string[] }
+    refs?: UserItem[],
+    ws?: { picked: string[]; fromAgent: string[] },
+    slashSkill?: string
   ) => void
   stop: () => void
   retry: (convId: string, model: string) => void
   respondCard: (toolCallId: string, decision: 'approved' | 'denied' | 'always') => void
   respondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
-  interruptAskAndSend: (convId: string, model: string, text: string, refs?: RefItem[]) => void
+  interruptAskAndSend: (
+    convId: string,
+    model: string,
+    text: string,
+    refs?: UserItem[],
+    slashSkill?: string
+  ) => void
 }
 
 // chat:event 的 items 归约器：对话历史所有权在主进程，这里只维护展示态
@@ -61,11 +71,19 @@ export function useChat(onChange?: () => void): ChatHandle {
     convId: string
     model: string
     text: string
-    refs?: RefItem[]
+    refs?: UserItem[]
+    slashSkill?: string
   } | null>(null)
-  const sendRef = useRef<(convId: string, model: string, text: string, refs?: RefItem[]) => void>(
-    () => {}
-  )
+  const sendRef = useRef<
+    (
+      convId: string,
+      model: string,
+      text: string,
+      refs?: UserItem[],
+      ws?: { picked: string[]; fromAgent: string[] },
+      slashSkill?: string
+    ) => void
+  >(() => {})
 
   useEffect(() => {
     threadsRef.current = threads
@@ -159,7 +177,7 @@ export function useChat(onChange?: () => void): ChatHandle {
           const p = pendingSendRef.current
           if (p) {
             pendingSendRef.current = null
-            sendRef.current(p.convId, p.model, p.text, p.refs)
+            sendRef.current(p.convId, p.model, p.text, p.refs, undefined, p.slashSkill)
           }
           return
         }
@@ -180,7 +198,14 @@ export function useChat(onChange?: () => void): ChatHandle {
   }, [])
 
   const send: ChatHandle['send'] = useCallback(
-    (convId, model, text, refs?: RefItem[], ws?: { picked: string[]; fromAgent: string[] }) => {
+    (
+      convId,
+      model,
+      text,
+      refs?: UserItem[],
+      ws?: { picked: string[]; fromAgent: string[] },
+      slashSkill?: string
+    ) => {
       if (routeRef.current) return
       const now = Date.now()
       const userMsg: Msg = {
@@ -201,7 +226,7 @@ export function useChat(onChange?: () => void): ChatHandle {
       }
       setThreads((t) => ({ ...t, [convId]: [...(t[convId] ?? []), userMsg, asstMsg] }))
       const streamId = begin(convId, asstMsg.id)
-      window.api.sendChat({ streamId, convId, text, model, refs, ws })
+      window.api.sendChat({ streamId, convId, text, model, refs, ws, slashSkill })
     },
     [begin]
   )
@@ -251,10 +276,10 @@ export function useChat(onChange?: () => void): ChatHandle {
   // 提问卡等待中打字发送 = 中断提问 + 开启新一轮（Claude 同此）：
   // 停止本轮（卡记未回应），本轮收场事件到达后把输入的文字作为新消息发出
   const interruptAskAndSend = useCallback(
-    (convId: string, model: string, text: string, refs?: RefItem[]) => {
+    (convId: string, model: string, text: string, refs?: UserItem[], slashSkill?: string) => {
       const r = routeRef.current
       if (!r) return
-      pendingSendRef.current = { convId, model, text, refs }
+      pendingSendRef.current = { convId, model, text, refs, slashSkill }
       window.api.stopChat(r.streamId)
     },
     []

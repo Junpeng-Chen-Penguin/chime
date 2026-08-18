@@ -158,6 +158,9 @@ export async function runTurn(opts: {
   // 015 Case 1：首条消息随带的工作空间选中集合（合并后全部上授权卡统一确认，Agent 默认值不构成授权）。
   // 已定格（ws_list 非 NULL）的会话忽略此字段
   ws?: { picked: string[]; fromAgent: string[] }
+  // 015 Case 6：本轮消息斜杠点名的技能（renderer 已对库校验）——只并入激活工具的可选范围，
+  // 不进系统提示词清单段（清单只放 Agent 配的）
+  slashSkill?: string
 }): Promise<void> {
   try {
     await runTurnBody(opts)
@@ -206,7 +209,8 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
     items: [],
     kbEnv,
     agent,
-    ws: opts.ws
+    ws: opts.ws,
+    slashSkill: opts.slashSkill
   })
 }
 
@@ -221,6 +225,7 @@ async function streamCore(core: {
   kbEnv: KbEnv | null
   agent: AgentRow | null
   ws?: { picked: string[]; fromAgent: string[] }
+  slashSkill?: string
 }): Promise<void> {
   const { streamId, convId, model, emit, msgId, items, kbEnv, agent } = core
   const p = resolveModelRef(model)
@@ -384,16 +389,21 @@ async function streamCore(core: {
     turnTools,
     makeFsTools({ convId, signal: controller.signal, cards, overflow, onFsCard })
   )
-  // 技能（015 C5）：Agent 清单现场对库过滤（已删除的自然剔除），非空才注册激活工具与提示词清单段。
+  // 技能（015 C5）：Agent 清单现场对库过滤（已删除的自然剔除）。可激活范围 = Agent 清单 ∪
+  // 本轮斜杠点名（C6，主进程对库再校验一道），非空才注册激活工具；提示词清单段只放 Agent 配的。
   // history 在下方组装后才赋值，激活工具经 getHistory 延迟取（执行必在流式循环内，晚于赋值）
   let history: ModelMessage[] = []
   const skillLib = new Map(listSkills().map((s) => [s.name, s.description]))
   const turnSkills = (agent?.skillSel ?? [])
     .filter((n) => skillLib.has(n))
     .map((n) => ({ name: n, description: skillLib.get(n)! }))
-  if (turnSkills.length)
+  const slashName = core.slashSkill && skillLib.has(core.slashSkill) ? core.slashSkill : null
+  const activeSkillNames = [
+    ...new Set([...turnSkills.map((s) => s.name), ...(slashName ? [slashName] : [])])
+  ]
+  if (activeSkillNames.length)
     turnTools[ACTIVATE_TOOL_NAME] = makeActivateSkillTool({
-      names: turnSkills.map((s) => s.name),
+      names: activeSkillNames,
       getHistory: () => history
     })
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
@@ -406,7 +416,8 @@ async function streamCore(core: {
     getMcpInstructions(mcpSelection),
     agent?.prompt ?? null,
     getConversationWs(convId) ?? [],
-    turnSkills
+    turnSkills,
+    activeSkillNames.length > 0
   )
   const budget = budgetFor(model)
   // 历史加载放在 turnTools 组装之后（014 Case 5）：把本轮实际挂载的工具名传进去，

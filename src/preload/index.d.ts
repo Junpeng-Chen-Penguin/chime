@@ -81,6 +81,7 @@ export type TurnItem =
   | { t: 'sources'; list: SourceRef[] }
   | { t: 'artifact'; id: number; title: string; rowCount: number; result?: string } // 制品卡
   | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] } // 表格行引用（013，user 消息专用）
+  | { t: 'skillref'; name: string; desc: string } // 斜杠点名 chip（015 Case 6，user 消息专用）
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
 
 export type ChatEvent =
@@ -267,8 +268,12 @@ export interface ChimeApi {
     convId: string
     text: string
     model: string
-    refs?: { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }[]
+    refs?: (
+      | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }
+      | { t: 'skillref'; name: string; desc: string }
+    )[]
     ws?: { picked: string[]; fromAgent: string[] }
+    slashSkill?: string
   }) => void
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
