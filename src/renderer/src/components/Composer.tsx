@@ -90,7 +90,6 @@ interface Props {
   agentServiceIds?: number[] // Agent 挂的服务（在服务菜单里标「来自 Agent」，不可取消）
   onSelectAgent?: (a: { id: number; name: string } | null) => void
   onManageAgents?: () => void // 跳设置的 Agent 栏
-  onManageSkills?: () => void // 跳设置的技能分区（斜杠面板空库态，015 Case 6）
   ws?: WsSelector // 工作空间选择器（015 Case 1），输入框卡片下方
 }
 
@@ -123,7 +122,6 @@ export default function Composer({
   agentServiceIds,
   onSelectAgent,
   onManageAgents,
-  onManageSkills,
   ws
 }: Props): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -159,32 +157,37 @@ export default function Composer({
 
   // 斜杠技能面板（015 Case 6）：输入框为空时输入「/」触发（即整个 value 形如 /部分名字、无空格）。
   // 选中落纯文本「/技能名 」带空格——之后 value 含空格，面板自然收起；句中的「/」不匹配开头，
-  // 一条消息一个点名由此天然成立。清单每次唤出时现拉（导入新技能立即可见），前缀过滤纯前端
+  // 一条消息一个点名由此天然成立。清单在 value 以「/」开头期间现拉一次（含整段粘贴的点名），
+  // 前缀过滤纯前端。技能库为空时不弹任何面板（验收拍板：本次不做引导）
   const [skillList, setSkillList] = useState<{ name: string }[] | null>(null)
   const [slashIdx, setSlashIdx] = useState(0)
   const slashQuery = /^\/([^\s/]*)$/.exec(value)?.[1]
+  const slashPrefix = value.startsWith('/')
   const slashPrev = useRef(false)
   useEffect(() => {
-    const active = slashQuery !== undefined
-    if (active && !slashPrev.current) {
+    if (slashPrefix && !slashPrev.current) {
       setSkillList(null)
       setSlashIdx(0)
       window.api.skillList().then((l) => setSkillList(l.map((s) => ({ name: s.name }))))
     }
-    slashPrev.current = active
-  }, [slashQuery])
-  useEffect(() => setSlashIdx(0), [slashQuery])
+    slashPrev.current = slashPrefix
+  }, [slashPrefix])
   const slashHits =
     slashQuery !== undefined && skillList
       ? skillList.filter((s) => s.name.startsWith(slashQuery))
       : []
-  // 面板可见：斜杠态且（库空显示空态引导，否则有命中才显示——无匹配收起、输入保留）
-  const slashPanel =
-    slashQuery !== undefined && skillList !== null && (skillList.length === 0 || slashHits.length > 0)
+  const slashPanel = slashHits.length > 0
   const pickSkill = (name: string): void => {
     onChange(`/${name} `)
     taRef.current?.focus()
   }
+  // 有效点名的输入框内反馈（验收意见 2026-08-18）：开头「/技能名」命中库里的名字时，
+  // 文字底下垫一条高亮底色（文字本身仍是输入框的黑字），表示已识别为点名而非普通文本
+  const mentionLen = (() => {
+    const m = /^\/([^\s/]+)(\s|$)/.exec(value)
+    return m && skillList?.some((s) => s.name === m[1]) ? m[1].length + 1 : 0
+  })()
+  const hlRef = useRef<HTMLDivElement>(null)
 
   // 提问卡等待中输入框开放：有内容时可发送（中断提问、开新一轮），空时右下仍是停止
   const canSend = value.trim().length > 0 && (!sending || askWaiting)
@@ -215,42 +218,27 @@ export default function Composer({
           )}
         >
         <div className="relative rounded-2xl border border-input bg-background shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_28px_-8px_rgba(0,0,0,0.14)] transition focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15">
-          {/* 斜杠技能面板（015 Case 6）：输入框上方，只列技能名（不限当前 Agent）；
-              库空给空态与去导入入口。mousedown 选中（blur 前生效），悬停同步高亮 */}
+          {/* 斜杠技能面板（015 Case 6）：输入框上方，只列技能名（不限当前 Agent）。
+              mousedown 选中（blur 前生效），悬停同步高亮；库空或无匹配都不弹 */}
           {slashPanel && (
             <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 max-h-[240px] w-[240px] overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-              {skillList!.length === 0 ? (
-                <>
-                  <div className="px-2.5 pt-1.5 pb-0.5 text-[13px]">还没有技能</div>
-                  <button
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      onManageSkills?.()
-                    }}
-                    className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted"
-                  >
-                    去设置导入
-                  </button>
-                </>
-              ) : (
-                slashHits.map((s, i) => (
-                  <button
-                    key={s.name}
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      pickSkill(s.name)
-                    }}
-                    onMouseEnter={() => setSlashIdx(i)}
-                    className={cn(
-                      'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
-                      i === slashIdx && 'bg-muted'
-                    )}
-                  >
-                    <Puzzle className="size-3.5 flex-none text-muted-foreground" />
-                    <span className="min-w-0 truncate">/{s.name}</span>
-                  </button>
-                ))
-              )}
+              {slashHits.map((s, i) => (
+                <button
+                  key={s.name}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    pickSkill(s.name)
+                  }}
+                  onMouseEnter={() => setSlashIdx(i)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
+                    i === slashIdx && 'bg-muted'
+                  )}
+                >
+                  <Puzzle className="size-3.5 flex-none text-muted-foreground" />
+                  <span className="min-w-0 truncate">/{s.name}</span>
+                </button>
+              ))}
             </div>
           )}
           {/* 待发送的表格行引用（013 Case 2）：横排、放不下换行；不带序号——一个制品
@@ -284,12 +272,31 @@ export default function Composer({
               ))}
             </div>
           )}
+          <div className="relative">
+          {/* 点名高亮底垫：与 textarea 同字体同内边距的镜像层，全部文字透明、只给点名段上底色，
+              黑字由上层 textarea 照常绘制（文字不动，反馈只加一层底色）。滚动由 onScroll 同步 */}
+          {mentionLen > 0 && (
+            <div
+              ref={hlRef}
+              aria-hidden
+              className="pointer-events-none absolute inset-0 max-h-40 overflow-hidden px-5 pt-4 pb-2.5 text-[14px] leading-[1.6] break-words whitespace-pre-wrap text-transparent"
+            >
+              <span className="rounded-[5px] bg-primary/15">{value.slice(0, mentionLen)}</span>
+              {value.slice(mentionLen)}
+            </div>
+          )}
           <textarea
             ref={taRef}
             rows={1}
             value={value}
             disabled={inputDisabled}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => {
+              setSlashIdx(0) // 键入即回到首项（方向键选中不触发 onChange，不受影响）
+              onChange(e.target.value)
+            }}
+            onScroll={(e) => {
+              if (hlRef.current) hlRef.current.scrollTop = e.currentTarget.scrollTop
+            }}
             onKeyDown={(e) => {
               // 输入法合成中（选拼音/英文候选词）的 Enter 是确认候选，不该触发发送
               if (e.nativeEvent.isComposing || e.keyCode === 229) return
@@ -323,8 +330,9 @@ export default function Composer({
                   ? '或直接回复……'
                   : 'Chime in…'
             }
-            className="block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-[14px] leading-[1.6] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+            className="relative block max-h-40 w-full resize-none bg-transparent px-5 pt-4 pb-2.5 text-[14px] leading-[1.6] outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
           />
+          </div>
           <div className="flex items-center justify-between px-3 pb-3">
             {/* 左下（014 Case 4）：加号收起挂载入口，已选的只展示不带删除——取消回菜单里操作 */}
             <div className="flex items-center gap-1">

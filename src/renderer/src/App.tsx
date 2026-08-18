@@ -565,7 +565,6 @@ function App(): React.JSX.Element {
           agentServiceIds={agentServiceIds}
           onSelectAgent={selectAgent}
           onManageAgents={() => openSettings('agent')}
-          onManageSkills={() => openSettings('skill')}
           services={services}
           selectedServiceIds={mcpSel[activeId] ?? []}
           onToggleService={(id) => {

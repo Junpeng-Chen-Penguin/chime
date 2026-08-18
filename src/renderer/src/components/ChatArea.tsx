@@ -69,7 +69,6 @@ interface Props {
   agentServiceIds: number[]
   onSelectAgent: (a: { id: number; name: string } | null) => void
   onManageAgents: () => void
-  onManageSkills?: () => void // 斜杠面板空库态的去导入入口（015 Case 6）
   services: ServiceStatus[]
   selectedServiceIds: number[]
   onToggleService: (id: number) => void
@@ -113,7 +112,6 @@ export default function ChatArea({
   agentServiceIds,
   onSelectAgent,
   onManageAgents,
-  onManageSkills,
   services,
   selectedServiceIds,
   onToggleService,
@@ -187,7 +185,6 @@ export default function ChatArea({
       agentServiceIds={agentServiceIds}
       onSelectAgent={onSelectAgent}
       onManageAgents={onManageAgents}
-      onManageSkills={onManageSkills}
       services={services}
       selectedServiceIds={selectedServiceIds}
       onToggleService={onToggleService}
@@ -362,8 +359,8 @@ function UserMsg({
   onOpenArtifact: (id: number, rows?: number[]) => void
 }): React.JSX.Element {
   const refs = (m.items ?? []).filter((it): it is Extract<TurnItem, { t: 'ref' }> => it.t === 'ref')
-  // 斜杠点名 chip（015 Case 6）：正文开头的「/技能名」在原位置渲染成小标签（悬停看发出时的简介快照），
-  // 其余文字照常显示。技能之后删除或更新不回改——渲染件随消息落库
+  // 斜杠点名（015 Case 6，验收修订）：正文开头的「/技能名」原位置用文字颜色区分（不做标签框），
+  // 悬停看发出时的简介快照；其余文字照常。技能之后删除或更新不回改——渲染件随消息落库
   const skill = (m.items ?? []).find(
     (it): it is Extract<TurnItem, { t: 'skillref' }> => it.t === 'skillref'
   )
@@ -389,14 +386,10 @@ function UserMsg({
       <div className="max-w-[82%] rounded-[18px] bg-[#f0f0ee] px-4 py-2.5 text-[16px] leading-[1.7] whitespace-pre-wrap text-foreground select-text">
         {slashLen ? (
           <>
-            <span
-              title={skill!.desc}
-              className="mr-1.5 inline-flex translate-y-[2px] items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 align-baseline text-[13px]"
-            >
-              <Puzzle className="size-3 flex-none text-muted-foreground" />
-              {skill!.name}
+            <span title={skill!.desc} className="font-medium text-primary">
+              {m.content.slice(0, slashLen)}
             </span>
-            {m.content.slice(slashLen).trimStart()}
+            {m.content.slice(slashLen)}
           </>
         ) : (
           m.content
