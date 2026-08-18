@@ -2291,12 +2291,8 @@ function AgentPanel({
         </Button>
       </div>
       {agents.length === 0 ? (
-        <div className="flex flex-col items-start gap-1 py-8">
-          <div className="text-[14px] font-medium">还没有 Agent</div>
-          <div className="text-[13px] text-muted-foreground">
-            建一个专管某摊事的助手，开会话时直接选它
-          </div>
-        </div>
+        // 空态既定口径（C4 拍板同款）：通用文案居中，不放解释——新建按钮自明
+        <div className="py-8 text-center text-[13px] text-muted-foreground">暂无 Agent</div>
       ) : (
         <div className="flex flex-col gap-2.5">
           {agents.map((a) => (
