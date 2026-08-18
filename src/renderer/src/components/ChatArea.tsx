@@ -12,6 +12,7 @@ import {
   Check,
   Info,
   Sparkles,
+  Puzzle,
   FileText,
   Table,
   Table2,
@@ -476,7 +477,15 @@ function AssistantMsg({
         if (it.t === 'tool' && it.name === 'activate_skill') {
           const ok = typeof it.result === 'string' && it.result.startsWith('【技能：')
           if (!ok && it.result !== undefined) return null
-          return <PlainRow key={i} text={`技能激活：${String(it.args?.name ?? '')}`} />
+          // 行首用技能的拼图图标（验收二轮意见：比圆点更清晰），尺寸与思考行的图标一致
+          return (
+            <div key={i} className="flex gap-2.5">
+              <Puzzle className="mt-[5px] size-3.5 flex-none text-muted-foreground/70" />
+              <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
+                技能激活：{String(it.args?.name ?? '')}
+              </div>
+            </div>
+          )
         }
         switch (it.t) {
           case 'reasoning':
