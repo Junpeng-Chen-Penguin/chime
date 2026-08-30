@@ -6,6 +6,16 @@ import { join } from 'path'
 import type { WebContents } from 'electron'
 import { chunkMarkdown } from '../shared/chunker'
 import { embed, loadModels, EMBED_MODEL_ID, type ModelProgress } from './model'
+
+// 库可用性判定（016 十节，三处界面加引擎共用这一份）：构建过，且嵌入模型为空或与当前一致。
+// 空 embedModel 的老库放行——老库没记模型，严格相等会把它们全翻成不可用
+export function kbReady(k: { indexedAt: number | null; embedModel: string }): boolean {
+  return !!k.indexedAt && (!k.embedModel || k.embedModel === EMBED_MODEL_ID)
+}
+// 需重建：构建过但嵌入模型对不上（应用升级换了本地模型）
+export function kbStale(k: { indexedAt: number | null; embedModel: string }): boolean {
+  return !!k.indexedAt && !!k.embedModel && k.embedModel !== EMBED_MODEL_ID
+}
 import * as db from './db'
 
 const MAX_FILE_BYTES = 1024 * 1024 // 超 1MB 的 md 跳过

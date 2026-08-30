@@ -106,9 +106,7 @@ export function makeMcpTools(
 // FETCH_TOOL_NAME 为退役工具名，仅供渲染层识别历史会话的旧调用行。
 export const FETCH_TOOL_NAME = 'fetch_tool_result'
 export const GREP_TOOL_NAME = 'grep_result'
-export const GREP_TOOL_DISPLAY = '搜结果集'
 export const READ_TOOL_NAME = 'read_result'
-export const READ_TOOL_DISPLAY = '读结果集'
 
 const GREP_TOOL_DESCRIPTION = `在已存的超限结果里逐行正则搜索，相当于对结果内容执行 grep -n。用于结果超限被存库（摘要里有「结果编号 #N」）、需要定位具体内容时；结果编号在本会话内一直有效。
 
@@ -187,20 +185,28 @@ export function makeReadResultTool(convId: string) {
 // 「询问用户」内置工具：模型缺信息时停下来弹提问卡（命名沿用 Claude Code 的 AskUserQuestion）。
 // execute 挂起等用户回应，四条出路各对应一份固定文案（PRD 出路表），模型的后续行为由文案驱动。
 export const ASK_TOOL_NAME = 'ask_user_question'
-export const ASK_TOOL_DISPLAY = '询问用户'
 
 const ASK_TOOL_DESCRIPTION = `向用户提出选择题收集信息，问题以选择卡片呈现。
 
 什么时候用：
 - 只在答案能落在几个明确候选里时使用：几个方案选一个、确认某个操作、选范围或口径
-- 调用工具前缺必填参数、执行前需要用户定夺时，缺几个信息就一次问齐（一次调用 1-4 个问题），不要连环发起提问
+- 调用工具前缺必填参数、执行前需要用户定夺时，缺几个信息就一次问齐，不要连环发起提问
 - 答案完全开放、你给不出真实候选时（如让用户自由填写一个名称），不要用这个工具——直接在回复正文里向用户提问
 
-怎么写问题：
-- 问题本身要写清晰完整（选项没有附加说明，差别要在问题里交代清楚）
-- 选项必须是答案本身，简短明确；不要写「我直接输入」「见下方」这类操作指引选项
-- 有推荐选项时放在第一位，并在 label 末尾标注「（推荐）」
-- 不要自设「其他」「其他（请输入）」「以上都不是」这类选项——卡片界面已自带「其他」自由输入行，再提供就会重复出现两个
+问几个：
+- 尽量只问 1 个，最多不超过 3 个。问题越少，用户回答得越快
+- 例：缺「统计月份」与「是否含税」两个口径，就一次问 2 题，不要先问月份、等回答后再问含税
+
+问题怎么写（question 字段）：
+- 一句完整的问句，不超过 25 个字，问题里交代清楚差别（选项没有附加说明）
+- 例：「这份对账单按哪个月份统计？」
+
+选项怎么写（options 的 label 字段）：
+- 选项必须是答案本身，每个不超过 12 个字
+- 有推荐选项时放在第一位，label 末尾标注「（推荐）」
+- 例：「2026 年 6 月（推荐）」「2026 年 5 月」
+- 不要写「我直接输入」「见下方」这类操作指引选项
+- 不要自设「其他」「以上都不是」——卡片界面自带「其他」自由输入行，再提供就会重复出现两个
 
 返回语义：
 - 「用户的回答：…」= 逐题作答结果，标「未回答」的题用户选择跳过
@@ -216,12 +222,12 @@ export function makeAskTool(signal: AbortSignal, cards: CardQueue) {
         questions: {
           type: 'array',
           minItems: 1,
-          maxItems: 4,
-          description: '要问用户的问题（1-4 个，缺几个信息一次问齐）',
+          maxItems: 3,
+          description: '要问用户的问题。尽量只问 1 个，最多 3 个，缺几个信息一次问齐',
           items: {
             type: 'object',
             properties: {
-              question: { type: 'string', description: '问题文字，完整的一句话' },
+              question: { type: 'string', description: '问题文字，完整的一句问句，不超过 25 个字' },
               options: {
                 type: 'array',
                 minItems: 2,
@@ -293,7 +299,6 @@ async function execMcpTool(
 // 「生成制品」内置工具：模型判断用户需要亲眼查看/核对数据时，生成表格制品（对话流出卡、侧板查看）。
 // 免授权（只产出展示内容，不动外部系统）。成功时引擎以制品卡呈现（不出工具步骤行）。
 export const ARTIFACT_TOOL_NAME = 'create_artifact'
-export const ARTIFACT_TOOL_DISPLAY = '生成制品'
 
 // 触发规则（何时生成）在系统提示词的输出约定里，这里只写接口用法（v1.1.0 Case 8：注入位置决定遵循强度）
 const ARTIFACT_TOOL_DESCRIPTION = `把一批行列结构的数据生成表格制品，用户点开在侧板查看全貌。何时生成以系统提示词的输出约定为准。
@@ -324,7 +329,7 @@ export function makeArtifactTool(
           enum: ['table'],
           description: '制品类型，本版仅 table（数据表格）'
         },
-        title: { type: 'string', description: '制品标题，用户视角命名' },
+        title: { type: 'string', description: '制品标题，用户视角命名，不超过 20 个字' },
         data: { description: '直接内容：对象数组（键为列名）或规整分隔文本。与 ref 二选一' },
         ref: {
           type: 'object',
@@ -486,7 +491,7 @@ export function makeSearchTool(ctx: TurnToolContext) {
           ? { results, truncated: `因篇幅上限未能放入：${[...new Set(dropped)].join('、')}` }
           : { results }
       } catch (e) {
-        return { error: `检索发生故障：${(e as Error).message.slice(0, 120)}` }
+        return { error: `检索发生故障：${(e as Error).message.slice(0, 120)}`, userText: '检索出错' }
       }
     }
   })

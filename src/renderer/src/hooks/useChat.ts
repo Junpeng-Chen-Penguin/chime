@@ -23,7 +23,7 @@ export interface Msg {
   usage?: Usage // 正常收尾才有；中断轮无（不显示不估算）
   status: MsgStatus
   error?: string
-  notice?: string // 一次性提示（如知识库需重建），不落库
+  tailOpen?: boolean // 末位块还在流式中（016 状态行四档判定用；展示态，不落库）
   createdAt: number
 }
 
@@ -111,7 +111,7 @@ export function useChat(onChange?: () => void): ChatHandle {
           patch(r.convId, r.msgId, (m) => {
             const items = [...(m.items ?? [])]
             items[evt.index] = evt.item
-            return { ...m, items }
+            return { ...m, items, tailOpen: true }
           })
           return
         case 'item-delta':
@@ -125,6 +125,13 @@ export function useChat(onChange?: () => void): ChatHandle {
           })
           return
         case 'item-done':
+          patch(r.convId, r.msgId, (m) => {
+            const items = [...(m.items ?? [])]
+            items[evt.index] = evt.item
+            // 只有末位块的收尾才关掉流式标（文本块的 done 可能拖到流末尾才补发）
+            return { ...m, items, tailOpen: evt.index === items.length - 1 ? false : m.tailOpen }
+          })
+          return
         case 'item-update':
           patch(r.convId, r.msgId, (m) => {
             const items = [...(m.items ?? [])]
@@ -132,11 +139,9 @@ export function useChat(onChange?: () => void): ChatHandle {
             return { ...m, items }
           })
           return
-        case 'notice':
-          patch(r.convId, r.msgId, (m) => ({ ...m, notice: evt.text }))
-          return
         case 'turn-done': {
-          const status: MsgStatus = evt.status
+          // 016：主进程只报结束原因，展示态由这里合成（空原因即正常完成）
+          const status: MsgStatus = evt.endReason ?? 'done'
           let answer = ''
           patch(r.convId, r.msgId, (m) => {
             answer =

@@ -116,11 +116,11 @@ export function applyTotalGate(
 // 取数两工具（07-13 二次修订：单工具 mode 切换拆为 grep/read 两工具，形态与输出仿 grep -n / 按行读，
 // 参数面照搬 Claude Code Grep/Read，仅把文件路径换成结果编号——mode 参数映射是语料外结构，模型用不地道）
 
-function loadResult(convId: string, resultId: unknown): { all: string[]; id: number } | { error: string } {
+function loadResult(convId: string, resultId: unknown): { all: string[]; id: number } | { error: string; userText?: string } {
   const id = Number(resultId)
-  if (!Number.isInteger(id)) return { error: '缺少 resultId：请传入要取用的结果编号（如 #3 传 3）' }
+  if (!Number.isInteger(id)) return { error: '缺少 resultId：请传入要取用的结果编号（如 #3 传 3）', userText: '调用参数不完整' }
   const row = getToolResult(id, convId)
-  if (!row) return { error: `结果编号 #${id} 不存在或不属于本会话` }
+  if (!row) return { error: `结果编号 #${id} 不存在或不属于本会话`, userText: '数据引用无效' }
   return { all: row.content.split('\n'), id }
 }
 
@@ -154,9 +154,9 @@ function matchInContent(
 export function grepResult(
   convId: string,
   args: { resultId?: number; pattern?: string; '-i'?: boolean; context?: number; head_limit?: number; offset?: number }
-): string | { error: string } {
+): string | { error: string; userText?: string } {
   const raw = String(args.pattern ?? '').trim()
-  if (!raw) return { error: '缺少 pattern 参数' }
+  if (!raw) return { error: '缺少 pattern 参数', userText: '调用参数不完整' }
   const flags = args['-i'] ? 'i' : ''
   let re: RegExp
   try {
@@ -171,7 +171,7 @@ export function grepResult(
   let header: string
   if (args.resultId === undefined || args.resultId === null) {
     const rows = listToolResults(convId)
-    if (!rows.length) return { error: '本会话没有已存结果' }
+    if (!rows.length) return { error: '本会话没有已存结果', userText: '没有可检索的结果' }
     for (const row of rows) {
       const m = matchInContent(row.content.split('\n'), re, ctx, `#${row.id}:`)
       if (!m.hits) continue
@@ -206,7 +206,7 @@ export function grepResult(
 export function readResult(
   convId: string,
   args: { resultId?: number; offset?: number; limit?: number }
-): string | { error: string } {
+): string | { error: string; userText?: string } {
   const r = loadResult(convId, args.resultId)
   if ('error' in r) return r
   const { all, id } = r

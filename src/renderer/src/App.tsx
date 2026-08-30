@@ -6,7 +6,10 @@ import SidePanel, { DocContent, type DocPanelData } from './components/SidePanel
 import { ArtifactContent } from './components/ArtifactPanel'
 import { WorkContent, type WorkArtifact } from './components/WorkPanel'
 import ConfirmDialog from './components/ConfirmDialog'
-import { ArrowLeft, Download, PanelRight, Table2 } from 'lucide-react'
+import { Toaster } from 'sonner'
+import { toastSuccess, toastError } from './lib/toast'
+import { Check, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Download, Loader2, PanelRight, Table2 } from 'lucide-react'
 import { useChat, type Msg, type MsgStatus } from './hooks/useChat'
 import type { ChipRef, Conversation, PersistedMessage } from './types'
 import type { SourceRef, TurnItem, ArtifactView, WsEntry } from '../../preload/index.d'
@@ -17,7 +20,9 @@ const toMsg = (p: PersistedMessage): Msg => ({
   content: p.content,
   items: p.items ? JSON.parse(p.items) : undefined,
   usage: p.usage ? JSON.parse(p.usage) : undefined,
-  status: p.status as MsgStatus,
+  // 016：库里两字段（status + endReason）合成渲染层展示态。
+  // 打开会话前修复已把 running/waiting 收成 done + interrupted，这里只处理 done
+  status: p.status === 'done' ? ((p.endReason ?? 'done') as MsgStatus) : 'done',
   createdAt: p.createdAt
 })
 
@@ -38,6 +43,7 @@ function App(): React.JSX.Element {
     undefined
   )
   const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null)
+  const [exporting, setExporting] = useState(false) // 016 Case 2：导出进行中转圈替换图标
   const [defaultModel, setDefaultModel] = useState('deepseek-v4-pro')
   const [models, setModels] = useState<import('./components/Composer').ModelGroup[]>([])
   const [convModel, setConvModel] = useState<Record<string, string>>({})
@@ -47,7 +53,7 @@ function App(): React.JSX.Element {
   const [chips, setChips] = useState<Record<string, ChipRef[]>>({})
   // 知识库：可选库清单 + 草稿会话的勾选意向（发首条消息时定性）
   const [kbOptions, setKbOptions] = useState<
-    { id: number; name: string; ready: boolean; building: boolean; folderMissing: boolean }[]
+    { id: number; name: string; ready: boolean; stale: boolean; building: boolean; folderMissing: boolean }[]
   >([])
   // 侧板：一个容器、单一内容位（来源文档阅读 / 制品表格查看 / 工作面板，结构上互斥）
   const [panel, setPanel] = useState<
@@ -473,14 +479,21 @@ function App(): React.JSX.Element {
   const confirmDelete = async (): Promise<void> => {
     if (!deleteTarget) return
     const id = deleteTarget.id
-    await window.api.deleteConversation(id)
+    const title = deleteTarget.title
+    setDeleteTarget(null)
+    try {
+      await window.api.deleteConversation(id)
+    } catch {
+      // 016 Case 1：删不掉就留在列表，失败在发生的地方报出
+      toastError('删除', title, '数据没有保存成功')
+      return
+    }
     const remaining = conversations.filter((c) => c.id !== id)
     setConversations(remaining)
     if (id === activeId) {
       if (remaining.length) setActiveId(remaining[0].id)
       else openDraft()
     }
-    setDeleteTarget(null)
   }
 
   const closeSettings = useCallback(() => {
@@ -522,6 +535,27 @@ function App(): React.JSX.Element {
 
   return (
     <div className="relative flex h-full w-full gap-2 bg-[#e8e8e5] p-2">
+      {/* Toast（016 Case 1）：顶部居中距顶 20px，最多三条多的排队，成功 4 秒失败 8 秒；
+          容器标不可拖拽，防止顶部窗口拖动区吞掉点击 */}
+      <Toaster
+        position="top-center"
+        offset={20}
+        visibleToasts={3}
+        gap={8}
+        duration={4000}
+        icons={{
+          success: <Check className="size-4 text-emerald-600" />,
+          error: <AlertCircle className="size-4 text-destructive" />
+        }}
+        toastOptions={{
+          unstyled: true,
+          duration: 4000,
+          classNames: { error: 'toast-error' },
+          className:
+            '[-webkit-app-region:no-drag] flex min-w-[288px] max-w-[400px] items-center gap-2.5 rounded-xl border border-border bg-background px-4 py-3 text-[13px] text-foreground shadow-lg'
+        }}
+        closeButton
+      />
       {!collapsed && <Sidebar {...sidebarProps} onCollapse={() => setCollapsed(true)} />}
 
       {settingsOpen ? (
@@ -565,6 +599,8 @@ function App(): React.JSX.Element {
           agentServiceIds={agentServiceIds}
           onSelectAgent={selectAgent}
           onManageAgents={() => openSettings('agent')}
+          onManageServices={() => openSettings('mcp')}
+          onConfigureModel={() => openSettings('provider')}
           services={services}
           selectedServiceIds={mcpSel[activeId] ?? []}
           onToggleService={(id) => {
@@ -581,8 +617,14 @@ function App(): React.JSX.Element {
           onOpenSettings={() => openSettings('mcp')}
           onRename={(t) => {
             if (!activeId || activeId === draftId) return
-            setConversations((cs) => cs.map((c) => (c.id === activeId ? { ...c, title: t } : c)))
-            window.api.renameConversation(activeId, t)
+            // 016 Case 1：界面先变，保存失败回到改之前的标题
+            const prev = conversations.find((c) => c.id === activeId)?.title ?? ''
+            const cid = activeId
+            setConversations((cs) => cs.map((c) => (c.id === cid ? { ...c, title: t } : c)))
+            window.api.renameConversation(cid, t).catch(() => {
+              setConversations((cs) => cs.map((c) => (c.id === cid ? { ...c, title: prev } : c)))
+              toastError('重命名', t, '数据没有保存成功')
+            })
           }}
           model={activeModel}
           models={models}
@@ -650,11 +692,26 @@ function App(): React.JSX.Element {
                   <ArrowLeft className="size-[18px]" />
                 </button>
                 <button
-                  onClick={() => void window.api.exportArtifact(panel.artifact.id)}
+                  onClick={() => {
+                    if (exporting) return
+                    setExporting(true)
+                    void window.api
+                      .exportArtifact(panel.artifact.id)
+                      .then((r) => {
+                        // 016 Case 1：成功报最终文件名，取消不提示，失败报原因
+                        if (r.ok) toastSuccess('导出', r.fileName)
+                        else if (!r.canceled) toastError('导出', panel.artifact.title, r.reason)
+                      })
+                      .finally(() => setExporting(false))
+                  }}
                   title="导出 CSV（完整数据）"
                   className="grid size-8 flex-none place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
-                  <Download className="size-[18px]" />
+                  {exporting ? (
+                    <Loader2 className="size-[18px] animate-spin" />
+                  ) : (
+                    <Download className="size-[18px]" />
+                  )}
                 </button>
               </>
             ) : undefined

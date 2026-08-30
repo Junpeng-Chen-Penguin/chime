@@ -36,8 +36,10 @@ export type TurnItem =
       // 文件工具授权卡载荷（015 C2/C3）：随 item 落库，渲染层不反查主进程内存。
       // ws-request = 申请授权卡（dirs + op）；write = 写授权卡（op 为新建/覆盖/修改 + path）
       fsCard?: { mode: 'ws-request' | 'write'; dirs?: string[]; op: string; path?: string }
+      inputStreaming?: true // 参数流式中（016 二节）：行已出、参数未齐。内存态，落库前剥掉
       args: Record<string, unknown>
       result?: unknown
+      userText?: string // 失败或中断时面向用户的那句（016 六节）；给模型的说明在 result 里
       resultRef?: number // 超限结果的结果编号（全量在结果库，result 存摘要）
       ms?: number
     }
@@ -60,9 +62,25 @@ export type TurnItem =
   // 渲染件——名字定位替换位置，简介存发出时的快照（技能之后删除或更新不回改历史消息）
   | { t: 'skillref'; name: string; desc: string }
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
+  // 压缩分界线（016 Case 11）：这一轮开头丢掉了最早的整轮对话，画在时间线上、随轮落库。
+  // savedTokens 是裁剪前后各估算一次的差值；估不出就不带，渲染层只画线
+  | { t: 'compaction'; savedTokens?: number }
 
-// waiting = 等卡中（弹卡即落库的中间态）；interrupted = 应用退出打断、启动修复后收场
-export type TurnStatus = 'done' | 'stopped' | 'error' | 'waiting' | 'interrupted'
+// 016 起状态拆两字段：status 记走到哪一步，end_reason 记为什么不是正常完成。
+// running = 流式进行中（一轮开始即落库）；waiting = 等卡中；done = 已结束
+export type TurnPhase = 'running' | 'waiting' | 'done'
+// 空 = 正常完成；stopped = 用户停止；interrupted = 应用退出打断；error = 出错
+export type EndReason = 'stopped' | 'interrupted' | 'error'
+
+// 正在跑的会话集合：启动修复的排除名单（orchestrator 开轮登记、收场注销）。
+// 修复只处理上次进程留下的未完轮，本进程活跃轮不能被它误收场
+const activeConvs = new Set<string>()
+export function markConvActive(convId: string): void {
+  activeConvs.add(convId)
+}
+export function unmarkConvActive(convId: string): void {
+  activeConvs.delete(convId)
+}
 
 // 用户消息可带 chip（013 Case 2）：items 只收 ref 一种（用户消息没有别的过程件）。
 // 行数上限界面已拦，这里再兜一道底——数据层进来的永远不超（产品方案：单次 200 行）
@@ -105,7 +123,8 @@ export function saveAssistantTurn(
   turn: {
     content: string
     items: TurnItem[]
-    status: TurnStatus
+    status: TurnPhase
+    endReason?: EndReason
     usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
   }
 ): void {
@@ -119,11 +138,25 @@ export function saveAssistantTurn(
         cached: turn.usage.cachedInputTokens ?? 0
       })
     : null
+  // inputStreaming 是参数流式期间的过程标志（016 二节），只在内存里有意义，落库前剥掉
+  const cleanItems = turn.items.map((it) =>
+    it.t === 'tool' && it.inputStreaming ? { ...it, inputStreaming: undefined } : it
+  )
   db.prepare(
-    `INSERT INTO message (id, conversation_id, role, content, items, usage, status, created_at)
-     VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET content = excluded.content, items = excluded.items, usage = excluded.usage, status = excluded.status`
-  ).run(msgId, convId, turn.content, JSON.stringify(turn.items), usageJson, turn.status, now)
+    `INSERT INTO message (id, conversation_id, role, content, items, usage, status, end_reason, created_at)
+     VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET content = excluded.content, items = excluded.items,
+       usage = excluded.usage, status = excluded.status, end_reason = excluded.end_reason`
+  ).run(
+    msgId,
+    convId,
+    turn.content,
+    JSON.stringify(cleanItems),
+    usageJson,
+    turn.status,
+    turn.endReason ?? null,
+    now
+  )
   db.prepare('UPDATE conversation SET updated_at = ? WHERE id = ?').run(now, convId)
 }
 
@@ -176,9 +209,15 @@ export function loadHistoryMessages(convId: string, currentTools?: Set<string>):
   const db = getDb()
   const rows = db
     .prepare(
-      'SELECT role, content, items, status FROM message WHERE conversation_id = ? ORDER BY created_at'
+      'SELECT role, content, items, status, end_reason AS endReason FROM message WHERE conversation_id = ? ORDER BY created_at'
     )
-    .all(convId) as { role: string; content: string; items: string | null; status: string }[]
+    .all(convId) as {
+    role: string
+    content: string
+    items: string | null
+    status: string
+    endReason: string | null
+  }[]
 
   const messages: ModelMessage[] = []
   const toolOutputs: HistoryToolOutput[] = []
@@ -193,7 +232,8 @@ export function loadHistoryMessages(convId: string, currentTools?: Set<string>):
       })
       continue
     }
-    if (r.status === 'error' || r.status === 'waiting') continue
+    // 未走完的轮（含本轮开始时写入的自己那行空壳）与出错轮不进历史
+    if (r.status !== 'done' || r.endReason === 'error') continue
     const items = r.items ? (JSON.parse(r.items) as TurnItem[]) : []
     if (!items.length) {
       if (r.content.trim()) messages.push({ role: 'assistant', content: r.content })
@@ -335,15 +375,15 @@ interface WaitingTurn {
   items: TurnItem[]
 }
 
-// 会话中等卡的轮（只可能是最后一条 assistant 行）
-function getWaitingTurn(convId: string): WaitingTurn | null {
+// 会话中没走完的轮（只可能是最后一条 assistant 行）：等卡中或流式中被退出打断
+function getUnfinishedTurn(convId: string): WaitingTurn | null {
   const row = getDb()
     .prepare(
       `SELECT id, items, status FROM message WHERE conversation_id = ? AND role = 'assistant'
        ORDER BY created_at DESC LIMIT 1`
     )
     .get(convId) as { id: string; items: string | null; status: string } | undefined
-  if (!row || row.status !== 'waiting') return null
+  if (!row || (row.status !== 'waiting' && row.status !== 'running')) return null
   return { msgId: row.id, items: row.items ? (JSON.parse(row.items) as TurnItem[]) : [] }
 }
 
@@ -352,11 +392,13 @@ function getWaitingTurn(convId: string): WaitingTurn | null {
 // 授权是对当下动作的确认，跨重启不恢复可操作状态，用户带着新上下文让模型重新发起）；
 // 已在执行、结果拿不回来的调用按三级文案补齐（MCP 外部补第三级「是否生效未知」，本地补第二级）。
 // 修复后轮收场为 interrupted，会话可正常继续。
+type RepairText = { model: string; user: string }
 export function repairConversation(
   convId: string,
-  texts: { notStarted: string; external: string; local: string; ask: string }
+  texts: { notStarted: RepairText; external: RepairText; local: RepairText; ask: string }
 ): void {
-  const w = getWaitingTurn(convId)
+  if (activeConvs.has(convId)) return // 本进程正在跑的轮不是遗留，不修
+  const w = getUnfinishedTurn(convId)
   if (!w) return
   for (const it of w.items) {
     if (it.t !== 'tool' || it.result !== undefined) continue
@@ -365,12 +407,21 @@ export function repairConversation(
       it.result = { interrupted: texts.ask }
     } else if (it.auth === 'pending') {
       it.auth = 'unanswered'
-      it.result = { interrupted: texts.notStarted }
+      it.result = { interrupted: texts.notStarted.model }
+      it.userText = texts.notStarted.user
     } else {
-      it.result = { interrupted: it.auth === 'approved' ? texts.external : texts.local }
+      const level = it.auth === 'approved' ? texts.external : texts.local
+      it.result = { interrupted: level.model }
+      it.userText = level.user
     }
   }
+  // 模型一个字没输出就退出的轮同样保留：一条只带中断提示的消息，告诉用户这条提问没得到回答
   const content =
     [...w.items].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')?.text ?? ''
-  saveAssistantTurn(convId, w.msgId, { content, items: w.items, status: 'interrupted' })
+  saveAssistantTurn(convId, w.msgId, {
+    content,
+    items: w.items,
+    status: 'done',
+    endReason: 'interrupted'
+  })
 }

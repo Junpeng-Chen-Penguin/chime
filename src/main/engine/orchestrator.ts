@@ -23,7 +23,7 @@ import {
   touchWsRecent,
   type AgentRow
 } from '../db'
-import { EMBED_MODEL_ID } from '../model'
+import { kbReady } from '../kb'
 import { humanize, markVendorHealth } from '../ai'
 import { builtinDisplay } from '../../shared/builtinTools'
 import { buildSystemPrompt, type KbEnv } from './prompts'
@@ -55,6 +55,9 @@ import {
   interruptExternal,
   ASK_INTERRUPTED,
   ASK_INTERRUPTED_EXIT,
+  USER_NOT_STARTED,
+  USER_LOCAL,
+  USER_EXTERNAL,
   type CardDecision,
   type AskOutcome
 } from './cards'
@@ -62,8 +65,10 @@ import {
   saveUserMessage,
   saveAssistantTurn,
   loadHistoryMessages,
+  markConvActive,
+  unmarkConvActive,
   type TurnItem,
-  type TurnStatus
+  type EndReason
 } from './store'
 
 export type ChatEvent =
@@ -75,12 +80,11 @@ export type ChatEvent =
   | {
       type: 'turn-done'
       streamId: string
-      status: TurnStatus
+      endReason?: EndReason // 空 = 正常完成
       error?: string
       usage?: { inputTokens: number; outputTokens: number }
       contextRatio: number
     }
-  | { type: 'notice'; streamId: string; text: string }
 
 export type Emit = (e: ChatEvent) => void
 
@@ -90,11 +94,12 @@ export function stopTurn(streamId: string): void {
   turns.get(streamId)?.abort()
 }
 
-// 启动修复的收场文案（第一级等卡作废 / 第三级外部 / 第二级本地 / 提问卡作废），store 不依赖 cards、由调用方传入
+// 启动修复的收场文案（第一级等卡作废 / 第三级外部 / 第二级本地 / 提问卡作废），store 不依赖 cards、由调用方传入。
+// 016 六节起每级两份：model 给模型（进历史重建），user 给用户（挂 item.userText，进描述位）
 export const REPAIR_TEXTS = {
-  notStarted: INTERRUPT_NOT_STARTED_EXIT,
-  external: interruptExternal('应用退出'),
-  local: INTERRUPT_LOCAL,
+  notStarted: { model: INTERRUPT_NOT_STARTED_EXIT, user: USER_NOT_STARTED },
+  external: { model: interruptExternal('应用退出'), user: USER_EXTERNAL },
+  local: { model: INTERRUPT_LOCAL, user: USER_LOCAL },
   ask: ASK_INTERRUPTED_EXIT
 }
 
@@ -122,28 +127,19 @@ function deriveAgent(convId: string): AgentRow | null {
   return agentId === null ? null : getAgent(agentId)
 }
 
-function deriveKbEnv(
-  convId: string,
-  agent: AgentRow | null,
-  notice?: (text: string) => void
-): KbEnv | null {
-  // 知识库来源两条：历史会话自带的 kb_selection + Agent 挂的（合并去重；Agent 会话通常只有后者）
+function deriveKbEnv(convId: string, agent: AgentRow | null): KbEnv | null {
+  // 知识库来源两条：历史会话自带的 kb_selection + Agent 挂的（合并去重；Agent 会话通常只有后者）。
+  // 可用性判定收口在 kbReady（016 十节）：需重建的库不挂，状态由输入区与设置页表达，不进对话流
   const own = getConversationKbSelection(convId)
   const sel = [...own, ...(agent?.kbSel ?? []).filter((a) => !own.some((o) => o.id === a.id))]
   if (sel.length === 0) return null
   const all = new Map(listKbs().map((k) => [k.id, k]))
   const libraries: KbEnv['libraries'] = []
-  const stale: string[] = []
   for (const s of sel) {
     const k = all.get(s.id)
-    if (!k || !k.indexedAt) continue // 已移除 / 从未构建成功：不检索（UI 侧标注）
-    if (k.embedModel && k.embedModel !== EMBED_MODEL_ID) {
-      stale.push(k.name)
-      continue
-    }
+    if (!k || !kbReady(k)) continue // 已移除 / 从未构建 / 需重建：不检索（界面侧标注）
     libraries.push({ id: k.id, name: k.name, intro: k.intro, docCount: kbStatsFor(k.id).files })
   }
-  if (stale.length) notice?.(`本地模型已更换，知识库「${stale.join('、')}」需重建后才能检索`)
   return libraries.length ? { libraries } : null
 }
 
@@ -170,7 +166,7 @@ export async function runTurn(opts: {
     opts.emit({
       type: 'turn-done',
       streamId: opts.streamId,
-      status: 'error',
+      endReason: 'error',
       error: '处理出错，请重试',
       contextRatio: 0
     })
@@ -187,11 +183,11 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
   const msgId = randomUUID()
   if (!p || !p.apiKey) {
     const items: TurnItem[] = [{ t: 'boundary', kind: 'error', text: '请先在设置里配置 API 密钥' }]
-    saveAssistantTurn(convId, msgId, { content: '', items, status: 'error' })
+    saveAssistantTurn(convId, msgId, { content: '', items, status: 'done', endReason: 'error' })
     emit({
       type: 'turn-done',
       streamId,
-      status: 'error',
+      endReason: 'error',
       error: '请先在设置里配置 API 密钥',
       contextRatio: 0
     })
@@ -199,7 +195,7 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
   }
 
   const agent = deriveAgent(convId)
-  const kbEnv = deriveKbEnv(convId, agent, (t) => emit({ type: 'notice', streamId, text: t }))
+  const kbEnv = deriveKbEnv(convId, agent)
   await streamCore({
     streamId,
     convId,
@@ -230,11 +226,11 @@ async function streamCore(core: {
   const { streamId, convId, model, emit, msgId, items, kbEnv, agent } = core
   const p = resolveModelRef(model)
   if (!p || !p.apiKey || !p.enabled) {
-    saveAssistantTurn(convId, msgId, { content: '', items: [], status: 'error' })
+    saveAssistantTurn(convId, msgId, { content: '', items: [], status: 'done', endReason: 'error' })
     emit({
       type: 'turn-done',
       streamId,
-      status: 'error',
+      endReason: 'error',
       error: p ? '该模型所属的服务商未启用或未配置密钥' : '模型无法定位，请重新选择',
       contextRatio: 0
     })
@@ -258,9 +254,10 @@ async function streamCore(core: {
     const it = items[cur]
     if (!it || (it.t !== 'text' && it.t !== 'reasoning')) return
     emit({ type: 'item-done', streamId, index: cur, item: it })
+    persistRunning()
   }
   const finish = (
-    status: TurnStatus,
+    endReason?: EndReason,
     error?: string,
     usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number },
     contextRatio = 0
@@ -269,13 +266,45 @@ async function streamCore(core: {
     const kept = items.filter((i) => (i.t !== 'text' && i.t !== 'reasoning') || i.text.trim())
     const content =
       [...kept].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')?.text ?? ''
-    saveAssistantTurn(convId, msgId, { content, items: kept, status, usage })
-    emit({ type: 'turn-done', streamId, status, error, usage, contextRatio })
+    saveAssistantTurn(convId, msgId, { content, items: kept, status: 'done', endReason, usage })
+    emit({ type: 'turn-done', streamId, endReason, error, usage, contextRatio })
   }
   // 弹卡即落库 / 卡片回应后落库：等待中的快照（最终态由 finish 覆盖）
   const persistWaiting = (): void => {
     saveAssistantTurn(convId, msgId, { content: '', items, status: 'waiting' })
   }
+  // 016 三节：进行中快照。item 级节点（item-done / item-update）覆盖写，
+  // 退出时丢的只是最后一段没写完的流式文字；item-delta 不写库
+  const persistRunning = (): void => {
+    saveAssistantTurn(convId, msgId, { content: '', items, status: 'running' })
+  }
+  // 有调用必有结果：没拿到结果的调用按三级文案补齐——
+  // 等卡/排队（已标未回应）→ 第一级；MCP 在途 → 第三级（是否生效未知）；本地在途 → 第二级。
+  // 停止与出错两种收场共用（016 Case 14：出错也补，不留停在进行中的行）
+  const settleUnfinished = (cause: '用户停止' | '出错中止'): void => {
+    items.forEach((it, idx) => {
+      if (it.t !== 'tool' || it.result !== undefined) return
+      if (it.auth === 'pending') it.auth = 'unanswered' // execute 未及入队时兜底
+      if (it.ask) {
+        // 提问卡被打断：记「未回应」，收 PRD 提问卡收场文案
+        it.ask = { state: 'unanswered' }
+        it.result = { interrupted: ASK_INTERRUPTED }
+      } else if (it.auth === 'unanswered') {
+        it.result = { interrupted: INTERRUPT_NOT_STARTED }
+        it.userText = USER_NOT_STARTED
+      } else if (it.auth === 'approved') {
+        it.result = { interrupted: interruptExternal(cause) }
+        it.userText = USER_EXTERNAL
+      } else {
+        it.result = { interrupted: INTERRUPT_LOCAL }
+        it.userText = USER_LOCAL
+      }
+      emit({ type: 'item-update', streamId, index: idx, item: it })
+    })
+  }
+  // 一轮开始就落库（016 Case 13）：空壳标 running，应用退出这一轮也不消失
+  markConvActive(convId)
+  persistRunning()
 
   const controller = new AbortController()
   turns.set(streamId, controller)
@@ -290,7 +319,9 @@ async function streamCore(core: {
     kbIds: kbEnv?.libraries.map((l) => l.id) ?? [],
     kbNames: new Map(kbEnv?.libraries.map((l) => [l.id, l.name]) ?? [])
   }
-  let limitHit = false
+  // 016 Case 11：触顶后模型仍可发第 17 次调用，执行层拦截返回失败（模型与用户都看得到），
+  // 再下一步才接口级禁止。边界行随之取消，信息在失败的调用行上
+  const overLimit = { hit: false }
   const toolItemIndex = new Map<string, number>() // toolCallId → items 下标
   const toolStartAt = new Map<string, number>()
   const lateSummaries = new Map<string, string>() // 总量闸先于 tool-result 事件时的暂存（toolCallId → 摘要）
@@ -412,6 +443,34 @@ async function streamCore(core: {
   if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
   // 已启用但连不上的服务：工具静默不挂载，不进对话流提醒（07-13 修订——状态常驻输入框标识，与主流一致）
 
+  // 两份文案的旁路（016 六节）：工具错误结果里的 userText 是给用户看的那句，
+  // 在进 SDK 之前剥下来存这里——execute 返回值会原样发给模型，userText 不进模型。
+  // tool-result 到达消费循环时按 callId 取回，挂到 item.userText
+  const userTexts = new Map<string, string>()
+  for (const [name, t] of Object.entries(turnTools)) {
+    const orig = t.execute
+    if (!orig) continue
+    turnTools[name] = {
+      ...t,
+      execute: async (args, options) => {
+        if (overLimit.hit) {
+          // 016 Case 11：第 17 次调用不执行，返回失败结果；下一步起接口级禁止
+          userTexts.set(options.toolCallId, '已达调用上限')
+          return {
+            error: `已达工具调用上限（${TOOL_ROUND_HARD_LIMIT} 轮），这次调用未执行。请立即基于已获得的信息回答用户`
+          }
+        }
+        const out = (await orig(args, options)) as unknown
+        if (out && typeof out === 'object' && 'userText' in out) {
+          const { userText, ...rest } = out as { userText: string } & Record<string, unknown>
+          if (userText) userTexts.set(options.toolCallId, userText)
+          return rest
+        }
+        return out
+      }
+    } as Tool
+  }
+
   // 组装：系统提示词（身份段 + 固定主干 + 输出约定 +（关联知识库）条件段 + 环境信息）+ 消息序列
   // 会话授权目录清单进环境信息（Case 2）：定格块已跑过，此处非 NULL；轮内申请授权通过的下一轮生效
   const system = buildSystemPrompt(
@@ -473,6 +532,7 @@ async function streamCore(core: {
   // L2 最后防线：清完仍超预算才丢最旧消息对，且不再静默——丢的可能是任务开头的指令，用户须知情。
   // 切口修整（V1 实测 2026-08-18）：盲切两条可能把带 tool_calls 的 assistant 消息切掉、留下孤立的
   // tool 消息在队首，DeepSeek 对此报 400（tool 消息必须跟在 tool_calls 之后）——切完把队首孤立 tool 丢掉
+  const estimateBeforeDrop = estimate()
   let droppedOldest = false
   while (history.length > 2 && estimate() > budget) {
     history = history.slice(2)
@@ -480,8 +540,13 @@ async function streamCore(core: {
       history = history.slice(1)
     droppedOldest = true
   }
-  if (droppedOldest)
-    emit({ type: 'notice', streamId, text: '对话过长，最早的内容已让位；建议新开会话继续这个话题' })
+  if (droppedOldest) {
+    // 压缩分界线（016 Case 11）：插进这一轮开头、随轮落库，重开会话还在。
+    // 省下的量 = 裁剪前后各估算一次的差值；算不出正数就不带，渲染层只画线
+    const saved = estimateBeforeDrop - estimate()
+    startItem('compaction', { t: 'compaction', ...(saved > 0 ? { savedTokens: saved } : {}) })
+    persistRunning()
+  }
   const estimatedInput = estimate()
   const contextRatio = Math.min(1, estimatedInput / budget)
 
@@ -494,6 +559,11 @@ async function streamCore(core: {
   // 附加参数（PRD Case 6）：某家独有的非标准开关随每次请求发出，靠配置不靠改代码
   const extraBody = Object.keys(p.extraParams).length ? p.extraParams : undefined
 
+  // 停止时的用量（016 Case 14）：onAbort 交回已完成的各步，逐步加总。
+  // 一步都没完成时保持 undefined——页脚按「拿不到不显示」走，不显示 0
+  let abortedUsage:
+    | { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
+    | undefined
   try {
     const result = streamText({
       model: provider(p.model),
@@ -501,6 +571,18 @@ async function streamCore(core: {
       instructions: system,
       messages: history,
       abortSignal: controller.signal,
+      onAbort: ({ steps }) => {
+        if (!steps.length) return
+        abortedUsage = steps.reduce(
+          (acc, s) => ({
+            inputTokens: acc.inputTokens + (s.usage.inputTokens ?? 0),
+            outputTokens: acc.outputTokens + (s.usage.outputTokens ?? 0),
+            cachedInputTokens:
+              (acc.cachedInputTokens ?? 0) + (s.usage.inputTokenDetails?.cacheReadTokens ?? 0)
+          }),
+          { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 }
+        )
+      },
       tools: Object.keys(turnTools).length ? turnTools : undefined,
       // 三件事（07-13 修订：计轮 + 触顶告知，原为触顶静默摘工具清单——模型不知情会把调用吐进正文）：
       // 接口级禁止（含工具调用的轮数触顶后保留清单但禁止选择 + 注入收尾指令，模型只能作答）+
@@ -508,8 +590,9 @@ async function streamCore(core: {
       // 总量闸（上一步结果集齐、交给模型之前统一判定——批内从大到小落库改摘要，已给过的不回头改）
       prepareStep: ({ steps, messages }) => {
         const rounds = steps.filter((st) => st.toolCalls.length > 0).length
-        const hardLimit = rounds >= TOOL_ROUND_HARD_LIMIT
-        if (hardLimit) limitHit = true
+        // 触顶（rounds 达 16）：这一步放行、执行层拦截；再下一步（>16）接口级禁止
+        if (rounds >= TOOL_ROUND_HARD_LIMIT) overLimit.hit = true
+        const hardLimit = rounds > TOOL_ROUND_HARD_LIMIT
 
         const lastIdx = steps.length - 1
         let gated: Map<string, string> | null = null
@@ -551,6 +634,7 @@ async function streamCore(core: {
                 item.resultRef = overflow.refs.get(callId)
                 emit({ type: 'item-update', streamId, index: idx, item })
               }
+              persistRunning() // 摘要替换是批量 item-update，收口写一次
             }
           }
         }
@@ -620,28 +704,68 @@ async function streamCore(core: {
         case 'text-end':
           endItem()
           break
-        case 'tool-call': {
-          // 工具步骤无 delta：item-start 即「执行中」；需授权/提问的调用初始为 pending（排队/弹卡由渲染层从 items 推导）
+        case 'tool-input-start': {
+          // 016 Case 6：参数开始生成就出调用行，不等参数齐。初始化只依赖 toolName，全在这里做；
+          // 需授权/提问的调用初始为 pending（排队/弹卡由渲染层从 items 推导）
           const meta = mcp.meta.get(part.toolName)
           const isAsk = part.toolName === ASK_TOOL_NAME
-          const fsEarly = earlyFsCard.get(part.toolCallId) // 文件工具的申请授权卡先于本事件挂载时
+          const fsEarly = earlyFsCard.get(part.id) // 文件工具的申请授权卡先于本事件挂载时
           startItem('tool', {
             t: 'tool',
             name: part.toolName,
-            id: part.toolCallId,
+            id: part.id, // 与后续 tool-call 的 toolCallId 同值
             display: builtinDisplay(part.toolName) ?? meta?.display,
             desc: meta?.needsAuth ? meta.desc : undefined,
-            auth:
-              meta?.needsAuth || fsEarly
-                ? (earlyAuth.get(part.toolCallId) ?? 'pending')
-                : undefined,
+            auth: meta?.needsAuth || fsEarly ? (earlyAuth.get(part.id) ?? 'pending') : undefined,
             fsCard: fsEarly,
-            ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
-            args: (part.input ?? {}) as Record<string, unknown>
+            ask: isAsk ? (earlyAsk.get(part.id) ?? { state: 'pending' }) : undefined,
+            inputStreaming: true,
+            args: {}
           })
-          toolItemIndex.set(part.toolCallId, cur)
-          toolStartAt.set(part.toolCallId, Date.now())
+          toolItemIndex.set(part.id, cur)
           const it = items[cur] as Extract<TurnItem, { t: 'tool' }>
+          if (it.auth === 'pending' || it.ask?.state === 'pending') persistWaiting() // 弹卡即落库
+          break
+        }
+        case 'tool-call': {
+          // 参数已齐。行在 tool-input-start 已建就补齐 args；没建过（SDK 修复调用等路径
+          // 单发 tool-call）就整行新建，兜底与旧行为一致
+          const meta = mcp.meta.get(part.toolName)
+          const isAsk = part.toolName === ASK_TOOL_NAME
+          const fsEarly = earlyFsCard.get(part.toolCallId)
+          const existing = toolItemIndex.get(part.toolCallId)
+          if (existing !== undefined && items[existing]?.t === 'tool') {
+            const it = items[existing] as Extract<TurnItem, { t: 'tool' }>
+            delete it.inputStreaming
+            it.args = (part.input ?? {}) as Record<string, unknown>
+            // 参数期间可能有 early* 补挂到来，取最新
+            if (fsEarly) it.fsCard = fsEarly
+            const lateAuth = earlyAuth.get(part.toolCallId)
+            if (lateAuth) it.auth = lateAuth
+            const lateAsk = earlyAsk.get(part.toolCallId)
+            if (lateAsk) it.ask = lateAsk
+            emit({ type: 'item-update', streamId, index: existing, item: it })
+          } else {
+            startItem('tool', {
+              t: 'tool',
+              name: part.toolName,
+              id: part.toolCallId,
+              display: builtinDisplay(part.toolName) ?? meta?.display,
+              desc: meta?.needsAuth ? meta.desc : undefined,
+              auth:
+                meta?.needsAuth || fsEarly
+                  ? (earlyAuth.get(part.toolCallId) ?? 'pending')
+                  : undefined,
+              fsCard: fsEarly,
+              ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
+              args: (part.input ?? {}) as Record<string, unknown>
+            })
+            toolItemIndex.set(part.toolCallId, cur)
+          }
+          // 执行耗时从参数齐了才起算，参数生成时间不算进 ms
+          toolStartAt.set(part.toolCallId, Date.now())
+          const idx = toolItemIndex.get(part.toolCallId)!
+          const it = items[idx] as Extract<TurnItem, { t: 'tool' }>
           if (it.auth === 'pending' || it.ask?.state === 'pending') persistWaiting() // 弹卡即落库
           break
         }
@@ -662,6 +786,7 @@ async function streamCore(core: {
               result: String(part.output)
             }
             emit({ type: 'item-done', streamId, index: idx, item: items[idx] })
+            persistRunning()
             break
           }
           const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
@@ -675,10 +800,13 @@ async function streamCore(core: {
             delete item.ask
           // 超限结果：item 存摘要（全量在结果库），resultRef 指向结果编号
           item.result = lateSummaries.get(part.toolCallId) ?? part.output
+          const userText = userTexts.get(part.toolCallId)
+          if (userText) item.userText = userText // 给用户的失败说明（016 六节）
           const ref = overflow.refs.get(part.toolCallId)
           if (ref !== undefined) item.resultRef = ref
           item.ms = Date.now() - (toolStartAt.get(part.toolCallId) ?? Date.now())
           emit({ type: 'item-done', streamId, index: idx, item })
+          persistRunning()
           break
         }
         case 'error':
@@ -698,9 +826,14 @@ async function streamCore(core: {
         endItem()
       }
     }
-    if (limitHit) {
-      startItem('boundary', { t: 'boundary', kind: 'limit' })
-      endItem()
+
+    // abort 后 fullStream 不抛错、正常关闭；已有完成步时 result.usage 也能解析出值，
+    // 不拦这一道会把停止轮当成正常完成收场（016 评审验出）。
+    // 停止收场：已流出内容保留，用量取 onAbort 收到的已完成各步合计
+    if (controller.signal.aborted) {
+      settleUnfinished('用户停止')
+      finish('stopped', undefined, abortedUsage, contextRatio)
+      return
     }
 
     const usage = await result.usage
@@ -708,7 +841,7 @@ async function streamCore(core: {
     recordUsage(estimatedInput, input)
     markVendorHealth(p.vendor, true)
     finish(
-      'done',
+      undefined, // 正常完成：无结束原因
       undefined,
       {
         inputTokens: input,
@@ -719,34 +852,16 @@ async function streamCore(core: {
     )
   } catch (e) {
     if (controller.signal.aborted) {
-      // 停止是正常收场：已流出内容保留，标 stopped。
-      // 有调用必有结果：没拿到结果的调用按三级文案补齐——
-      // 等卡/排队（已标未回应）→ 第一级；MCP 在途 → 第三级（是否生效未知）；本地在途 → 第二级
-      items.forEach((it, idx) => {
-        if (it.t !== 'tool' || it.result !== undefined) return
-        if (it.auth === 'pending') it.auth = 'unanswered' // execute 未及入队时兜底
-        if (it.ask) {
-          // 提问卡被停止：记「未回应」，收 PRD 提问卡收场文案
-          it.ask = { state: 'unanswered' }
-          it.result = { interrupted: ASK_INTERRUPTED }
-        } else {
-          it.result = {
-            interrupted:
-              it.auth === 'unanswered'
-                ? INTERRUPT_NOT_STARTED
-                : it.auth === 'approved'
-                  ? interruptExternal('用户停止')
-                  : INTERRUPT_LOCAL
-          }
-        }
-        emit({ type: 'item-update', streamId, index: idx, item: it })
-      })
-      finish('stopped', undefined, undefined, contextRatio)
+      // 一步都没完成的停止从这里进（result.usage 拒绝抛出）
+      settleUnfinished('用户停止')
+      finish('stopped', undefined, abortedUsage, contextRatio)
     } else {
       const msg = humanizeError(e)
       // 鉴权 / 服务端错误 → 标记该服务商异常（控件警示 + 前往设置），下次成功或检测通过后解除
       const sc = (e as SdkError).statusCode
       if (sc && (sc === 401 || sc === 403 || sc >= 500)) markVendorHealth(p.vendor, false, msg)
+      // 出错也补齐未完成的调用（016 Case 14 功能点 4），不留停在进行中的行
+      settleUnfinished('出错中止')
       items.push({ t: 'boundary', kind: 'error', text: msg })
       finish('error', msg, undefined, contextRatio)
     }
@@ -754,5 +869,6 @@ async function streamCore(core: {
     setActiveRootsProvider(null)
     cards.dispose()
     turns.delete(streamId)
+    unmarkConvActive(convId)
   }
 }

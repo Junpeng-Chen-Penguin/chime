@@ -1,6 +1,7 @@
 // 工作面板首页（015 Case 1）：本会话的制品列表 + 工作空间清单。
 // 容器是通用侧板（SidePanel），这里只管内容；点制品条目由 App 把侧板内容切到制品详情。
 import { Folder, FolderPlus, Table2, TriangleAlert, X } from 'lucide-react'
+import EmptyState from './EmptyState'
 import type { WsEntry } from '../../../preload/index.d'
 
 export interface WorkArtifact {
@@ -28,9 +29,11 @@ export function WorkContent({
   return (
     <div className="flex-1 overflow-y-auto px-4 py-3">
       {empty && (
-        <div className="pt-8 text-center text-[13px] text-muted-foreground">
-          本会话还没有制品和工作空间
-        </div>
+        <EmptyState
+          icon={Folder}
+          title="还没有制品和工作空间"
+          desc="对话中生成的制品与已授权的本地文件夹在此查看"
+        />
       )}
 
       {artifacts.length > 0 && (

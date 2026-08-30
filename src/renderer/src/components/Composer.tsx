@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import {
+import { Loader2,
   ArrowUp,
   Bot,
   ChevronDown,
@@ -45,6 +45,7 @@ export interface KbOption {
   id: number
   name: string
   ready: boolean
+  stale: boolean // 016 Case 11：构建过但应用升级换了本地模型，需重建
   building: boolean
   folderMissing: boolean
 }
@@ -90,6 +91,8 @@ interface Props {
   agentServiceIds?: number[] // Agent 挂的服务（在服务菜单里标「来自 Agent」，不可取消）
   onSelectAgent?: (a: { id: number; name: string } | null) => void
   onManageAgents?: () => void // 跳设置的 Agent 栏
+  onManageServices?: () => void // 跳设置的工具栏（016 Case 3）
+  onConfigureModel?: () => void // 未配置模型时点选择器跳设置（016 Case 3）
   ws?: WsSelector // 工作空间选择器（015 Case 1），输入框卡片下方
 }
 
@@ -122,6 +125,8 @@ export default function Composer({
   agentServiceIds,
   onSelectAgent,
   onManageAgents,
+  onManageServices,
+  onConfigureModel,
   ws
 }: Props): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -131,6 +136,7 @@ export default function Composer({
   const [plusSub, setPlusSub] = useState<'agent' | 'mcp' | null>(null)
   // 工作空间选择器（015 Case 1）
   const [wsOpen, setWsOpen] = useState(false)
+  const [retrying, setRetrying] = useState(false) // 016 Case 2：重试连接进行中
   const [wsQuery, setWsQuery] = useState('')
   const taRef = useRef<HTMLTextAreaElement>(null)
   const svcList = services ?? []
@@ -191,12 +197,14 @@ export default function Composer({
   const hlRef = useRef<HTMLDivElement>(null)
 
   // 提问卡等待中输入框开放：有内容时可发送（中断提问、开新一轮），空时右下仍是停止
-  const canSend = value.trim().length > 0 && (!sending || askWaiting)
+  const noModel = models.length === 0 // 016 Case 3：一个模型都没配
+  const canSend = value.trim().length > 0 && (!sending || askWaiting) && !noModel
   // 库状态三档（PRD Case 3）：红 = 不可用（已移除 / 尚未构建），黄 = 文件夹不可用（仍可检索），绿 = 正常
   const optById = new Map(kbOptions.map((o) => [o.id, o]))
   const kbStatusOf = (sel: KbSelEntry): { dot: 'red' | 'amber' | 'green'; text: string } => {
     const o = optById.get(sel.id)
     if (!o) return { dot: 'red', text: '已移除' }
+    if (o.stale) return { dot: 'red', text: '需重建' }
     if (!o.ready) return { dot: 'red', text: '尚未构建' }
     if (o.folderMissing) return { dot: 'amber', text: '文件夹不可用' }
     if (o.building) return { dot: 'green', text: '构建中' }
@@ -335,8 +343,9 @@ export default function Composer({
           />
           </div>
           <div className="flex items-center justify-between px-3 pb-3">
-            {/* 左下（014 Case 4）：加号收起挂载入口，已选的只展示不带删除——取消回菜单里操作 */}
-            <div className="flex items-center gap-1">
+            {/* 左下（014 Case 4）：加号收起挂载入口，已选的只展示不带删除——取消回菜单里操作。
+                两端容器 min-w-0（016 Case 4）：横排项目默认缩不到内容宽以下，长模型 id 会撑破整行 */}
+            <div className="flex min-w-0 items-center gap-1">
               <div className="relative">
                 <button
                   onClick={() => (plusOpen ? closePlus() : setPlusOpen(true))}
@@ -375,19 +384,21 @@ export default function Composer({
                         {plusSub === key && key === 'agent' && (
                           <div className="absolute top-0 left-[calc(100%+10px)] z-30 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
                             {agentList.length === 0 ? (
-                              <>
-                                <div className="px-2.5 pt-1.5 pb-0.5 text-[13px]">还没有 Agent</div>
+                              // 016 Case 3：并成一句，书名号里的词可点跳设置分区
+                              <div className="px-2.5 py-1.5 text-[13px] text-muted-foreground">
+                                还没有 Agent，可在「
                                 <button
                                   onMouseDown={(e) => {
                                     e.preventDefault()
                                     closePlus()
                                     onManageAgents?.()
                                   }}
-                                  className="w-full rounded-lg px-2.5 py-1.5 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted"
+                                  className="text-primary hover:underline"
                                 >
-                                  去设置里建一个
+                                  Agent
                                 </button>
-                              </>
+                                」分区新建
+                              </div>
                             ) : (
                               agentList.map((a) => {
                                 const picked = agentSel?.id === a.id
@@ -429,7 +440,20 @@ export default function Composer({
                         {plusSub === key && key === 'mcp' && (
                           <div className="absolute top-0 left-[calc(100%+10px)] z-30 min-w-[280px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
                             {svcList.length === 0 && (
-                              <div className="px-2.5 pt-1.5 pb-0.5 text-[13px]">还没有已启用的 MCP 服务</div>
+                              <div className="px-2.5 py-1.5 text-[13px] text-muted-foreground">
+                                还没有已启用的 MCP 服务，可在「
+                                <button
+                                  onMouseDown={(e) => {
+                                    e.preventDefault()
+                                    closePlus()
+                                    onManageServices?.()
+                                  }}
+                                  className="text-primary hover:underline"
+                                >
+                                  工具
+                                </button>
+                                」分区添加
+                              </div>
                             )}
                             {svcList.map((s) => {
                               const viaAgent = fromAgent.has(s.id)
@@ -485,12 +509,18 @@ export default function Composer({
                             <div className="mt-1 flex gap-1 border-t border-border px-1 pt-1.5">
                               {anyDown && (
                                 <button
+                                  disabled={retrying}
                                   onMouseDown={(e) => {
                                     e.preventDefault()
-                                    onRetryServices?.()
+                                    if (retrying) return
+                                    setRetrying(true)
+                                    Promise.resolve(onRetryServices?.()).finally(() =>
+                                      setRetrying(false)
+                                    )
                                   }}
-                                  className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
+                                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors enabled:hover:bg-muted"
                                 >
+                                  {retrying && <Loader2 className="size-3.5 animate-spin" />}
                                   重试连接
                                 </button>
                               )}
@@ -603,18 +633,34 @@ export default function Composer({
             </div>
 
             {/* 右下：模型选择（模型名 + ▾）+ 发送 */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 items-center gap-1.5">
               <div className="relative">
                 <button
-                  onClick={() => setMenuOpen((v) => !v)}
+                  onClick={() => {
+                    if (noModel) onConfigureModel?.()
+                    else setMenuOpen((v) => !v)
+                  }}
                   onBlur={() => setTimeout(() => setMenuOpen(false), 120)}
-                  className="flex items-center gap-1 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
+                  className="flex max-w-[240px] items-center gap-1 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-muted"
+                  title={
+                    noModel
+                      ? '还没有配置模型，点击去设置'
+                      : model.includes(':')
+                        ? model.slice(model.indexOf(':') + 1)
+                        : model
+                  }
                 >
-                  {model.includes(':') ? model.slice(model.indexOf(':') + 1) : model}
-                  <ChevronDown className="size-3.5 text-muted-foreground" />
+                  <span className={cn('min-w-0 truncate', noModel && 'text-primary')}>
+                    {noModel
+                      ? '未配置模型'
+                      : model.includes(':')
+                        ? model.slice(model.indexOf(':') + 1)
+                        : model}
+                  </span>
+                  <ChevronDown className="size-3.5 flex-none text-muted-foreground" />
                 </button>
                 {menuOpen && models.length > 0 && (
-                  <div className="absolute right-0 bottom-[calc(100%+8px)] z-20 min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+                  <div className="absolute right-0 bottom-[calc(100%+8px)] z-20 max-w-[320px] min-w-[220px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
                     {models.map((g) => (
                       <div key={g.vendor}>
                         <div className="flex items-center gap-1.5 px-2.5 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">
@@ -636,7 +682,9 @@ export default function Composer({
                               <span className="flex w-3.5 flex-none justify-center">
                                 {ref === model && <Check className="size-3.5 text-primary" />}
                               </span>
-                              <span>{m}</span>
+                              <span className="min-w-0 truncate" title={m}>
+                                {m}
+                              </span>
                             </button>
                           )
                         })}
@@ -719,7 +767,7 @@ export default function Composer({
                           if (!hits.length)
                             return (
                               <div className="px-2 py-2.5 text-[12px] text-muted-foreground">
-                                {ws.entries.length ? '未找到匹配结果' : '暂无可选的工作空间，可在下方添加本地文件夹'}
+                                {ws.entries.length ? '未找到匹配结果' : '还没有可选的工作空间，可在下方添加本地文件夹'}
                               </div>
                             )
                           return hits.map((e) => (
@@ -733,7 +781,9 @@ export default function Composer({
                               className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-muted"
                             >
                               <Folder className="size-3.5 flex-none text-muted-foreground" />
-                              <span className="flex-none">{e.name}</span>
+                              <span className="max-w-[50%] flex-none truncate" title={e.name}>
+                                {e.name}
+                              </span>
                               <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
                                 {e.path}
                               </span>

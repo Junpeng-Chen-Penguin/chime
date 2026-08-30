@@ -92,11 +92,11 @@ function fromText(text: string): Table | null {
 function resolveRef(
   convId: string,
   ref: ArtifactRef
-): { structured?: unknown; text?: string } | { error: string } {
+): { structured?: unknown; text?: string } | { error: string; userText?: string } {
   const id = Number(ref.resultId)
-  if (!Number.isInteger(id)) return { error: '数据引用缺少 resultId' }
+  if (!Number.isInteger(id)) return { error: '数据引用缺少 resultId', userText: '调用参数不完整' }
   const row = getToolResult(id, convId)
-  if (!row) return { error: `结果编号 #${id} 不存在或不属于本会话` }
+  if (!row) return { error: `结果编号 #${id} 不存在或不属于本会话`, userText: '数据引用无效' }
   // 无附加条件且有结构化数据 → 第一层
   if (!ref.keyword && ref.start === undefined && row.structuredContent) {
     try {
@@ -112,7 +112,7 @@ function resolveRef(
       .split('\n')
       .filter((l) => l.includes(kw))
       .join('\n')
-    if (!text) return { error: `结果 #${id} 中没有包含「${kw}」的行` }
+    if (!text) return { error: `结果 #${id} 中没有包含「${kw}」的行`, userText: '筛选后没有数据' }
   } else if (ref.start !== undefined || ref.length !== undefined) {
     const start = Math.max(0, Number(ref.start ?? 0) || 0)
     const len = Math.max(1, Number(ref.length ?? row.content.length) || row.content.length)
@@ -143,7 +143,7 @@ export function artifactCsv(
 export function createArtifact(
   convId: string,
   args: { title?: string; data?: unknown; ref?: ArtifactRef }
-): { id: number; title: string; rowCount: number } | { error: string } {
+): { id: number; title: string; rowCount: number } | { error: string; userText?: string } {
   const title = String(args.title ?? '').trim() || '数据表格'
   let table: Table | null = null
   if (args.ref) {
@@ -153,9 +153,9 @@ export function createArtifact(
   } else if (args.data !== undefined) {
     table = typeof args.data === 'string' ? fromText(args.data) : fromStructured(args.data)
   } else {
-    return { error: '缺少数据：data（直接内容）或 ref（数据引用）必须提供一个' }
+    return { error: '缺少数据：data（直接内容）或 ref（数据引用）必须提供一个', userText: '数据没有传过来' }
   }
-  if (!table) return { error: '数据无法解析为表格，未生成制品' }
+  if (!table) return { error: '数据无法解析为表格，未生成制品', userText: '这批数据不是行列结构，做不成表格' }
   const id = insertArtifact({
     conversationId: convId,
     title,

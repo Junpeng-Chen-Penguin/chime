@@ -40,6 +40,8 @@ const VENDOR_ICONS: Record<string, string> = { deepseek: deepseekIcon, zhipu: zh
 import { Button } from '@/components/ui/button'
 import ConfirmDialog from './ConfirmDialog'
 import { cn } from '@/lib/utils'
+import EmptyState from './EmptyState'
+import { toastError } from '@/lib/toast'
 
 type Status = 'idle' | 'detecting' | 'success' | 'error'
 type Tab = 'provider' | 'kb' | 'mcp' | 'skill' | 'agent'
@@ -131,7 +133,7 @@ export default function SettingsView({
           ) : tab === 'skill' ? (
             <SkillPanel />
           ) : tab === 'agent' ? (
-            <AgentPanel onDirtyChange={onDirtyChange} onGoSkills={() => setTab('skill')} />
+            <AgentPanel onDirtyChange={onDirtyChange} onGoTab={(t) => setTab(t)} />
           ) : (
             <ProviderPanel onSaved={onSaved} />
           )}
@@ -234,9 +236,12 @@ function DefaultModelPane({
     <div className="px-6 py-6">
       <div className="mb-4 text-[15px] font-semibold">默认模型</div>
       {groups.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center text-[13px] text-muted-foreground">
-          先在左侧选择一家服务商，填入密钥并启用模型
-        </div>
+        <EmptyState
+          icon={Boxes}
+          framed
+          title="还没有可用的模型"
+          desc="在左侧配置服务商并启用模型后，可指定默认模型"
+        />
       ) : (
         groups.map((v) => (
           <div key={v.vendor} className="mb-4">
@@ -291,16 +296,36 @@ function VendorPane({
   const [status, setStatus] = useState<Status>('idle')
   const [error, setError] = useState('')
   const [fetching, setFetching] = useState(false)
+  // 016 Case 1：保存成功「已保存」2 秒淡出（重复保存重新计时）；失败原地报原因不消失
+  const [saved, setSaved] = useState<{ field: 'key' | 'url'; err?: string } | null>(null)
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flashSaved = (field: 'key' | 'url', err?: string): void => {
+    if (savedTimer.current) clearTimeout(savedTimer.current)
+    setSaved({ field, err })
+    if (!err) savedTimer.current = setTimeout(() => setSaved(null), 2000)
+  }
 
-  // 随填随存：密钥失焦即存（空输入 = 未改动沿用）
+  // 随填随存：密钥失焦即存（空输入 = 未改动沿用，不保存也不提示）
   const commitKey = async (): Promise<void> => {
     if (!keyInput.trim()) return
-    await window.api.providerSave({ vendor: v.vendor, apiKey: keyInput.trim() })
+    try {
+      await window.api.providerSave({ vendor: v.vendor, apiKey: keyInput.trim() })
+    } catch {
+      flashSaved('key', '数据没有保存成功，请重试')
+      return
+    }
+    flashSaved('key')
     onChanged()
   }
   const commitUrl = async (): Promise<void> => {
     if (baseUrl.trim() && baseUrl.trim() !== v.baseUrl) {
-      await window.api.providerSave({ vendor: v.vendor, baseUrl: baseUrl.trim() })
+      try {
+        await window.api.providerSave({ vendor: v.vendor, baseUrl: baseUrl.trim() })
+      } catch {
+        flashSaved('url', '数据没有保存成功，请重试')
+        return
+      }
+      flashSaved('url')
       onChanged()
     }
   }
@@ -388,10 +413,20 @@ function VendorPane({
             检测
           </Button>
         </div>
+        {saved?.field === 'key' &&
+          (saved.err ? (
+            <StatusLine className="text-destructive">{saved.err}</StatusLine>
+          ) : (
+            <StatusLine className="text-emerald-600">
+              <Check className="size-3.5" />
+              已保存
+            </StatusLine>
+          ))}
         {status === 'detecting' && (
           <StatusLine>
             <Loader2 className="size-3.5 animate-spin" />
             正在检测连接…
+            <Elapsed />
           </StatusLine>
         )}
         {status === 'success' && (
@@ -415,8 +450,15 @@ function VendorPane({
             <Button
               variant="outline"
               onClick={async () => {
+                const prev = baseUrl
                 setBaseUrl(v.defaultBaseUrl)
-                await window.api.providerSave({ vendor: v.vendor, baseUrl: v.defaultBaseUrl })
+                try {
+                  await window.api.providerSave({ vendor: v.vendor, baseUrl: v.defaultBaseUrl })
+                } catch {
+                  setBaseUrl(prev) // 016 Case 1：保存失败回到点之前
+                  toastError('恢复默认地址')
+                  return
+                }
                 onChanged()
               }}
               className="h-10 px-4"
@@ -425,6 +467,15 @@ function VendorPane({
             </Button>
           )}
         </div>
+        {saved?.field === 'url' &&
+          (saved.err ? (
+            <StatusLine className="text-destructive">{saved.err}</StatusLine>
+          ) : (
+            <StatusLine className="text-emerald-600">
+              <Check className="size-3.5" />
+              已保存
+            </StatusLine>
+          ))}
       </Section>
 
       <Section title="模型">
@@ -435,13 +486,17 @@ function VendorPane({
             disabled={fetching || (!v.hasKey && !keyInput.trim())}
             className="h-9 px-4"
           >
-            {fetching ? '获取中…' : '获取模型列表'}
+            {fetching && <Loader2 className="size-3.5 animate-spin" />}
+            获取模型列表
           </Button>
         </div>
         {v.models.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border px-4 py-3 text-[13px] text-muted-foreground">
-            获取后在这里勾选要用的模型
-          </div>
+          <EmptyState
+            icon={Boxes}
+            framed
+            title="还没有模型"
+            desc="获取清单后，勾选需要在对话中使用的模型"
+          />
         ) : (
           <div className="flex flex-col gap-1.5">
             {v.models.map((m) => {
@@ -775,6 +830,15 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
         btn: { label: '重试', onClick: () => startBuild(c), disabled: anyBuilding }
       }
     }
+    // 016 Case 11：应用升级换了本地嵌入模型——库检索不了，卡片直说并给重建入口
+    if (c.stale) {
+      return {
+        line: (
+          <StatusLine className="mt-0 text-amber-600">应用升级后本地模型有变化，需重建</StatusLine>
+        ),
+        btn: { label: '重建全部', onClick: () => startBuild(c), disabled: anyBuilding }
+      }
+    }
     if (c.changes?.needsFullRebuild) {
       return {
         line: (
@@ -826,12 +890,12 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
       </div>
 
       {cards.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center">
-          <div className="text-[14px] font-medium">还没有知识库</div>
-          <div className="mt-1 text-[12px] text-muted-foreground">
-            添加后可在对话中选用，基于其内容作答
-          </div>
-        </div>
+        <EmptyState
+          icon={BookOpen}
+          framed
+          title="还没有知识库"
+          desc="添加后可在对话中选用，模型基于其内容作答"
+        />
       ) : (
         <div className="flex flex-col gap-3">
           {cards.map((c) => {
@@ -877,7 +941,11 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
                   </div>
                 </div>
                 {c.intro && (
-                  <div className="mt-1.5 text-[12px] leading-[1.7] text-muted-foreground">
+                  // 016 Case 4：简介限两行让位给状态行，鼠标停上去看全文
+                  <div
+                    className="mt-1.5 line-clamp-2 text-[12px] leading-[1.7] text-muted-foreground"
+                    title={c.intro}
+                  >
                     {c.intro}
                   </div>
                 )}
@@ -911,7 +979,11 @@ function KbPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): Re
         body={`将移除「${confirmRemove?.name ?? ''}」及其已导入的内容（不影响文件夹内的文件）。确定移除？`}
         confirmText="移除"
         onConfirm={async () => {
-          if (confirmRemove) await window.api.kbRemove(confirmRemove.id)
+          if (confirmRemove) {
+            const nm = confirmRemove.name
+            const r = await window.api.kbRemove(confirmRemove.id).catch(() => ({ ok: false }))
+            if (!r.ok) toastError('移除', nm) // 016 Case 1：失败报出，卡片留在列表
+          }
           setConfirmRemove(null)
           reload()
         }}
@@ -1025,7 +1097,8 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
   const [editing, setEditing] = useState<McpServiceInfo | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<McpServiceInfo | null>(null)
   const [menuFor, setMenuFor] = useState<number | null>(null)
-  const [busyId, setBusyId] = useState<number | null>(null) // 启停进行中的服务（连接/断开有秒级过程，无反馈会误以为没点上）
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const [checkingId, setCheckingId] = useState<number | null>(null) // 016 Case 2：检测更新进行中 // 启停进行中的服务（连接/断开有秒级过程，无反馈会误以为没点上）
   const [trustBusyId, setTrustBusyId] = useState<number | null>(null) // 信任开关处理中
   const [confirmTrust, setConfirmTrust] = useState<{ id: number; name: string } | null>(null) // 开启信任的确认弹窗（011 Case 4：关键告知走弹窗，页面不放说明文案）
   // 表单态
@@ -1135,13 +1208,20 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
     }
     setFormError('')
     setSaving(true)
-    await window.api.mcpSave({
-      id: editing?.id,
-      name: formName.trim(),
-      url: formUrl.trim(),
-      headers: parsed.value,
-      enabled: formEnabled
-    })
+    try {
+      await window.api.mcpSave({
+        id: editing?.id,
+        name: formName.trim(),
+        url: formUrl.trim(),
+        headers: parsed.value,
+        enabled: formEnabled
+      })
+    } catch {
+      // 016 Case 1：失败在表单内报错、按钮复位（原来异常抛出，按钮停在保存中）
+      setSaving(false)
+      setFormError('保存失败，数据没有写进配置，请重试')
+      return
+    }
     setSaving(false)
     setShowForm(false)
     reload()
@@ -1188,6 +1268,7 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
           <StatusLine>
             <Loader2 className="size-3.5 animate-spin" />
             正在连接服务…
+            <Elapsed />
           </StatusLine>
         )}
         {testResult?.ok && (
@@ -1220,8 +1301,9 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
             <Button
               onClick={submit}
               disabled={saving || !formName.trim() || !formUrl.trim()}
-              className="h-9 px-5"
+              className="h-9 gap-1.5 px-5"
             >
+              {saving && <Loader2 className="size-3.5 animate-spin" />}
               保存
             </Button>
           </div>
@@ -1245,12 +1327,12 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
       </div>
 
       {list.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border px-6 py-10 text-center">
-          <div className="text-[14px] font-medium">还没有 MCP 服务</div>
-          <div className="mt-1 text-[12px] text-muted-foreground">
-            添加后模型可在对话中调用它的工具
-          </div>
-        </div>
+        <EmptyState
+          icon={Wrench}
+          framed
+          title="还没有 MCP 服务"
+          desc="添加后模型可在对话中调用其提供的工具"
+        />
       ) : (
         <div className="flex flex-col gap-3">
           {list.map((svc) => (
@@ -1366,15 +1448,20 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
                   <StatusLine className="text-amber-600">
                     ⚠ 工具清单已变更
                     <button
+                      disabled={checkingId === svc.id}
                       onClick={() => {
-                        // 检测更新 = 清变更标记 + 重连刷新工具清单（拿到的就是当前最新）
+                        // 检测更新 = 清变更标记 + 重连刷新工具清单（拿到的就是当前最新）。
+                        // 016 Case 2：进行中文字左侧转圈、不可点；失败由全局兜底报出
+                        setCheckingId(svc.id)
                         void window.api
                           .mcpAckToolsChanged(svc.id)
                           .then(() => window.api.mcpRetry())
                           .then(reload)
+                          .finally(() => setCheckingId(null))
                       }}
-                      className="ml-1 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground underline-offset-2 hover:underline"
+                      className="ml-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground underline-offset-2 enabled:hover:underline"
                     >
+                      {checkingId === svc.id && <Loader2 className="size-3 animate-spin" />}
                       检测更新
                     </button>
                   </StatusLine>
@@ -1409,9 +1496,11 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
         body={`将删除「${confirmDelete?.name ?? ''}」。历史会话的调用记录会保留；新对话不再带它的工具。确定删除？`}
         confirmText="删除"
         onConfirm={async () => {
-          const id = confirmDelete!.id
+          const { id, name } = confirmDelete!
           setConfirmDelete(null)
-          await window.api.mcpDelete(id)
+          setBusyId(id) // 016 Case 2：删除要重连全部已启用服务，卡片原地转圈「正在处理…」
+          await window.api.mcpDelete(id).catch(() => toastError('删除', name))
+          setBusyId(null)
           reload()
         }}
         onCancel={() => setConfirmDelete(null)}
@@ -1476,6 +1565,18 @@ function Section({
   )
 }
 
+// 016 Case 2 功能点 3：操作超过 10 秒补已用时长，格式照状态行（`12s`，超 60 秒转分秒）
+function Elapsed(): React.JSX.Element | null {
+  const [secs, setSecs] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setSecs((n) => n + 1), 1000)
+    return () => clearInterval(t)
+  }, [])
+  if (secs < 10) return null
+  const txt = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
+  return <span className="text-muted-foreground/70"> · {txt}</span>
+}
+
 function StatusLine({
   children,
   className
@@ -1527,6 +1628,7 @@ function SkillPanel(): React.JSX.Element {
   const [importOpen, setImportOpen] = useState(false)
   const [importErrors, setImportErrors] = useState<string[]>([])
   const [dragOver, setDragOver] = useState(false)
+  const [importing, setImporting] = useState(false) // 016 Case 2：导入进行中
   const [conflict, setConflict] = useState<{ name: string; path: string } | null>(null)
   const [menuOpen, setMenuOpen] = useState(false) // 明细页 ⋮
   const [fileMenuOpen, setFileMenuOpen] = useState(false) // 明细页文件切换
@@ -1543,7 +1645,8 @@ function SkillPanel(): React.JSX.Element {
   }, [reload])
 
   const doImport = async (path?: string, overwrite?: boolean): Promise<void> => {
-    const r = await window.api.skillImport({ path, overwrite })
+    setImporting(true)
+    const r = await window.api.skillImport({ path, overwrite }).finally(() => setImporting(false))
     if (!r) return // 用户取消了系统选择框
     if ('ok' in r) {
       setImportOpen(false)
@@ -1711,7 +1814,10 @@ function SkillPanel(): React.JSX.Element {
           }
           confirmText="删除"
           onConfirm={async () => {
-            if (confirmDelete) await window.api.skillDelete(confirmDelete)
+            if (confirmDelete) {
+              const ok = await window.api.skillDelete(confirmDelete).catch(() => false)
+              if (!ok) toastError('删除', confirmDelete) // 016 Case 1：返回值以前没人检查
+            }
             setConfirmDelete(null)
             setDetail(null)
             reload()
@@ -1754,9 +1860,14 @@ function SkillPanel(): React.JSX.Element {
         </div>
       </div>
 
-      {/* 空库只给一句通用文案（验收拍板），不显示表头也不加解释 */}
       {list.length === 0 ? (
-        <div className="py-8 text-center text-[13px] text-muted-foreground">暂无技能</div>
+        // 016 Case 3：推翻 015 的「通用文案不加解释」，改三段式说清导入后干什么用
+        <EmptyState
+          icon={Puzzle}
+          framed
+          title="还没有技能"
+          desc="导入并加入 Agent 后，模型可按任务匹配其中的做法执行"
+        />
       ) : (
         <div className="rounded-xl border border-border">
           <div className="flex items-center gap-3 border-b border-border px-4 py-2 text-[12px] font-medium text-muted-foreground">
@@ -1822,14 +1933,24 @@ function SkillPanel(): React.JSX.Element {
                   setImportErrors(['无法获取拖入项的路径，请点击选择'])
                 }
               }}
-              onClick={() => void doImport()}
+              onClick={() => !importing && void doImport()}
               className={cn(
                 'grid cursor-pointer place-items-center rounded-xl border-2 border-dashed px-6 py-8 text-center transition-colors',
                 dragOver ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'
               )}
             >
-              <Upload className="mb-2 size-5 text-muted-foreground" />
-              <div className="text-[13px]">拖入技能文件夹或 zip，或点击选择</div>
+              {importing ? (
+                // 016 Case 2：导入期间整块区域不可用，转圈加「正在处理…」
+                <>
+                  <Loader2 className="mb-2 size-5 animate-spin text-muted-foreground" />
+                  <div className="text-[13px] text-muted-foreground">正在处理…</div>
+                </>
+              ) : (
+                <>
+                  <Upload className="mb-2 size-5 text-muted-foreground" />
+                  <div className="text-[13px]">拖入技能文件夹或 zip，或点击选择</div>
+                </>
+              )}
             </div>
             {importErrors.length > 0 && (
               <div className="mt-3 flex flex-col gap-1">
@@ -1868,10 +1989,10 @@ function SkillPanel(): React.JSX.Element {
 
 function AgentPanel({
   onDirtyChange,
-  onGoSkills
+  onGoTab
 }: {
   onDirtyChange: (d: boolean) => void
-  onGoSkills: () => void
+  onGoTab: (tab: Tab) => void
 }): React.JSX.Element {
   type AgentInfo = import('../../../preload/index.d').AgentInfo
   type KbCard = import('../../../preload/index.d').KbCard
@@ -2147,7 +2268,11 @@ function AgentPanel({
                   })}
                   {!kbs.length && !goneKb.length && (
                     <div className="py-3 text-[13px] text-muted-foreground">
-                      还没有知识库，可先在「知识库」分区添加
+                      还没有知识库，可在「
+                      <button onClick={() => onGoTab('kb')} className="text-primary hover:underline">
+                        知识库
+                      </button>
+                      」分区添加
                     </div>
                   )}
                 </div>
@@ -2182,11 +2307,15 @@ function AgentPanel({
                     )
                   })}
                   {!skills.length && !goneSkills.length && (
-                    <div className="flex items-center gap-2 px-4 py-3 text-[13px] text-muted-foreground">
-                      技能库是空的
-                      <button onClick={onGoSkills} className="text-primary hover:underline">
-                        去导入
+                    <div className="px-4 py-3 text-[13px] text-muted-foreground">
+                      还没有技能，可在「
+                      <button
+                        onClick={() => onGoTab('skill')}
+                        className="text-primary hover:underline"
+                      >
+                        技能
                       </button>
+                      」分区导入
                     </div>
                   )}
                 </div>
@@ -2232,7 +2361,11 @@ function AgentPanel({
                     })}
                   {!services.some((s) => s.enabled) && !goneMcp.length && (
                     <div className="py-3 text-[13px] text-muted-foreground">
-                      还没有已启用的 MCP 服务，可先在「工具」分区添加
+                      还没有已启用的 MCP 服务，可在「
+                      <button onClick={() => onGoTab('mcp')} className="text-primary hover:underline">
+                        工具
+                      </button>
+                      」分区添加
                     </div>
                   )}
                 </div>
@@ -2291,8 +2424,13 @@ function AgentPanel({
         </Button>
       </div>
       {agents.length === 0 ? (
-        // 空态既定口径（C4 拍板同款）：通用文案居中，不放解释——新建按钮自明
-        <div className="py-8 text-center text-[13px] text-muted-foreground">暂无 Agent</div>
+        // 016 Case 3：推翻 C4 的「通用文案不放解释」，改三段式说清建了干什么用
+        <EmptyState
+          icon={Bot}
+          framed
+          title="还没有 Agent"
+          desc="新建后可在对话中选用，一次载入其配置的提示词、知识库、工具与技能"
+        />
       ) : (
         <div className="flex flex-col gap-2.5">
           {agents.map((a) => (
@@ -2302,7 +2440,9 @@ function AgentPanel({
               className="group flex cursor-pointer items-center gap-3 rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/50"
             >
               <div className="min-w-0 flex-1">
-                <div className="text-[14px] font-medium">{a.name}</div>
+                <div className="truncate text-[14px] font-medium" title={a.name}>
+                  {a.name}
+                </div>
                 <div className="mt-0.5 text-[13px] text-muted-foreground">
                   {a.kbSel.length} 个知识库&emsp;{a.mcpSel.length} 个 MCP 服务&emsp;
                   {a.skillSel.length} 个技能
@@ -2332,7 +2472,8 @@ function AgentPanel({
         }
         confirmText="删除"
         onConfirm={async () => {
-          if (confirmDelete) await window.api.agentDelete(confirmDelete.id)
+          if (confirmDelete)
+            await window.api.agentDelete(confirmDelete.id).catch(() => toastError('删除', confirmDelete.name))
           setConfirmDelete(null)
           reload()
         }}

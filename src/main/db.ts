@@ -54,6 +54,7 @@ export function initDb(): void {
       items           TEXT,
       usage           TEXT,
       status          TEXT NOT NULL DEFAULT 'done',
+      end_reason      TEXT,
       created_at      INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_message_conv ON message (conversation_id, created_at);
@@ -166,6 +167,15 @@ export function initDb(): void {
     } catch {
       // 列已存在
     }
+  }
+  // 迁移（016 轮状态拆两字段）：status 只记走到哪一步，为什么结束挪进 end_reason。
+  // 旧值 stopped/error/interrupted 都是「已结束」，映射成 done + 对应原因，一次跑完
+  const msgCols2 = db.prepare('PRAGMA table_info(message)').all() as { name: string }[]
+  if (msgCols2.length && !msgCols2.some((c) => c.name === 'end_reason')) {
+    db.exec('ALTER TABLE message ADD COLUMN end_reason TEXT')
+    db.exec(
+      "UPDATE message SET end_reason = status, status = 'done' WHERE status IN ('stopped', 'error', 'interrupted')"
+    )
   }
   migrateV1()
   // chunk.kb_id 索引：旧库要等迁移加上列才能建，故放建表段之后
@@ -446,7 +456,8 @@ export interface MessageRow {
   content: string
   items: string | null // 一轮的有序过程记录（JSON），仅 assistant 行有
   usage: string | null // {input, output, cached} JSON；中断轮为 NULL
-  status: string
+  status: string // 走到哪一步：running / waiting / done
+  endReason: string | null // 为什么不是正常完成：stopped / interrupted / error；正常完成为 NULL
   createdAt: number
 }
 
@@ -573,7 +584,7 @@ export function listToolResults(conversationId: string): { id: number; content: 
 export function getMessages(conversationId: string): MessageRow[] {
   return db
     .prepare(
-      'SELECT id, conversation_id AS conversationId, role, content, items, usage, status, created_at AS createdAt FROM message WHERE conversation_id = ? ORDER BY created_at'
+      'SELECT id, conversation_id AS conversationId, role, content, items, usage, status, end_reason AS endReason, created_at AS createdAt FROM message WHERE conversation_id = ? ORDER BY created_at'
     )
     .all(conversationId) as MessageRow[]
 }

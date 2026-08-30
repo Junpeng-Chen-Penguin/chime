@@ -73,9 +73,11 @@ export type TurnItem =
       }
       // 文件工具授权卡载荷（015 C2/C3）：ws-request = 申请授权卡；write = 写授权卡（op 为新建/覆盖/修改）
       fsCard?: { mode: 'ws-request' | 'write'; dirs?: string[]; op: string; path?: string }
+      inputStreaming?: true // 参数流式中（016）：行已出、参数未齐。内存态，历史里不出现
       args: Record<string, unknown>
       result?: SearchToolResult | GenericToolResult
       resultRef?: number // 超限结果的结果编号（result 存摘要，全量在结果库）
+      userText?: string // 失败或中断时面向用户的那句（016）
       ms?: number
     }
   | { t: 'sources'; list: SourceRef[] }
@@ -83,6 +85,7 @@ export type TurnItem =
   | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] } // 表格行引用（013，user 消息专用）
   | { t: 'skillref'; name: string; desc: string } // 斜杠点名 chip（015 Case 6，user 消息专用）
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
+  | { t: 'compaction'; savedTokens?: number } // 压缩分界线（016 Case 11）
 
 export type ChatEvent =
   | { type: 'turn-start'; streamId: string }
@@ -93,12 +96,11 @@ export type ChatEvent =
   | {
       type: 'turn-done'
       streamId: string
-      status: 'done' | 'stopped' | 'error'
+      endReason?: 'stopped' | 'interrupted' | 'error' // 空 = 正常完成
       error?: string
       usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
       contextRatio: number
     }
-  | { type: 'notice'; streamId: string; text: string }
 
 export interface Conversation {
   id: string
@@ -115,7 +117,8 @@ export interface PersistedMessage {
   content: string
   items: string | null // TurnItem[] 的 JSON，仅 assistant 行有
   usage: string | null // {input, output, cached} JSON；中断轮 NULL
-  status: string
+  status: string // 走到哪一步：running / waiting / done
+  endReason: string | null // 为什么不是正常完成：stopped / interrupted / error；正常为 NULL
   createdAt: number
 }
 
@@ -193,6 +196,7 @@ export interface KbOption {
   id: number
   name: string
   ready: boolean
+  stale: boolean // 需重建（016 Case 11）
   building: boolean
   folderMissing: boolean
 }
@@ -208,6 +212,7 @@ export interface KbCard {
   chunks: number
   changes: KbChanges | null // 构建中为 null
   building: boolean
+  stale: boolean // 016 Case 11：应用升级换了本地模型，需重建
   othersBuilding: boolean
 }
 
@@ -367,7 +372,9 @@ export interface ChimeApi {
   providerMenu: () => Promise<VendorMenuGroup[]>
   openDoc: (input: { kbId: number; filePath: string }) => Promise<DocOpenResult>
   getArtifact: (id: number) => Promise<ArtifactView | null>
-  exportArtifact: (id: number) => Promise<{ ok: boolean }>
+  exportArtifact: (
+    id: number
+  ) => Promise<{ ok: true; fileName: string } | { ok: false; canceled?: true; reason?: string }>
   listArtifacts: (
     conversationId: string
   ) => Promise<{ id: number; title: string; createdAt: number }[]>

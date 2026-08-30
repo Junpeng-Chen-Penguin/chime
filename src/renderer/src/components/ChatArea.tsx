@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  Folder,
+  TriangleAlert,
+  Wrench,
   PanelLeft,
   PanelRight,
   ChevronRight,
@@ -10,9 +13,6 @@ import {
   CornerDownLeft,
   Copy,
   Check,
-  Info,
-  Sparkles,
-  Puzzle,
   FileText,
   Table,
   Table2,
@@ -23,12 +23,12 @@ import type { Msg } from '@/hooks/useChat'
 import type {
   SourceRef,
   TurnItem,
-  SearchToolResult,
   AskOutcomePayload,
   AskQuestionSpec
 } from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { Markdown } from './Markdown'
+import { CallGroup, segmentItems } from './CallRow'
 import Composer, {
   type KbOption,
   type KbSelEntry,
@@ -69,6 +69,8 @@ interface Props {
   agentServiceIds: number[]
   onSelectAgent: (a: { id: number; name: string } | null) => void
   onManageAgents: () => void
+  onManageServices: () => void
+  onConfigureModel: () => void
   services: ServiceStatus[]
   selectedServiceIds: number[]
   onToggleService: (id: number) => void
@@ -112,6 +114,8 @@ export default function ChatArea({
   agentServiceIds,
   onSelectAgent,
   onManageAgents,
+  onManageServices,
+  onConfigureModel,
   services,
   selectedServiceIds,
   onToggleService,
@@ -185,6 +189,8 @@ export default function ChatArea({
       agentServiceIds={agentServiceIds}
       onSelectAgent={onSelectAgent}
       onManageAgents={onManageAgents}
+      onManageServices={onManageServices}
+      onConfigureModel={onConfigureModel}
       services={services}
       selectedServiceIds={selectedServiceIds}
       onToggleService={onToggleService}
@@ -374,7 +380,7 @@ function UserMsg({
               key={i}
               onClick={() => onOpenArtifact(r.artifactId, r.rowIndexes)}
               title={r.title}
-              className="flex max-w-[240px] items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2 py-1 text-[12px] transition-colors hover:bg-muted"
+              className="flex max-w-[220px] items-center gap-1.5 rounded-lg border border-border bg-muted/60 px-2 py-1 text-[12px] transition-colors hover:bg-muted"
             >
               <Table2 className="size-3.5 flex-none text-muted-foreground" />
               <span className="min-w-0 truncate">{r.title}</span>
@@ -383,7 +389,7 @@ function UserMsg({
           ))}
         </div>
       )}
-      <div className="max-w-[82%] rounded-[18px] bg-[#f0f0ee] px-4 py-2.5 text-[16px] leading-[1.7] whitespace-pre-wrap text-foreground select-text">
+      <div className="max-w-[82%] rounded-[18px] bg-[#f0f0ee] px-4 py-2.5 text-[16px] leading-[1.7] break-words whitespace-pre-wrap text-foreground select-text">
         {slashLen ? (
           <>
             <span title={skill!.desc} className="text-primary">
@@ -399,37 +405,43 @@ function UserMsg({
   )
 }
 
-// 整轮进度指示：轻趣味中文词表轮播（多数中性、偶穿轻俏词），几秒一换
-const PROGRESS_WORDS = [
-  '梳理中',
-  '翻查中',
-  '琢磨中',
-  '核对中',
-  '斟酌中',
-  '串联中',
-  '查证中',
-  '整理中',
-  '推敲中',
-  '落笔中'
-]
+// 状态行（016 Case 12）：转圈 + 耗时 + 按当前动作的文案，一轮里常驻；
+// 文案按引擎事件对应不随时间轮播，耗时超 60 秒转分秒（codex 的 fmt_elapsed_compact 格式）
+function fmtElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m ${s % 60}s`
+}
 
-function ProgressIndicator(): React.JSX.Element {
-  const [idx, setIdx] = useState(() => Math.floor(Math.random() * PROGRESS_WORDS.length))
-  const [secs, setSecs] = useState(0)
+// 四档文案（Case 12 功能点 2）：间隙一律归「等待回应」——请求刚发出，或上一段结束下一段没开始
+function statusLabel(items: TurnItem[], tailOpen: boolean | undefined): string {
+  const last = items[items.length - 1]
+  if (!last) return '等待回应'
+  if (last.t === 'reasoning' && tailOpen) return '思考中'
+  if (last.t === 'tool' && last.result === undefined) return '执行工具'
+  if (last.t === 'text' && tailOpen) return '回答中'
+  return '等待回应'
+}
+
+function ProgressIndicator({
+  timer,
+  label
+}: {
+  timer: { acc: number; since: number | null }
+  label: string
+}): React.JSX.Element {
+  const [, tick] = useState(0)
   useEffect(() => {
-    const timer = setInterval(() => {
-      setSecs((s) => {
-        if (s % 3 === 2) setIdx((i) => (i + 1) % PROGRESS_WORDS.length)
-        return s + 1
-      })
-    }, 1000)
-    return () => clearInterval(timer)
+    const t = setInterval(() => tick((n) => n + 1), 1000)
+    return () => clearInterval(t)
   }, [])
+  const elapsed = timer.acc + (timer.since !== null ? Date.now() - timer.since : 0)
   return (
     <div className="mt-1 flex items-center gap-2.5 text-[14px]">
       <span className="size-4 flex-none animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      <span className="text-shimmer font-medium">{PROGRESS_WORDS[idx]}…</span>
-      {secs > 0 && <span className="text-[12px] text-muted-foreground">{secs}s</span>}
+      <span className="text-[12px] text-muted-foreground">{fmtElapsed(elapsed)}</span>
+      <span className="text-muted-foreground">·</span>
+      <span className="text-shimmer font-medium">{label}</span>
     </div>
   )
 }
@@ -454,6 +466,9 @@ function AssistantMsg({
   const streaming = m.status === 'streaming'
   const finished = m.status === 'done' || m.status === 'stopped' || m.status === 'interrupted'
   const items = m.items ?? []
+  // 状态行的计时（016 Case 12）：累计值放消息层——弹卡时状态行整个卸载，放它自己里面会清零。
+  // 等卡期间暂停（等待是用户的时间），回应后接着走；只在内存，不落库
+  const timerRef = useRef<{ acc: number; since: number | null }>({ acc: 0, since: null })
   // 卡片排队（授权 + 提问共用一条队列）：队首是授权卡时挂在调用行下方；队首是提问卡时悬浮于输入框上方（由 ChatArea 渲染）
   const pendingIdx = streaming
     ? items.findIndex(
@@ -462,6 +477,12 @@ function AssistantMsg({
     : -1
   const pendingIsAuth =
     pendingIdx >= 0 && (items[pendingIdx] as Extract<TurnItem, { t: 'tool' }>).auth === 'pending'
+  if (streaming && pendingIdx < 0 && timerRef.current.since === null) {
+    timerRef.current.since = Date.now()
+  } else if ((!streaming || pendingIdx >= 0) && timerRef.current.since !== null) {
+    timerRef.current.acc += Date.now() - timerRef.current.since
+    timerRef.current.since = null
+  }
 
   // 位置即语义：末位非空 text 为最终回答，之前的 text 为意图叙述
   const lastTextIdx = useMemo(() => {
@@ -483,93 +504,107 @@ function AssistantMsg({
   return (
     // 回复右侧留出缩进，右边缘不顶齐用户气泡右边（参照 Claude）
     <div className="flex flex-col gap-2 pr-10 text-foreground select-text">
-      {m.notice && <NoticeRow text={m.notice} />}
-      {items.map((it, i) => {
-        if ((it.t === 'text' || it.t === 'reasoning') && !it.text.trim()) return null
-        // 技能激活标识行（015 C5，验收修订）：在模型发起调用的节点原位出一行，样式与其他工具行
-        // 同框架（圆点 + 一行字），只标名字、无展开。成功 = 返回以正文头部标注开头；
-        // 重复激活（返回「已激活」提示）与被拦下的不出行
-        if (it.t === 'tool' && it.name === 'activate_skill') {
-          const ok = typeof it.result === 'string' && it.result.startsWith('【技能：')
-          if (!ok && it.result !== undefined) return null
-          // 行首用技能的拼图图标（验收二轮意见：比圆点更清晰），尺寸与思考行的图标一致
+      {segmentItems(items).map((seg) => {
+        if (seg.kind === 'calls') {
+          // 一组连续调用行（016 Case 5/6）：三段式一行，正常答完后折成「执行 N 个步骤」；
+          // 授权卡挂在组末尾（Case 7），不夹在调用行中间
+          const authIdx = seg.indices.indexOf(pendingIdx)
           return (
-            <div key={i} className="flex gap-2.5">
-              <Puzzle className="mt-[5px] size-3.5 flex-none text-muted-foreground/70" />
-              <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
-                技能激活：{String(it.args?.name ?? '')}
-              </div>
-            </div>
+            <CallGroup
+              key={seg.base}
+              items={seg.items}
+              baseIndex={seg.base}
+              streaming={streaming}
+              collapsed={m.status === 'done' && !!answer && seg.items.length > 1}
+              lastRunningIdx={streaming ? items.length - 1 : -1}
+              sourcePool={sources?.list}
+              onOpenSource={onOpenSource}
+            >
+              {authIdx >= 0 && pendingIsAuth && (
+                <AuthCard
+                  item={items[pendingIdx] as Extract<TurnItem, { t: 'tool' }>}
+                  onRespond={onRespondCard}
+                />
+              )}
+            </CallGroup>
           )
         }
+        const it = seg.item
+        const i = seg.idx
         switch (it.t) {
-          case 'reasoning':
-            return <ThinkRow key={i} text={it.text} running={streaming && i === items.length - 1} />
           case 'text':
-            // 模型的话一律正文样式（Markdown），不因后续步骤回溯降级——中途回复也是给用户看的内容，
-            // 过程行样式只留给工具步骤与状态标记（对齐 Claude：文本与工具行交替、样式稳定）
+            // 模型的话一律正文样式（Markdown），不因后续步骤回溯降级——中途回复也是给用户看的内容
             return (
               <AnswerRow key={i} text={it.text} streaming={streaming && i === items.length - 1} />
-            )
-          case 'tool':
-            return (
-              <div key={i} className="flex flex-col gap-2">
-                <ToolRow item={it} active={i === pendingIdx} />
-                {i === pendingIdx && pendingIsAuth && (
-                  <AuthCard item={it} onRespond={onRespondCard} />
-                )}
-              </div>
             )
           case 'artifact':
             // 制品卡：Chime 渲染，卡本身就是这次调用的展示（成果即过程）。
             // 可点性靠样式表达（悬停浮起 + 右侧箭头），不写操作说明文案
             return (
+              // 制品卡（016 Case 9）：与正文同宽 656px，图标与标题靠左、行数与箭头靠右
               <button
                 key={i}
                 onClick={() => onOpenArtifact(it.id)}
-                className="group flex w-full max-w-[440px] items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-ring/50 hover:shadow-[0_2px_8px_rgba(0,0,0,0.08)]"
+                className="group flex w-full items-center gap-3 rounded-xl border border-border bg-background px-4 py-3 text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-ring/50 hover:shadow-[0_2px_8px_rgba(0,0,0,0.08)]"
               >
                 <span className="grid size-9 flex-none place-items-center rounded-lg bg-primary/10">
                   <Table className="size-[18px] text-primary" />
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] font-medium text-foreground">
-                    {it.title}
-                  </span>
-                  {/* 类型由图标表达，文字只补图标说不了的信息（规模） */}
-                  <span className="block text-[12px] text-muted-foreground">{it.rowCount} 行</span>
+                <span
+                  className="min-w-0 flex-1 truncate text-[14px] font-medium text-foreground"
+                  title={it.title}
+                >
+                  {it.title}
                 </span>
+                {/* 类型由图标表达，文字只补图标说不了的信息（规模） */}
+                <span className="flex-none text-[12px] text-muted-foreground">{it.rowCount} 行</span>
                 <ChevronRight className="size-4 flex-none text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
               </button>
             )
+          case 'compaction':
+            // 压缩分界线（016 Case 11）：虚线嵌文字；省下多少估不出时只放一个圆点
+            return (
+              <div key={i} className="my-3 flex w-full items-center gap-3">
+                <div className="min-w-[24px] flex-1 border-t border-dashed border-border" />
+                {it.savedTokens ? (
+                  <span className="flex-none text-[12px] text-muted-foreground">
+                    已压缩上下文，节省约 {it.savedTokens.toLocaleString()} tokens
+                  </span>
+                ) : (
+                  <span className="size-1.5 flex-none rounded-full bg-muted-foreground/50" />
+                )}
+                <div className="min-w-[24px] flex-1 border-t border-dashed border-border" />
+              </div>
+            )
           case 'boundary':
-            return it.kind === 'limit' ? (
-              <PlainRow key={i} text="已达工具调用上限，基于已有结果作答" />
-            ) : null // error 边界由下方错误卡片呈现
+            // 016 Case 11：工具上限的边界行去掉（信息并进失败的调用行）；error 边界由错误卡呈现
+            return null
           default:
             return null // sources 在回答之后统一渲染（历史数据里可能残留已废弃的 item 类型，一并静默跳过）
         }
       })}
       {/* 整轮进度指示：挂在当前助手消息末尾，紧随已有内容——无内容时就贴着用户消息，不留空隙。
           等待授权期间没有请求在跑，不显示进度指示 */}
-      {streaming && pendingIdx < 0 && <ProgressIndicator />}
-      {/* 停止是用户主动收场：说清是谁停的（区别于故障），并顺带指路（参照 Claude Code 的 Interrupted 标记） */}
+      {streaming && pendingIdx < 0 && (
+        <ProgressIndicator timer={timerRef.current} label={statusLabel(items, m.tailOpen)} />
+      )}
+      {/* 结束原因统一排在页脚之前（016 Case 14 功能点 7）：停止 / 退出中断 / 错误卡 */}
       {m.status === 'stopped' && <PlainRow text="你停止了这次回答，需要继续可以直接说" />}
-      {/* 应用退出打断（启动修复后收场）：与用户主动停止分开交代 */}
       {m.status === 'interrupted' && <PlainRow text="本轮在应用退出时被中断" />}
+      {m.status === 'error' && hasBody && (
+        <ErrorCard text={m.error ?? '请求中断，请重试'} onRetry={isLast ? onRetry : undefined} />
+      )}
       {!streaming && sources && sources.list.length > 0 && (
         <SourcesFooter list={sources.list} onOpen={onOpenSource} />
       )}
-      {/* 无正文的收场（如刚开始就停止）末轮也给重试入口；复制按钮由 MessageActions 按内容有无自行隐藏 */}
-      {finished && (answer || isLast) && (
+      {/* 页脚（Case 14 功能点 5）：四种结束方式一视同仁，出错也出复制；
+          重新生成仅末轮，出错轮不出（入口在错误卡）；用量拿得到就显示（停止轮是已完成各步合计） */}
+      {(finished || (m.status === 'error' && hasBody)) && (answer || isLast) && (
         <MessageActions
           content={answer ? stripCitations(answer, false) : ''}
-          onRetry={isLast ? onRetry : undefined}
-          usage={m.status === 'done' ? m.usage : undefined}
+          onRetry={isLast && m.status !== 'error' ? onRetry : undefined}
+          usage={m.usage}
         />
-      )}
-      {m.status === 'error' && hasBody && (
-        <ErrorCard text={m.error ?? '请求中断，请重试'} onRetry={isLast ? onRetry : undefined} />
       )}
     </div>
   )
@@ -607,344 +642,6 @@ function PlainRow({ text }: { text: string }): React.JSX.Element {
   )
 }
 
-function NoticeRow({ text }: { text: string }): React.JSX.Element {
-  return (
-    <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
-      <Info className="size-3.5 flex-none" />
-      <span>{text}</span>
-    </div>
-  )
-}
-
-// 思考：星形图标 + 标签同处一个居中的行（图标与文字水平对齐），内容默认折叠。
-// 展开内容挂左侧竖线成「归属块」，与主流程分开（与检索命中列表同一处理）。
-function ThinkRow({ text, running }: { text: string; running: boolean }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="flex flex-col">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={cn(
-          '-ml-1 flex w-fit items-center gap-2.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted',
-          PROCESS_ROW
-        )}
-      >
-        <Sparkles
-          className={cn(
-            'size-3.5 flex-none',
-            running ? 'animate-pulse text-primary' : 'text-muted-foreground/50'
-          )}
-        />
-        <span>{running ? '思考中' : '思考'}</span>
-        <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
-      </button>
-      {open && (
-        // 方框归属块（参照来源框），缩进到标签之下体现父子层级
-        <div className="mt-1.5 ml-6 rounded-lg border border-border bg-muted/30 px-3 py-2.5">
-          <div className={cn('whitespace-pre-wrap', PROCESS_ROW)}>{text}</div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// 工具步骤成对两行（统一框架）：调用行（状态点）+ 缩进结果行（点开详情）。
-// 差异只在摘要文案与详情内容：检索为命中列表，通用工具（MCP 等）为参数 + 结果。
-function ToolRow({
-  item,
-  active
-}: {
-  item: Extract<TurnItem, { t: 'tool' }>
-  active: boolean // 当前弹卡行（卡片排队中一次只有一行活跃）
-}): React.JSX.Element {
-  if (item.ask) return <AskToolRow item={item} active={active} />
-  return item.name === 'search_knowledge_base' ? (
-    <SearchToolRow item={item} />
-  ) : (
-    <GenericToolRow item={item} active={active} />
-  )
-}
-
-// 提问步骤的时间线记录：等待中一行状态，收场后三态（已回答 / 已跳过 / 未回应），点开看每题问答
-function AskToolRow({
-  item,
-  active
-}: {
-  item: Extract<TurnItem, { t: 'tool' }>
-  active: boolean
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const ask = item.ask!
-  const questions = ((item.args as { questions?: AskQuestionSpec[] }).questions ?? []).map(
-    (q) => q.question
-  )
-  const waiting = ask.state === 'pending'
-  const summary = waiting
-    ? active
-      ? '等待回答'
-      : '排队中'
-    : ask.state === 'answered'
-      ? '已回答'
-      : ask.state === 'skipped'
-        ? '已跳过'
-        : '未回应'
-  // 详情：逐题问答；跳过/未回应只列问题
-  const detail: string[] = ask.answers
-    ? ask.answers.map((a) => `${a.question} → ${a.answer ?? '未回答'}`)
-    : questions
-  return (
-    <div className="flex gap-2.5">
-      <Dot tone={waiting && active ? 'running' : waiting ? 'queued' : 'neutral'} />
-      <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
-        <div className="truncate">
-          {item.display ?? '询问用户'}（{questions.length} 个问题）
-        </div>
-        <button
-          onClick={() => !waiting && detail.length > 0 && setOpen((o) => !o)}
-          className={cn(
-            '-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5',
-            !waiting && detail.length > 0 && 'transition-colors hover:bg-muted'
-          )}
-        >
-          <span className="text-muted-foreground/50">⎿</span>
-          <span>{summary}</span>
-          {!waiting && detail.length > 0 && (
-            <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
-          )}
-        </button>
-        {open && !waiting && (
-          <div className="mt-1 ml-5 flex flex-col gap-1">
-            {detail.map((d, i) => (
-              <div key={i} className="flex gap-1.5">
-                <span className="flex-none text-muted-foreground/50">-</span>
-                <span className="min-w-0">{d}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// 「查结果集」参数翻译成人话（原始键值是研发口径，用户看不懂）
-// 取数工具参数的人话标签与取值（grep_result / read_result；带 mode/startLine/start 等键的是历史会话旧形态）
-function fetchArgLabel(name: string | undefined, k: string): string {
-  if (k === 'offset') return name === 'read_result' ? '起始行' : '翻页'
-  const labels: Record<string, string> = {
-    resultId: '取自结果',
-    pattern: '匹配',
-    context: '上下文',
-    head_limit: '行数上限',
-    '-i': '大小写',
-    limit: '行数',
-    mode: '取数方式',
-    fromHit: '翻页',
-    startLine: '起始行',
-    lines: '行数',
-    start: '起始位置',
-    length: '读取长度',
-    keyword: '关键词'
-  }
-  return labels[k] ?? k
-}
-function fetchArgValue(name: string | undefined, k: string, v: unknown): string {
-  if (k === 'mode')
-    return v === 'search' ? '按关键词搜索' : v === 'read' ? '按行读取' : '按位置读取'
-  if (k === 'resultId') return `#${v}`
-  if (k === 'offset')
-    return name === 'read_result'
-      ? `第 ${Number(v).toLocaleString()} 行起`
-      : `跳过前 ${Number(v)} 行`
-  if (k === 'startLine') return `第 ${Number(v).toLocaleString()} 行起`
-  if (k === 'lines' || k === 'limit' || k === 'head_limit')
-    return `${Number(v).toLocaleString()} 行`
-  if (k === 'context') return `前后 ${Number(v)} 行`
-  if (k === '-i') return v ? '忽略' : '区分'
-  if (k === 'fromHit') return `跳过前 ${Number(v)} 处命中`
-  if (k === 'start') return `第 ${Number(v).toLocaleString()} 字起`
-  if (k === 'length') return `${Number(v).toLocaleString()} 字`
-  return typeof v === 'string' ? v : JSON.stringify(v)
-}
-
-// 结果规模口径（与主进程摘要一致的读法）：千字 / 万字取整
-function formatChars(n: number): string {
-  if (n < 1000) return `${n} 字`
-  if (n < 10000) return `约 ${Math.round(n / 1000)} 千字`
-  return `约 ${Math.round(n / 10000)} 万字`
-}
-
-function GenericToolRow({
-  item,
-  active
-}: {
-  item: Extract<TurnItem, { t: 'tool' }>
-  active: boolean
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const r = item.result as
-    string | { error?: string; denied?: string; interrupted?: string } | undefined
-  const waiting = item.auth === 'pending' // 等待授权（active）或排队中
-  const running = r === undefined && !waiting
-  const failed = typeof r === 'object' && !!r?.error
-  const interrupted = typeof r === 'object' && !!r?.interrupted
-  const args = Object.entries(item.args ?? {})
-  // fetch_tool_result 为退役工具名，仅历史会话的旧调用行
-  const isFetch =
-    item.name === 'fetch_tool_result' || item.name === 'grep_result' || item.name === 'read_result'
-  // 文件工具（015 C2/C3）：概要只给最后一段名字（「操作加对象」），完整路径在展开详情里
-  const isFs =
-    item.name === 'read_file' ||
-    item.name === 'list_dir' ||
-    item.name === 'write_file' ||
-    item.name === 'edit_file'
-  // 调用行参数概要：取第一个参数值，如 计费系统:租户授权查询("A公司")；取数工具用人话概要
-  const firstArg = args.length ? args[0][1] : undefined
-  const argPreview = isFs
-    ? (String((item.args as { path?: string }).path ?? '')
-        .split('/')
-        .filter(Boolean)
-        .pop() ?? '')
-    : isFetch
-      ? (() => {
-          const a = item.args as {
-            resultId?: number
-            mode?: string
-            pattern?: string
-            keyword?: string
-            startLine?: number
-            offset?: number
-          }
-          if (item.name === 'grep_result')
-            return `${a.resultId != null ? `#${a.resultId}` : '全部结果'} 搜"${a.pattern ?? ''}"`
-          if (item.name === 'read_result') return `#${a.resultId} 读第 ${a.offset ?? 1} 行起`
-          if (a.mode === 'search') return `#${a.resultId} 搜"${a.pattern ?? a.keyword ?? ''}"`
-          if (a.startLine !== undefined || a.mode === 'read')
-            return `#${a.resultId} 读第 ${a.startLine ?? 1} 行起`
-          return `#${a.resultId} 按位置读取` // 历史轮的旧参数形态
-        })()
-      : firstArg === undefined
-        ? ''
-        : JSON.stringify(firstArg)
-  // 卡片收场折叠为记录：行首加授权去向（已授权 / 已拒绝 / 未回应）
-  const prefix =
-    item.auth === 'denied'
-      ? '已拒绝：'
-      : item.auth === 'unanswered'
-        ? '未回应：'
-        : item.auth === 'approved'
-          ? '已授权：'
-          : ''
-  // 拒绝 / 未回应没有执行过程，单行记录即收场，不出结果行
-  const noResultLine = item.auth === 'denied' || item.auth === 'unanswered'
-  const summary = waiting
-    ? active
-      ? '等待授权'
-      : '排队中'
-    : running
-      ? '调用中…'
-      : failed
-        ? '调用失败'
-        : interrupted
-          ? '已中断'
-          : item.resultRef
-            ? // 超限已存：显示真实规模（result 是摘要，长度不代表结果大小）
-              `${(r as string).split('。')[0]}，超限已存（#${item.resultRef}）`
-            : `返回${formatChars((r as string).length)}`
-  const expandable = !waiting && !running
-  // 结果详情：规整 JSON 自动格式化便于阅读
-  const resultText = useMemo(() => {
-    if (!r) return ''
-    if (typeof r === 'object') return r.error ?? r.interrupted ?? ''
-    try {
-      return JSON.stringify(JSON.parse(r), null, 2)
-    } catch {
-      return r
-    }
-  }, [r])
-  return (
-    <div className="flex gap-2.5">
-      <Dot
-        tone={
-          waiting && active
-            ? 'running'
-            : waiting
-              ? 'queued'
-              : running
-                ? 'running'
-                : failed
-                  ? 'error'
-                  : 'neutral'
-        }
-      />
-      <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
-        <div className="truncate">
-          {prefix}
-          {item.display ?? item.name}({argPreview})
-        </div>
-        {!noResultLine && (
-          <button
-            onClick={() => expandable && setOpen((o) => !o)}
-            className={cn(
-              '-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5',
-              expandable && 'transition-colors hover:bg-muted'
-            )}
-          >
-            <span className={cn('text-muted-foreground/50', failed && 'text-destructive')}>⎿</span>
-            <span className={cn(failed && 'font-medium text-destructive')}>{summary}</span>
-            {expandable && (
-              <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
-            )}
-          </button>
-        )}
-        {waiting && active && args.length > 0 && (
-          <div className="mt-1 ml-5 flex max-h-[200px] flex-col gap-1 overflow-y-auto">
-            {args.map(([k, v]) => (
-              <div key={k} className="flex gap-3 text-[13px]">
-                <span className="w-[120px] flex-none truncate text-muted-foreground">{k}</span>
-                <span className="min-w-0 break-all">
-                  {typeof v === 'string' ? v : JSON.stringify(v)}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        {open && expandable && (
-          // 入参与返回放开文本选中（013 Case 1）：排障时要能把这两块复制出去，不再对着屏幕手打
-          <div className="mt-1.5 ml-5 rounded-lg border border-border bg-muted/30 px-3 py-2.5 select-text">
-            {args.length > 0 && (
-              <>
-                <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">参数</div>
-                <div className="mb-2 flex flex-col gap-1">
-                  {args.map(([k, v]) => (
-                    <div key={k} className="flex gap-3 text-[13px]">
-                      <span className="w-[120px] flex-none truncate text-muted-foreground">
-                        {isFetch ? fetchArgLabel(item.name, k) : k}
-                      </span>
-                      <span className="min-w-0 break-all">
-                        {isFetch
-                          ? fetchArgValue(item.name, k, v)
-                          : typeof v === 'string'
-                            ? v
-                            : JSON.stringify(v)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                <div className="mb-2 border-t border-border" />
-              </>
-            )}
-            <div className="mb-1.5 text-[12px] font-medium text-muted-foreground">结果</div>
-            <div className="max-h-[240px] overflow-y-auto text-[13px] whitespace-pre-wrap">
-              {resultText}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // 授权决策条（011 Case 4 瘦身）：信息在工具行显示一次（title＋参数），这里只剩决策——
 // 一句问句＋允许/拒绝，不重复工具名与参数、不显示工具描述全文（描述是给模型读的材料）
 function AuthCard({
@@ -957,72 +654,73 @@ function AuthCard({
   const respond = (d: 'approved' | 'denied' | 'always'): void => {
     if (item.id) onRespond(item.id, d)
   }
-  // 文件卡与工具卡同一张单行决策条（2026-08-17 验收拍板：授权卡样式全部统一），只换问句——
-  // 申请授权卡带文件夹名（授权对象是目录不是这一次调用）；写授权卡带操作类型与文件名，
-  // 覆盖已有文件加重标示（警示色）；完整路径与将写入的内容都在工具行的展开里
+  // 016 Case 7：纵向四段（图标问句、说明、对象、按钮），与正文同宽、不缩进；
+  // 四种卡各自的图标与问句见产品方案功能点 6，按钮序固定「拒绝、总是允许、允许」
   const fs = item.fsCard
   const fname = fs?.path?.split('/').filter(Boolean).pop() ?? ''
+  const isWrite = fs?.mode === 'write'
+  const overwrite = isWrite && fs?.op === '覆盖'
+  const Icon = fs?.mode === 'ws-request' ? Folder : overwrite ? TriangleAlert : isWrite ? FileText : Wrench
+  const wsName = (fs?.dirs ?? []).map((d) => d.split('/').filter(Boolean).pop() ?? d).join('、')
   const question: ReactNode =
     fs?.mode === 'ws-request' ? (
-      `允许访问工作空间「${(fs.dirs ?? []).map((d) => d.split('/').filter(Boolean).pop() ?? d).join('、')}」吗？`
-    ) : fs?.mode === 'write' ? (
       <>
-        允许
-        {fs.op === '覆盖' ? (
-          <span className="text-destructive">覆盖已有文件</span>
-        ) : fs.op === '新建' ? (
-          '新建文件'
-        ) : (
-          '修改文件'
-        )}
-        「{fname}」吗？
+        允许访问工作空间「<span className="font-semibold">{wsName}</span>」吗？
+      </>
+    ) : isWrite ? (
+      <>
+        允许{fs?.op === '覆盖' ? '覆盖已有文件' : fs?.op === '新建' ? '新建文件' : '修改文件'}「
+        <span className="font-semibold">{fname}</span>」吗？
       </>
     ) : (
-      '允许执行这次操作吗？'
+      <>
+        允许执行「<span className="font-semibold">{item.display ?? item.name}</span>」吗？
+      </>
     )
-  const isWrite = fs?.mode === 'write'
+  const objectPath = fs?.mode === 'ws-request' ? (fs.dirs ?? []).join('\n') : fs?.path
+  // 「总是允许」记的是目录：悬停说清记住哪个目录、只在本会话内有效
+  const alwaysDir = fs?.path ? fs.path.split('/').slice(0, -1).join('/') : ''
+  const btn = 'rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-colors'
   return (
-    <div className="ml-4 flex max-w-[440px] items-center justify-between gap-3 rounded-xl border border-border bg-background px-4 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
-      <div
-        className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-foreground"
-        title={fs?.path ?? fs?.dirs?.join('、')}
-      >
-        <span className="size-[6px] flex-none animate-pulse rounded-full bg-primary" />
-        <span className="min-w-0 truncate">{question}</span>
+    <div className="mt-1 flex w-full flex-col gap-3 rounded-xl border border-border bg-background px-4 py-3.5 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
+      <div className="flex items-center gap-2.5 text-[14px] font-medium text-foreground">
+        <Icon
+          className={cn('size-4 flex-none', overwrite ? 'text-destructive' : 'text-muted-foreground')}
+        />
+        <span className="min-w-0">{question}</span>
       </div>
-      {/* 写授权卡按钮序（2026-08-17 验收拍板）：拒绝、总是允许、允许——主操作「允许」在最右 */}
-      <div className="flex flex-none gap-2">
-        {isWrite && (
-          <button
-            onClick={() => respond('denied')}
-            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
-          >
-            拒绝
-          </button>
-        )}
-        {/* 「总是允许」只在写授权卡出现（Case 3 功能点 2）：放行本次并记住该目录，本会话内有效 */}
+      {overwrite && (
+        <div className="text-[13px] text-muted-foreground">
+          这个文件已存在，覆盖后原内容不可恢复
+        </div>
+      )}
+      {objectPath && (
+        <div className="rounded-lg bg-muted/50 px-3 py-2 font-mono text-[12px] break-all whitespace-pre-wrap text-muted-foreground select-text">
+          {objectPath}
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={() => respond('denied')}
+          className={cn(btn, 'border border-border text-foreground hover:bg-muted')}
+        >
+          拒绝
+        </button>
         {isWrite && (
           <button
             onClick={() => respond('always')}
-            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
+            title={alwaysDir ? `记住目录 ${alwaysDir}，本会话内该目录下的写入不再询问` : undefined}
+            className={cn(btn, 'border border-border text-foreground hover:bg-muted')}
           >
-            总是允许
+            总是允许此目录
           </button>
         )}
         <button
           onClick={() => respond('approved')}
-          className="rounded-lg bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          className={cn(btn, 'bg-primary text-primary-foreground hover:bg-primary/90')}
         >
           允许
         </button>
-        {!isWrite && (
-          <button
-            onClick={() => respond('denied')}
-            className="rounded-lg border border-border px-3 py-1.5 text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
-          >
-            拒绝
-          </button>
-        )}
       </div>
     </div>
   )
@@ -1055,6 +753,7 @@ function AskCard({
   const other = others[qIdx] ?? ''
   const cur = answers[qIdx]
   const multiPicked = Array.isArray(cur) ? cur : []
+  const [focusIdx, setFocusIdx] = useState(0) // 键盘焦点行（016 Case 8 功能点 3/4）
 
   const submitAll = (all: (string | string[] | null | undefined)[]): void => {
     if (!item.id) return
@@ -1077,14 +776,54 @@ function AskCard({
     else setQIdx(qIdx + 1)
   }
 
+  // 键盘接管（016 Case 8 功能点 3）：数字键直接选中，上下移动焦点，回车选定焦点行，
+  // 左右切题，Esc 放弃整卡。输入框（其他行、主输入框）里打字不劫持
+  useEffect(() => {
+    const opts = q ? dedupe(q.options) : []
+    const h = (e: KeyboardEvent): void => {
+      if (e.isComposing || e.keyCode === 229) return
+      const tag = (e.target as HTMLElement | null)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        if (e.key === 'Escape' && item.id) onRespond(item.id, { kind: 'declined' })
+        return
+      }
+      const pick = (i: number): void => {
+        if (i < 0 || i >= opts.length) return
+        if (q.multiSelect) {
+          const label = opts[i].label
+          const set = multiPicked.includes(label)
+            ? multiPicked.filter((x) => x !== label)
+            : [...multiPicked, label]
+          const next = [...answers]
+          next[qIdx] = set
+          setAnswers(next)
+        } else {
+          commit(opts[i].label)
+        }
+      }
+      if (e.key === 'Escape' && item.id) onRespond(item.id, { kind: 'declined' })
+      else if (/^[1-9]$/.test(e.key)) pick(Number(e.key) - 1)
+      else if (e.key === 'ArrowDown') setFocusIdx((f) => Math.min(f + 1, opts.length - 1))
+      else if (e.key === 'ArrowUp') setFocusIdx((f) => Math.max(f - 1, 0))
+      else if (e.key === 'ArrowRight') setQIdx((i) => Math.min(i + 1, questions.length - 1))
+      else if (e.key === 'ArrowLeft') setQIdx((i) => Math.max(i - 1, 0))
+      else if (e.key === 'Enter') pick(focusIdx)
+      else return
+      e.preventDefault()
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  })
+  useEffect(() => setFocusIdx(0), [qIdx]) // 切题重置焦点
+
   if (!q) return <></>
   return (
     <div className="flex-none pt-2">
       <div className="mx-auto w-full max-w-[840px] px-8">
-        <div className="rounded-2xl border border-input bg-background px-5 py-4 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_28px_-8px_rgba(0,0,0,0.14)]">
+        <div className="flex max-h-[45vh] flex-col rounded-2xl border border-input bg-background px-5 py-4 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_28px_-8px_rgba(0,0,0,0.14)]">
           {/* 标题行：问题（多选题带标签）+ 进度切换 + 放弃整卡 */}
-          <div className="flex items-start gap-3">
-            <div className="min-w-0 flex-1 text-[14px] font-medium text-foreground">
+          <div className="flex min-h-0 flex-none items-start gap-3">
+            <div className="min-w-0 flex-1 overflow-y-auto text-[14px] font-medium text-foreground [max-height:calc(45vh-260px)] [min-height:44px]">
               {q.question}
               {q.multiSelect && (
                 <span className="ml-2 inline-block rounded border border-border bg-muted px-1.5 py-0.5 align-middle text-[11px] font-normal text-muted-foreground">
@@ -1123,7 +862,7 @@ function AskCard({
           {/* 选项：编号整行按钮；「其他」框有内容时置灰（输入了内容就是在回应）。
               单选=圆徽标、点击即走，悬停显示去向（→ 下一题 / ↵ 提交，借鉴 Claude）；
               多选=方形复选框语义（勾中打 ✓），选完点右下「下一题/提交」 */}
-          <div className="mt-3 flex flex-col gap-1.5">
+          <div className="mt-3 flex flex-none flex-col gap-1.5">
             {dedupe(q.options).map((op, i) => {
               const picked = q.multiSelect ? multiPicked.includes(op.label) : cur === op.label
               return (
@@ -1145,6 +884,7 @@ function AskCard({
                   className={cn(
                     'group flex min-h-[44px] w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors',
                     picked ? 'border-ring bg-primary-soft' : 'border-border hover:bg-muted',
+                    !picked && i === focusIdx && 'border-ring', // 键盘焦点行（016 Case 8）
                     other && 'cursor-default opacity-40'
                   )}
                 >
@@ -1164,10 +904,15 @@ function AskCard({
                       i + 1
                     )}
                   </span>
-                  <span className="min-w-0 flex-1 text-[14px] text-foreground">{op.label}</span>
+                  <span
+                    className="min-w-0 flex-1 truncate text-[14px] text-foreground"
+                    title={op.label}
+                  >
+                    {op.label}
+                  </span>
                   {!q.multiSelect && !other && (
-                    // 悬停提示点击后的去向：非末题 → 进下一题；末题 ↵ 提交
-                    <span className="flex-none text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                    // 去向常驻显示（016 Case 8 功能点 4）：非末题 → 进下一题；末题 ↵ 提交
+                    <span className="flex-none text-muted-foreground/50">
                       {last ? (
                         <CornerDownLeft className="size-4" />
                       ) : (
@@ -1244,77 +989,6 @@ function AskCard({
 }
 
 // 检索步骤（v0.4.0 既有样式）：结果行点击展开命中列表 / 错误说明
-function SearchToolRow({ item }: { item: Extract<TurnItem, { t: 'tool' }> }): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const r: SearchToolResult | undefined = item.result as SearchToolResult | undefined
-  const running = r === undefined
-  const failed = !!r?.error // 仅真故障算失败态（标红）；invalid 自愈不算
-  const summary = running
-    ? '检索中…'
-    : r.results
-      ? `${r.results.length} 条结果${r.truncated ? '（已截断）' : ''}`
-      : r.denied
-        ? '已达检索上限'
-        : r.notice
-          ? '知识库更新中'
-          : r.invalid
-            ? '未提供检索词'
-            : r.interrupted
-              ? '已中断'
-              : '检索出错'
-  const detail = r?.results?.length
-    ? [
-        ...new Set(
-          r.results.map(
-            (x) => `${x.file.replace(/\.md$/, '')}${x.heading ? ' › ' + x.heading : ''}`
-          )
-        )
-      ]
-    : r?.error
-      ? [r.error]
-      : r?.denied
-        ? [r.denied]
-        : r?.notice
-          ? [r.notice]
-          : r?.interrupted
-            ? [r.interrupted]
-            : []
-  return (
-    <div className="flex gap-2.5">
-      <Dot tone={running ? 'running' : failed ? 'error' : 'neutral'} />
-      <div className={cn('min-w-0 flex-1', PROCESS_ROW)}>
-        {/* 调用行：整行同字体、同字号、同色，不再换等宽或改色 */}
-        <div>检索(&quot;{String(item.args.query ?? '')}&quot;)</div>
-        <button
-          onClick={() => detail.length && setOpen((o) => !o)}
-          className={cn(
-            '-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5',
-            detail.length && 'transition-colors hover:bg-muted'
-          )}
-        >
-          <span className={cn('text-muted-foreground/50', failed && 'text-destructive')}>⎿</span>
-          {/* 真故障标红，对齐 Claude Code 工具失败的视觉 */}
-          <span className={cn(failed && 'font-medium text-destructive')}>{summary}</span>
-          {detail.length > 0 && (
-            <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
-          )}
-        </button>
-        {open && (
-          // 「-」无序列表，缩进到结果行文字之下体现父子；不用竖线
-          <div className="mt-1 ml-5 flex flex-col gap-1">
-            {detail.map((d, i) => (
-              <div key={i} className="flex gap-1.5">
-                <span className="flex-none text-muted-foreground/50">-</span>
-                <span className="min-w-0">{d}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // 最终回答：正文直接起排、不带行首标记（回答是交付主体，与带标记的过程行分层，
 // 也避免与正文里的无序列表圆点混淆）；隐去 [n] 角标（引用关系保留，供来源清单与侧板）。
 // token 到达即渲染，不做逐字平滑——平滑的帧节奏与贴底节奏不同步，是滚动抖动的根源。
@@ -1322,7 +996,7 @@ function AnswerRow({ text, streaming }: { text: string; streaming: boolean }): R
   const content = useMemo(() => stripCitations(text, streaming), [text, streaming])
   return (
     <div className="pt-1">
-      <Markdown text={content} />
+      <Markdown text={content} streaming={streaming} />
     </div>
   )
 }

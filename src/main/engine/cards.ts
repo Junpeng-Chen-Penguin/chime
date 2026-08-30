@@ -7,7 +7,7 @@
 export const INTERRUPT_NOT_STARTED = '这次调用未执行（用户停止了本轮）。需要时可重新发起。'
 export const INTERRUPT_NOT_STARTED_EXIT = '这次调用未执行（等待授权时应用退出）。需要时可重新发起。'
 export const INTERRUPT_LOCAL = '这次调用被中断，未完成，未产生任何变更。需要时可重试。'
-export const interruptExternal = (reason: '用户停止' | '应用退出'): string =>
+export const interruptExternal = (reason: '用户停止' | '应用退出' | '出错中止'): string =>
   `这次调用在执行中被打断（${reason}），指令可能已到达系统，是否生效未知。不要自行重试；先向用户说明，协助核实实际结果后再定下一步。`
 // 只写「用户拒绝了这次调用」时，模型不知道接下来该做什么：实测会原参数重发一次，
 // 且全程不告诉用户操作没执行（用例 17）。照 interruptExternal 与提问卡拒答的写法带上行为指令
@@ -17,6 +17,12 @@ export const AUTH_DENIED =
 // 提问卡的收场文案（PRD 提问卡章定稿）
 export const ASK_INTERRUPTED = '用户中断了本次提问'
 export const ASK_INTERRUPTED_EXIT = '这次提问未收到回应（应用退出）。需要时可重新发起。'
+
+// 中断时给用户看的那句（016 Case 14 功能点 2 定稿）：与上面给模型的指令分两份，
+// 挂在 item.userText 上，渲染层的调用行描述位显示它，不进模型
+export const USER_NOT_STARTED = '这次调用没有执行'
+export const USER_LOCAL = '没有产生改动'
+export const USER_EXTERNAL = '指令已发出，结果未知'
 
 // 'always' 仅写授权卡产生（015 C3）：放行本次并记住目录（会话级，记录动作在发起处的 execute 里）
 export type CardDecision = 'approved' | 'denied' | 'always' | 'aborted'

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { X, FileX2, Loader2, BookX } from 'lucide-react'
+import { renderMermaid } from '@/lib/mermaid'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn } from '@/lib/utils'
@@ -54,27 +55,7 @@ export interface DocPanelData {
   error?: 'missing' | 'no-kb' | 'busy' // 异常态：侧板内空态展示（导航到达目的地，由目的地呈现状态）
 }
 
-// ── Mermaid：动态加载 + 串行渲染队列（render 不可并发） ──
-let mermaidP: Promise<(typeof import('mermaid'))['default']> | null = null
-let mermaidSeq = 0
-let mermaidQueue: Promise<unknown> = Promise.resolve()
-
-function renderMermaid(code: string): Promise<string> {
-  if (!mermaidP) {
-    mermaidP = import('mermaid').then((m) => {
-      m.default.initialize({ startOnLoad: false, theme: 'neutral', fontFamily: 'inherit' })
-      return m.default
-    })
-  }
-  const job = mermaidQueue.then(async () => {
-    const mm = await mermaidP!
-    const { svg } = await mm.render(`chime-mmd-${++mermaidSeq}`, code)
-    return svg
-  })
-  mermaidQueue = job.catch(() => undefined)
-  return job
-}
-
+// Mermaid 渲染逻辑抽到 lib/mermaid（016 八节），侧板与对话流共用一个队列
 function MermaidBlock({
   code,
   onSettled
@@ -131,7 +112,7 @@ export function FallbackChunks({ doc }: { doc: DocPanelData }): React.JSX.Elemen
       {withContent.map((s) => (
         <div key={s.chunkId} className="mb-4 rounded-lg border border-border p-3.5">
           <div className="mb-2 text-[11px] text-muted-foreground">{s.headingPath || doc.file}</div>
-          <pre className="text-[13px] leading-[1.7] whitespace-pre-wrap">{s.content}</pre>
+          <pre className="text-[13px] leading-[1.7] break-words whitespace-pre-wrap">{s.content}</pre>
         </div>
       ))}
     </div>

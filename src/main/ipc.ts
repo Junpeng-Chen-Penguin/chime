@@ -1,6 +1,6 @@
 import { dialog, ipcMain } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
-import { join, resolve } from 'path'
+import { basename, join, resolve } from 'path'
 import {
   maskApiKey,
   listConversations,
@@ -59,7 +59,7 @@ import {
 } from './db'
 import { TABLE_RENDER_CAP, artifactCsv } from './engine/artifact'
 import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
-import { kbBusy, busyKbId, runIndexJob, validateRepoPath, getLastSummary, checkChanges } from './kb'
+import { kbBusy, busyKbId, runIndexJob, validateRepoPath, getLastSummary, checkChanges, kbReady, kbStale } from './kb'
 
 export function registerIpc(): void {
   // ── 模型服务商（PRD Case 6/7）：预置多家，密钥明文不出主进程 ──
@@ -291,6 +291,7 @@ export function registerIpc(): void {
       ...kbStatsFor(k.id),
       changes: busy === k.id ? null : checkChanges(k.id), // 构建中的库不做检查（数据在变）
       building: busy === k.id,
+      stale: kbStale(k), // 016 Case 11：应用升级换了本地模型，需重建才能检索
       othersBuilding: busy !== null && busy !== k.id // 构建互斥：其他库按钮置灰
     }))
   })
@@ -362,7 +363,8 @@ export function registerIpc(): void {
     return listKbs().map((k) => ({
       id: k.id,
       name: k.name,
-      ready: !!k.indexedAt, // 红档：从未构建成功不可选
+      ready: kbReady(k), // 红档：从未构建成功、或需重建（016 判定收口进 kbReady）
+      stale: kbStale(k), // 红档细分：需重建（原来这里显示绿点「可用」，模型其实查不到）
       building: busy === k.id, // 绿档：构建中可选，检索已建好的部分
       folderMissing: !!k.rootPath && !existsSync(k.rootPath) // 黄档：可选，用已有索引
     }))
@@ -503,17 +505,23 @@ export function registerIpc(): void {
 
   // 制品导出 CSV（013 Case 3）：导库里的完整行，不是渲染截断的那部分。
   // 标题进文件名要洗掉非法字符（标题由模型自拟，什么都可能有），洗完为空退回兜底名
+  // 016 Case 1：成功 / 取消 / 失败三种结果分开——取消是用户自己的决定不提示；
+  // 成功带用户在对话框里最终定的文件名；写文件接住异常（磁盘满、目录不可写）转失败
   ipcMain.handle('artifact:export', async (_e, id: number) => {
     const a = getArtifact(id)
-    if (!a) return { ok: false }
+    if (!a) return { ok: false as const, reason: '制品不存在' }
     const name = a.title.replace(/[/\\:*?"<>|]/g, ' ').trim() || '数据表格'
     const r = await dialog.showSaveDialog({
       defaultPath: `${name}.csv`,
       filters: [{ name: 'CSV', extensions: ['csv'] }]
     })
-    if (r.canceled || !r.filePath) return { ok: false }
-    writeFileSync(r.filePath, artifactCsv(a.columns, a.rows))
-    return { ok: true }
+    if (r.canceled || !r.filePath) return { ok: false as const, canceled: true as const }
+    try {
+      writeFileSync(r.filePath, artifactCsv(a.columns, a.rows))
+    } catch (e) {
+      return { ok: false as const, reason: String((e as Error)?.message ?? e).slice(0, 120) }
+    }
+    return { ok: true as const, fileName: basename(r.filePath) }
   })
 
   // 打开来源文档（侧板阅读视图）：读磁盘现状；校验片段用消息自带的原文快照，此处不查库

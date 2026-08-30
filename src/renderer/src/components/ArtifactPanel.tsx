@@ -53,7 +53,7 @@ export function ArtifactContent({
         setMenu({ x: e.clientX, y: e.clientY })
       }}
     >
-      <table className="w-full border-collapse text-[13px]">
+      <table className="w-max min-w-full border-collapse text-[13px]">
         <thead>
           <tr>
             {canPick && (

@@ -172,13 +172,14 @@ export function makeFsTools(opts: {
   }
 
   // 入参公共校验：缺 path / 相对路径（Case 2：相对路径报错并提示改用绝对路径）
-  const badPath = (p: unknown): { error: string } | null => {
+  const badPath = (p: unknown): { error: string; userText?: string } | null => {
     if (typeof p !== 'string' || !p.trim())
-      return { error: '缺少 path 参数：请带上目标的绝对路径重新调用' }
+      return { error: '缺少 path 参数：请带上目标的绝对路径重新调用', userText: '调用参数不完整' }
     if (!isAbsolute(p))
       return {
         error:
-          '路径必须是绝对路径。可用的工作空间目录（绝对路径）在系统提示词的环境信息里，请拼出完整路径重新调用'
+          '路径必须是绝对路径。可用的工作空间目录（绝对路径）在系统提示词的环境信息里，请拼出完整路径重新调用',
+        userText: '调用参数不完整'
       }
     return null
   }
@@ -208,11 +209,11 @@ export function makeFsTools(opts: {
       )
       if (gate) return gate
       if (!existsSync(abs))
-        return { error: `文件不存在：${abs}。请重新列出所在目录核实路径，不要虚构文件内容` }
+        return { error: `文件不存在：${abs}。请重新列出所在目录核实路径，不要虚构文件内容`, userText: '文件不存在' }
       if (statSync(abs).isDirectory())
-        return { error: '这是一个目录，不是文件。要查看目录内容请改用 list_dir' }
+        return { error: '这是一个目录，不是文件。要查看目录内容请改用 list_dir', userText: '目标是文件夹' }
       if (isBinary(abs))
-        return { error: '暂不支持读取此类型的文件（非文本内容），不要虚构文件内容' }
+        return { error: '暂不支持读取此类型的文件（非文本内容），不要虚构文件内容', userText: '不支持的文件类型' }
       const text = readFileSync(abs, 'utf8')
       markRead(convId, abs)
       if (!text) return '文件为空'
@@ -222,7 +223,7 @@ export function makeFsTools(opts: {
       const count = Math.max(1, Math.floor(a.limit ?? READ_LINES_DEFAULT))
       const slice = all.slice(start - 1, start - 1 + count)
       if (!slice.length)
-        return { error: `起始行超出范围：该文件共 ${all.length} 行，offset 传了 ${start}` }
+        return { error: `起始行超出范围：该文件共 ${all.length} 行，offset 传了 ${start}`, userText: '起始行超出范围' }
       const body = slice
         .map(
           (l, i) =>
@@ -257,10 +258,11 @@ export function makeFsTools(opts: {
       if (gate) return gate
       if (!existsSync(abs))
         return {
-          error: `目录不存在：${abs}。请核对系统提示词环境信息里的工作空间清单，或如实告知用户`
+          error: `目录不存在：${abs}。请核对系统提示词环境信息里的工作空间清单，或如实告知用户`,
+          userText: '文件夹不存在'
         }
       if (!statSync(abs).isDirectory())
-        return { error: '这是一个文件，不是目录。要查看内容请改用 read_file' }
+        return { error: '这是一个文件，不是目录。要查看内容请改用 read_file', userText: '目标是文件' }
       const depth = Math.min(LIST_DEPTH_MAX, Math.max(1, Math.floor(a.depth ?? 1)))
       const lines: string[] = []
       let total = 0
@@ -326,9 +328,9 @@ export function makeFsTools(opts: {
     return null
   }
   // 技能目录只读（图二第二判）：白名单校验会放行技能目录，写操作在其后单独拦
-  const skillReadonly = (abs: string): { error: string } | null =>
+  const skillReadonly = (abs: string): { error: string; userText?: string } | null =>
     coveredBy(abs, [skillsRoot()])
-      ? { error: '技能目录只读，不能直接写入或修改。要改技能，请用户在设置里重新导入' }
+      ? { error: '技能目录只读，不能直接写入或修改。要改技能，请用户在设置里重新导入', userText: '技能目录只读' }
       : null
 
   const write_file = tool({
@@ -346,7 +348,7 @@ export function makeFsTools(opts: {
       const bad = badPath(a.path)
       if (bad) return bad
       if (typeof a.content !== 'string')
-        return { error: '缺少 content 参数：请带上要写入的完整内容重新调用' }
+        return { error: '缺少 content 参数：请带上要写入的完整内容重新调用', userText: '调用参数不完整' }
       const abs = resolve(a.path!)
       const gate = await ensureAccess(
         abs,
@@ -360,7 +362,7 @@ export function makeFsTools(opts: {
       if (ro) return ro
       const exists = existsSync(abs)
       if (exists && statSync(abs).isDirectory())
-        return { error: '这个路径是一个目录，不能作为文件写入' }
+        return { error: '这个路径是一个目录，不能作为文件写入', userText: '目标是文件夹' }
       // 覆盖前置：本会话读过且磁盘没再变过，防止用旧内容的记忆覆盖新文件
       if (exists && !readFresh(convId, abs))
         return {
@@ -421,25 +423,28 @@ export function makeFsTools(opts: {
       const ro = skillReadonly(abs)
       if (ro) return ro
       if (!existsSync(abs))
-        return { error: `文件不存在：${abs}。新文件请用 write_file 写入，不要虚构编辑结果` }
-      if (statSync(abs).isDirectory()) return { error: '这个路径是一个目录，不是文件' }
+        return { error: `文件不存在：${abs}。新文件请用 write_file 写入，不要虚构编辑结果`, userText: '文件不存在' }
+      if (statSync(abs).isDirectory()) return { error: '这个路径是一个目录，不是文件', userText: '目标是文件夹' }
       if (!readFresh(convId, abs))
         return {
           error:
-            '你在本会话内还没读过这个文件（或读后它被改动过）。先用 read_file 读取当前内容，再按原文编辑'
+            '你在本会话内还没读过这个文件（或读后它被改动过）。先用 read_file 读取当前内容，再按原文编辑',
+          userText: '需要先读取文件'
         }
       if (a.old_string === a.new_string)
-        return { error: '编辑无效：old_string 与 new_string 相同，没有任何改动' }
+        return { error: '编辑无效：old_string 与 new_string 相同，没有任何改动', userText: '替换前后内容相同' }
       const before = readFileSync(abs, 'utf8')
       const n = before.split(a.old_string).length - 1
       if (a.old_string === '' || n === 0)
         return {
           error:
-            '旧片段在文件中找不到。请重新 read_file 核对原文（返回里的行号前缀不算内容），按文件里的实际文本重新调用'
+            '旧片段在文件中找不到。请重新 read_file 核对原文（返回里的行号前缀不算内容），按文件里的实际文本重新调用',
+          userText: '旧片段未找到'
         }
       if (n > 1 && !a.replace_all)
         return {
-          error: `旧片段在文件中出现 ${n} 处，无法定点替换。请补足前后文让它唯一，或传 replace_all 全部替换`
+          error: `旧片段在文件中出现 ${n} 处，无法定点替换。请补足前后文让它唯一，或传 replace_all 全部替换`,
+          userText: '旧片段不唯一'
         }
       const auth = await ensureWriteAuth(abs, '修改', toolCallId, 'edit_file')
       if (auth) return auth

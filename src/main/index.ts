@@ -18,6 +18,7 @@ import {
   saveMcpService
 } from './db'
 import { unseal } from './secret'
+import { kbReady } from './kb'
 import { registerIpc } from './ipc'
 import { warmRegistry } from './registry'
 import { syncMcpServices, onMcpStatusChange, closeAllMcp } from './mcp/client'
@@ -612,7 +613,7 @@ app.whenReady().then(() => {
             setConversationKbSelection(
               convId,
               listKbsDb()
-                .filter((k) => k.indexedAt)
+                .filter((k) => kbReady(k)) // 016 十节：判定收口，需重建的库不选
                 .map((k) => ({ id: k.id, name: k.name }))
             )
           } else if (Array.isArray(spec.kb)) {
@@ -999,11 +1000,15 @@ app.whenReady().then(() => {
             .slice(0, 2)
             .every(
               (r) =>
-                r.status === 'done' && r.content.trim() && Array.isArray(JSON.parse(r.items ?? ''))
+                r.status === 'done' &&
+                !r.endReason &&
+                r.content.trim() &&
+                Array.isArray(JSON.parse(r.items ?? ''))
             ) &&
-          stoppedRow?.status === 'stopped' &&
+          stoppedRow?.status === 'done' &&
+          stoppedRow?.endReason === 'stopped' &&
           events.filter((t) => t === 'turn-done').length === 3
-        console.log(`[engine-test] 停止轮 status=${stoppedRow?.status} 留痕=${!!stoppedRow?.items}`)
+        console.log(`[engine-test] 停止轮 endReason=${stoppedRow?.endReason} 留痕=${!!stoppedRow?.items}`)
         console.log(ok ? '[engine-test] OK' : `[engine-test] FAIL rows=${rows.length}`)
         app.exit(ok ? 0 : 1)
       } catch (e) {
@@ -1091,7 +1096,9 @@ app.whenReady().then(() => {
           items3.some((i) => i.t === 'tool') && items3.some((i) => i.t === 'sources')
         const stopRow = rows[3]
         const stopKept =
-          stopRow?.status === 'stopped' && Array.isArray(JSON.parse(stopRow?.items ?? ''))
+          stopRow?.status === 'done' &&
+          stopRow?.endReason === 'stopped' &&
+          Array.isArray(JSON.parse(stopRow?.items ?? ''))
 
         // 闸门（工具级计数）：第 4 次检索请求应被拒绝、不执行
         const ctx = { pool: [], searches: 0, kbIds: [1], kbNames: new Map([[1, '测试库']]) }

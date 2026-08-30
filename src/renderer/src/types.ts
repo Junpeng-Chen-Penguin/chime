@@ -17,7 +17,8 @@ export interface PersistedMessage {
   content: string
   items: string | null // TurnItem[] 的 JSON；assistant 行是过程件，user 行只有表格行引用（013）
   usage: string | null // {input, output, cached} JSON
-  status: string
+  status: string // 走到哪一步：running / waiting / done
+  endReason: string | null // 为什么不是正常完成：stopped / interrupted / error；正常为 NULL
   createdAt: number
 }
 
