@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { builtinEntry } from '../../../shared/builtinTools'
-import type { SearchToolResult, SourceRef, TurnItem } from '../../../preload/index.d'
+import type { SearchToolResult, TurnItem } from '../../../preload/index.d'
 import { diffLines } from 'diff'
 
 type ToolItem = Extract<TurnItem, { t: 'tool' }>
@@ -329,15 +329,7 @@ function KvRows({
 }
 
 // 详情区（Case 6 功能点 3/4）：圆角浅灰底框，上半参数、下半结果，按工具选内容与样式
-function CallDetail({
-  item,
-  sourcePool,
-  onOpenSource
-}: {
-  item: CallItem
-  sourcePool?: SourceRef[] // 本条消息的来源池：检索命中点开进侧板靠它反查
-  onOpenSource?: (file: string, sources: SourceRef[]) => void
-}): React.JSX.Element {
+function CallDetail({ item }: { item: CallItem }): React.JSX.Element {
   if (item.t === 'reasoning') {
     return (
       <DetailShell>
@@ -357,13 +349,11 @@ function CallDetail({
     | undefined
   const text = typeof r === 'string' ? r : ''
 
-  // 检索：命中的文档列表，点一条进侧板看原文
+  // 检索：命中的文档列表，只列不可点（验收修订：部分可点部分不可点让人困惑；看原文走轮末来源清单）
   if (name === 'search_knowledge_base') {
     const sr = r as SearchToolResult | undefined
     const hits = sr?.results ?? []
     const uniq = [...new Map(hits.map((x) => [x.file, x])).values()]
-    const poolFor = (file: string): SourceRef[] =>
-      (sourcePool ?? []).filter((s) => s.filePath === file)
     return (
       <DetailShell>
         <SectionLabel>检索词</SectionLabel>
@@ -372,22 +362,13 @@ function CallDetail({
         <SectionLabel>命中</SectionLabel>
         <div className="flex flex-col gap-1">
           {uniq.map((x, i) => (
-            <button
-              key={i}
-              disabled={!poolFor(x.file).length}
-              onClick={(e) => {
-                e.stopPropagation()
-                const pool = poolFor(x.file)
-                if (pool.length) onOpenSource?.(x.file, pool)
-              }}
-              className="-mx-1 flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[13px] transition-colors enabled:hover:bg-black/5"
-            >
+            <div key={i} className="flex items-center gap-1.5 text-[13px]">
               <FileText className="size-3.5 flex-none text-muted-foreground/50" />
               <span className="min-w-0 truncate">
                 {x.file.replace(/\.md$/, '')}
                 {x.heading ? ' › ' + x.heading : ''}
               </span>
-            </button>
+            </div>
           ))}
         </div>
       </DetailShell>
@@ -488,7 +469,10 @@ function CallDetail({
 
 function DetailShell({ children }: { children: ReactNode }): React.JSX.Element {
   return (
-    <div className="mt-1.5 mb-1 ml-6 rounded-lg bg-muted/40 px-3 py-2.5 select-text">{children}</div>
+    // 与调用行左对齐、底色与页面拉开（验收修订：原缩进 24px、淡底与白底混在一起）
+    <div className="mt-1.5 mb-1 rounded-lg border border-border/70 bg-muted/50 px-3 py-2.5 select-text">
+      {children}
+    </div>
   )
 }
 function SectionLabel({ children }: { children: ReactNode }): React.JSX.Element {
@@ -502,26 +486,24 @@ function Divider(): React.JSX.Element {
 export function CallRow({
   item,
   running,
-  connectDown,
-  sourcePool,
-  onOpenSource
+  connectDown
 }: {
   item: CallItem
   running: boolean // 这一行是否处于进行中（末位判定由父级传入）
   connectDown: boolean // 与下一行之间画竖线（Case 5 功能点 7）
-  sourcePool?: SourceRef[]
-  onOpenSource?: (file: string, sources: SourceRef[]) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const face = faceOf(item, running)
-  // 制品生成成功不出行（换制品卡，Case 9）——父级已过滤，这里只处理进行中与失败
+  // 制品生成成功不出行（换制品卡，Case 9）——父级已过滤，这里只处理进行中与失败。
+  // 思考行流式中也能展开（验收修订：思考中就想看想法），工具行仍要等结果
   const expandable =
-    !face.running &&
+    (item.t === 'reasoning' || !face.running) &&
     !(item.t === 'tool' && (item.auth === 'denied' || item.auth === 'unanswered')) &&
     !(item.t === 'tool' && item.name === 'create_artifact' && !item.userText)
   const pulse = face.running
   return (
-    <div className="flex gap-2.5">
+    <div className="flex flex-col">
+      <div className="flex gap-2.5">
       {/* 图标列：竖线从图标下方延伸到下一行图标（相邻行连接） */}
       <div className="flex w-[14px] flex-none flex-col items-center">
         <face.icon
@@ -529,11 +511,10 @@ export function CallRow({
         />
         {connectDown && <div className="mt-1 w-px flex-1 bg-border" />}
       </div>
-      <div className="min-w-0 flex-1">
         <button
           onClick={() => expandable && setOpen((o) => !o)}
           className={cn(
-            '-ml-1 flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left',
+            '-ml-1 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left',
             expandable && 'transition-colors hover:bg-muted',
             pulse && 'text-shimmer'
           )}
@@ -563,10 +544,9 @@ export function CallRow({
             />
           )}
         </button>
-        {open && expandable && (
-          <CallDetail item={item} sourcePool={sourcePool} onOpenSource={onOpenSource} />
-        )}
       </div>
+      {/* 详情与调用行左对齐、占整行宽（验收修订：原缩进在文字列内） */}
+      {open && expandable && <CallDetail item={item} />}
     </div>
   )
 }
@@ -612,8 +592,6 @@ export function CallGroup({
   streaming,
   collapsed: collapsible,
   lastRunningIdx,
-  sourcePool,
-  onOpenSource,
   children
 }: {
   items: CallItem[]
@@ -621,8 +599,6 @@ export function CallGroup({
   streaming: boolean
   collapsed: boolean // 满足折叠条件（正常答完且组内不止一行）
   lastRunningIdx: number // 整条消息里处于进行中的 item 下标（-1 = 无）
-  sourcePool?: SourceRef[]
-  onOpenSource?: (file: string, sources: SourceRef[]) => void
   children?: ReactNode // 挂在组末尾的内容（授权卡，Case 7）
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
@@ -642,7 +618,7 @@ export function CallGroup({
         )}
       >
         执行 {items.length} 个步骤
-        <ChevronRight className="size-3.5" />
+        <ChevronRight className="size-3.5 text-muted-foreground/50" />
       </button>
     )
   }
@@ -657,7 +633,7 @@ export function CallGroup({
           )}
         >
           执行 {items.length} 个步骤
-          <ChevronDown className="size-3.5" />
+          <ChevronDown className="size-3.5 text-muted-foreground/50" />
         </button>
       )}
       {items.map((it, i) => (
@@ -666,8 +642,6 @@ export function CallGroup({
           item={it}
           running={streaming && baseIndex + i === lastRunningIdx}
           connectDown={i < items.length - 1}
-          sourcePool={sourcePool}
-          onOpenSource={onOpenSource}
         />
       ))}
       {children}

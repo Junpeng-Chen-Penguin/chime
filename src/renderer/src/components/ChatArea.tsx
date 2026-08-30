@@ -439,9 +439,9 @@ function ProgressIndicator({
   return (
     <div className="mt-1 flex items-center gap-2.5 text-[14px]">
       <span className="size-4 flex-none animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      <span className="text-[12px] text-muted-foreground">{fmtElapsed(elapsed)}</span>
-      <span className="text-muted-foreground">·</span>
-      <span className="text-shimmer font-medium">{label}</span>
+      <span className="text-muted-foreground">{fmtElapsed(elapsed)}</span>
+      <span className="text-muted-foreground/50">·</span>
+      <span className="text-shimmer">{label}</span>
     </div>
   )
 }
@@ -517,8 +517,6 @@ function AssistantMsg({
               streaming={streaming}
               collapsed={m.status === 'done' && !!answer && seg.items.length > 1}
               lastRunningIdx={streaming ? items.length - 1 : -1}
-              sourcePool={sources?.list}
-              onOpenSource={onOpenSource}
             >
               {authIdx >= 0 && pendingIsAuth && (
                 <AuthCard

@@ -540,9 +540,9 @@ function App(): React.JSX.Element {
   }
 
   return (
-    <div className="relative flex h-full w-full gap-2 bg-[#e8e8e5] p-2">
+    <>
       {/* Toast（016 Case 1）：顶部居中距顶 20px，最多三条多的排队，成功 4 秒失败 8 秒；
-          容器标不可拖拽，防止顶部窗口拖动区吞掉点击 */}
+          容器标不可拖拽。必须在布局根之外——fixed 定位仍会占 flex 位、挤偏侧栏与红绿灯 */}
       <Toaster
         position="top-center"
         offset={20}
@@ -562,6 +562,7 @@ function App(): React.JSX.Element {
         }}
         closeButton
       />
+    <div className="relative flex h-full w-full gap-2 bg-[#e8e8e5] p-2">
       {!collapsed && <Sidebar {...sidebarProps} onCollapse={() => setCollapsed(true)} />}
 
       {settingsOpen ? (
@@ -801,6 +802,7 @@ function App(): React.JSX.Element {
         onCancel={() => setLeaveTarget(null)}
       />
     </div>
+    </>
   )
 }
 
