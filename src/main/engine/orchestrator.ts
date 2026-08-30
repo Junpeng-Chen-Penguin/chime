@@ -592,7 +592,14 @@ async function streamCore(core: {
     | { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
     | undefined
   let stepsPromise: Promise<readonly StepUsage[]> | null = null
+  // finish-step 逐次累计（首选来源）：LLM 请求一结束就有该次 usage，不等这一步的工具跑完。
+  // 并行调用等授权时停止，onAbort 与 steps 都是空的，只有这里有数
+  const streamed = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, seen: false }
   const stoppedUsage = async (): Promise<typeof abortedUsage> => {
+    if (streamed.seen) {
+      const { inputTokens, outputTokens, cachedInputTokens } = streamed
+      return { inputTokens, outputTokens, cachedInputTokens }
+    }
     if (abortedUsage) return abortedUsage
     const st = stepsPromise ? await stepsPromise.catch(() => []) : []
     return sumSteps(st)
@@ -834,6 +841,12 @@ async function streamCore(core: {
           persistRunning()
           break
         }
+        case 'finish-step':
+          streamed.seen = true
+          streamed.inputTokens += part.usage.inputTokens ?? 0
+          streamed.outputTokens += part.usage.outputTokens ?? 0
+          streamed.cachedInputTokens += part.usage.inputTokenDetails?.cacheReadTokens ?? 0
+          break
         case 'error':
           throw part.error
       }
