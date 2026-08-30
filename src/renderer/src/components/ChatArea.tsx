@@ -502,8 +502,8 @@ function AssistantMsg({
   }
 
   return (
-    // 回复右侧留出缩进，右边缘不顶齐用户气泡右边（参照 Claude）
-    <div className="flex flex-col gap-2 pr-10 text-foreground select-text">
+    // 016 验收修订：右边缘与用户气泡对齐（原来右侧留 40px 缩进，产品负责人定去掉）
+    <div className="flex flex-col gap-2 text-foreground select-text">
       {segmentItems(items).map((seg) => {
         if (seg.kind === 'calls') {
           // 一组连续调用行（016 Case 5/6）：三段式一行，正常答完后折成「执行 N 个步骤」；

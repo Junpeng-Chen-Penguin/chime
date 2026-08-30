@@ -557,7 +557,7 @@ export function CallRow({
           {expandable && (
             <ChevronRight
               className={cn(
-                'ml-auto size-3.5 flex-none text-muted-foreground/50 transition-transform',
+                'size-3.5 flex-none text-muted-foreground/50 transition-transform',
                 open && 'rotate-90'
               )}
             />
