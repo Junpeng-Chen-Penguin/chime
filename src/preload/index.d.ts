@@ -97,6 +97,7 @@ export type ChatEvent =
       type: 'turn-done'
       streamId: string
       endReason?: 'stopped' | 'interrupted' | 'error' // 空 = 正常完成
+      status: 'done' | 'stopped' | 'error' | 'interrupted' // 驱动协议兼容字段（endReason 合成）
       error?: string
       usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
       contextRatio: number

@@ -81,6 +81,8 @@ export type ChatEvent =
       type: 'turn-done'
       streamId: string
       endReason?: EndReason // 空 = 正常完成
+      // 驱动协议的兼容字段（Tuner 与 eval 消费）：endReason 合成的收场语义，与 016 前同值域
+      status: 'done' | 'stopped' | 'error' | 'interrupted'
       error?: string
       usage?: { inputTokens: number; outputTokens: number }
       contextRatio: number
@@ -167,6 +169,7 @@ export async function runTurn(opts: {
       type: 'turn-done',
       streamId: opts.streamId,
       endReason: 'error',
+      status: 'error',
       error: '处理出错，请重试',
       contextRatio: 0
     })
@@ -188,6 +191,7 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
       type: 'turn-done',
       streamId,
       endReason: 'error',
+      status: 'error',
       error: '请先在设置里配置 API 密钥',
       contextRatio: 0
     })
@@ -231,6 +235,7 @@ async function streamCore(core: {
       type: 'turn-done',
       streamId,
       endReason: 'error',
+      status: 'error',
       error: p ? '该模型所属的服务商未启用或未配置密钥' : '模型无法定位，请重新选择',
       contextRatio: 0
     })
@@ -267,7 +272,7 @@ async function streamCore(core: {
     const content =
       [...kept].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')?.text ?? ''
     saveAssistantTurn(convId, msgId, { content, items: kept, status: 'done', endReason, usage })
-    emit({ type: 'turn-done', streamId, endReason, error, usage, contextRatio })
+    emit({ type: 'turn-done', streamId, endReason, status: endReason ?? 'done', error, usage, contextRatio })
   }
   // 弹卡即落库 / 卡片回应后落库：等待中的快照（最终态由 finish 覆盖）
   const persistWaiting = (): void => {

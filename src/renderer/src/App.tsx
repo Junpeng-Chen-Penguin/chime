@@ -449,23 +449,29 @@ function App(): React.JSX.Element {
     if (sending) return
     // 草稿会话发出第一条时才真正建库、进列表；此刻定性选用的 Agent（014：知识库只从 Agent 进入，会话不再单独选库）
     if (draftId === activeId) {
-      const c = await window.api.createConversation({ id: activeId, model: activeModel })
-      const agent = agentSel[activeId] ?? null
-      if (agent)
-        await window.api.setConversationAgent({
-          id: activeId,
-          agentId: agent.id,
-          agentName: agent.name
-        })
-      // 草稿期勾选的服务随会话落库（Case 8）
-      const sel = mcpSel[activeId]
-      if (sel?.length)
-        await window.api.setConversationMcpSelection({ id: activeId, serviceIds: sel })
-      setConversations((cs) => [
-        { ...c, agentId: agent?.id ?? null, agentName: agent?.name ?? null },
-        ...cs
-      ])
-      setDraftId(null)
+      // 016 Case 1：任何一步保存失败都停在草稿状态——不发送、会话不进列表、输入内容留在输入框
+      try {
+        const c = await window.api.createConversation({ id: activeId, model: activeModel })
+        const agent = agentSel[activeId] ?? null
+        if (agent)
+          await window.api.setConversationAgent({
+            id: activeId,
+            agentId: agent.id,
+            agentName: agent.name
+          })
+        // 草稿期勾选的服务随会话落库（Case 8）
+        const sel = mcpSel[activeId]
+        if (sel?.length)
+          await window.api.setConversationMcpSelection({ id: activeId, serviceIds: sel })
+        setConversations((cs) => [
+          { ...c, agentId: agent?.id ?? null, agentName: agent?.name ?? null },
+          ...cs
+        ])
+        setDraftId(null)
+      } catch {
+        toastError('创建会话', undefined, '数据没有保存成功，请重试')
+        return
+      }
     }
     clearPending()
     // 首条消息随带工作空间选中集合（015 Case 1）：未定格才带，主进程据此弹卡确认并定格
