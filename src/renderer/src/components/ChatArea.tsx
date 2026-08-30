@@ -520,6 +520,7 @@ function AssistantMsg({
             >
               {authIdx >= 0 && pendingIsAuth && (
                 <AuthCard
+                  key={(items[pendingIdx] as Extract<TurnItem, { t: 'tool' }>).id}
                   item={items[pendingIdx] as Extract<TurnItem, { t: 'tool' }>}
                   onRespond={onRespondCard}
                 />
@@ -680,7 +681,7 @@ function AuthCard({
   const alwaysDir = fs?.path ? fs.path.split('/').slice(0, -1).join('/') : ''
   const btn = 'rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-colors'
   return (
-    <div className="mt-1 flex w-full flex-col gap-3 rounded-xl border border-border bg-background px-4 py-3.5 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)]">
+    <div className="animate-in fade-in slide-in-from-bottom-1 mt-1 flex w-full flex-col gap-3 rounded-xl border border-border bg-background px-4 py-3.5 shadow-[0_1px_3px_rgba(0,0,0,0.04),0_4px_16px_-4px_rgba(0,0,0,0.08)] duration-200">
       <div className="flex items-center gap-2.5 text-[14px] font-medium text-foreground">
         <Icon
           className={cn('size-4 flex-none', overwrite ? 'text-destructive' : 'text-muted-foreground')}

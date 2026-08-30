@@ -367,7 +367,8 @@ export function makeFsTools(opts: {
       if (exists && !readFresh(convId, abs))
         return {
           error:
-            '目标文件已存在且你在本会话内还没读过它（或读后它被改动过）。先用 read_file 读取，再决定怎么改；修改已有文件优先用 edit_file'
+            '目标文件已存在且你在本会话内还没读过它（或读后它被改动过）。先用 read_file 读取，再决定怎么改；修改已有文件优先用 edit_file',
+          userText: '文件已存在'
         }
       const auth = await ensureWriteAuth(abs, exists ? '覆盖' : '新建', toolCallId, 'write_file')
       if (auth) return auth
@@ -409,7 +410,8 @@ export function makeFsTools(opts: {
       if (bad) return bad
       if (typeof a.old_string !== 'string' || typeof a.new_string !== 'string')
         return {
-          error: '缺少 old_string / new_string 参数：请带上要替换的原文片段与新内容重新调用'
+          error: '缺少 old_string / new_string 参数：请带上要替换的原文片段与新内容重新调用',
+          userText: '调用参数不完整'
         }
       const abs = resolve(a.path!)
       const gate = await ensureAccess(

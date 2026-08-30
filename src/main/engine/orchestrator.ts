@@ -565,10 +565,38 @@ async function streamCore(core: {
   const extraBody = Object.keys(p.extraParams).length ? p.extraParams : undefined
 
   // 停止时的用量（016 Case 14）：onAbort 交回已完成的各步，逐步加总。
-  // 一步都没完成时保持 undefined——页脚按「拿不到不显示」走，不显示 0
+  // 一步都没完成时保持 undefined——页脚按「拿不到不显示」走，不显示 0。
+  // 等授权中停止走异常路径、onAbort 不触发（验收实测），收场时再从 steps 兜取一次
+  type StepUsage = {
+    usage: {
+      inputTokens?: number
+      outputTokens?: number
+      inputTokenDetails?: { cacheReadTokens?: number }
+    }
+  }
+  const sumSteps = (
+    steps: readonly StepUsage[]
+  ): { inputTokens: number; outputTokens: number; cachedInputTokens?: number } | undefined => {
+    if (!steps.length) return undefined
+    return steps.reduce(
+      (acc, st) => ({
+        inputTokens: acc.inputTokens + (st.usage.inputTokens ?? 0),
+        outputTokens: acc.outputTokens + (st.usage.outputTokens ?? 0),
+        cachedInputTokens:
+          (acc.cachedInputTokens ?? 0) + (st.usage.inputTokenDetails?.cacheReadTokens ?? 0)
+      }),
+      { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 }
+    )
+  }
   let abortedUsage:
     | { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
     | undefined
+  let stepsPromise: Promise<readonly StepUsage[]> | null = null
+  const stoppedUsage = async (): Promise<typeof abortedUsage> => {
+    if (abortedUsage) return abortedUsage
+    const st = stepsPromise ? await stepsPromise.catch(() => []) : []
+    return sumSteps(st)
+  }
   try {
     const result = streamText({
       model: provider(p.model),
@@ -577,16 +605,7 @@ async function streamCore(core: {
       messages: history,
       abortSignal: controller.signal,
       onAbort: ({ steps }) => {
-        if (!steps.length) return
-        abortedUsage = steps.reduce(
-          (acc, s) => ({
-            inputTokens: acc.inputTokens + (s.usage.inputTokens ?? 0),
-            outputTokens: acc.outputTokens + (s.usage.outputTokens ?? 0),
-            cachedInputTokens:
-              (acc.cachedInputTokens ?? 0) + (s.usage.inputTokenDetails?.cacheReadTokens ?? 0)
-          }),
-          { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 }
-        )
+        abortedUsage = sumSteps(steps as readonly StepUsage[])
       },
       tools: Object.keys(turnTools).length ? turnTools : undefined,
       // 三件事（07-13 修订：计轮 + 触顶告知，原为触顶静默摘工具清单——模型不知情会把调用吐进正文）：
@@ -693,6 +712,7 @@ async function streamCore(core: {
       stopWhen: isStepCount(STEP_COUNT_LIMIT) // 防御性兜底，正常永远先触发硬闸
     })
 
+    stepsPromise = result.steps as unknown as Promise<readonly StepUsage[]>
     for await (const part of result.fullStream) {
       switch (part.type) {
         case 'reasoning-start':
@@ -837,7 +857,7 @@ async function streamCore(core: {
     // 停止收场：已流出内容保留，用量取 onAbort 收到的已完成各步合计
     if (controller.signal.aborted) {
       settleUnfinished('用户停止')
-      finish('stopped', undefined, abortedUsage, contextRatio)
+      finish('stopped', undefined, await stoppedUsage(), contextRatio)
       return
     }
 
@@ -857,9 +877,9 @@ async function streamCore(core: {
     )
   } catch (e) {
     if (controller.signal.aborted) {
-      // 一步都没完成的停止从这里进（result.usage 拒绝抛出）
+      // 等授权中停止、一步没完成的停止都从这里进
       settleUnfinished('用户停止')
-      finish('stopped', undefined, abortedUsage, contextRatio)
+      finish('stopped', undefined, await stoppedUsage(), contextRatio)
     } else {
       const msg = humanizeError(e)
       // 鉴权 / 服务端错误 → 标记该服务商异常（控件警示 + 前往设置），下次成功或检测通过后解除
