@@ -469,7 +469,7 @@ function CallDetail({ item }: { item: CallItem }): React.JSX.Element {
 
 function DetailShell({ children }: { children: ReactNode }): React.JSX.Element {
   return (
-    // 与调用行左对齐、底色与页面拉开（验收修订：原缩进 24px、淡底与白底混在一起）
+    // 与动词左对齐（不再额外缩进 24px）、底色加深加细边框与白底拉开（验收修订）
     <div className="mt-1.5 mb-1 rounded-lg border border-border/70 bg-muted/50 px-3 py-2.5 select-text">
       {children}
     </div>
@@ -502,19 +502,19 @@ export function CallRow({
     !(item.t === 'tool' && item.name === 'create_artifact' && !item.userText)
   const pulse = face.running
   return (
-    <div className="flex flex-col">
-      <div className="flex gap-2.5">
-      {/* 图标列：竖线从图标下方延伸到下一行图标（相邻行连接） */}
+    <div className="flex gap-2.5">
+      {/* 图标列：竖线从图标下方延伸到下一行图标（相邻行连接，详情展开时随行高贯穿） */}
       <div className="flex w-[14px] flex-none flex-col items-center">
         <face.icon
           className={cn('mt-[5px] size-3.5 flex-none', pulse ? 'text-primary' : 'text-muted-foreground/70')}
         />
         {connectDown && <div className="mt-1 w-px flex-1 bg-border" />}
       </div>
+      <div className="min-w-0 flex-1">
         <button
           onClick={() => expandable && setOpen((o) => !o)}
           className={cn(
-            '-ml-1 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left',
+            '-ml-1 flex w-full items-center gap-2 rounded-md px-1 py-0.5 text-left',
             expandable && 'transition-colors hover:bg-muted',
             pulse && 'text-shimmer'
           )}
@@ -544,9 +544,9 @@ export function CallRow({
             />
           )}
         </button>
+        {/* 详情与动词左对齐（在文字列内，验收澄清），底色与页面拉开 */}
+        {open && expandable && <CallDetail item={item} />}
       </div>
-      {/* 详情与调用行左对齐、占整行宽（验收修订：原缩进在文字列内） */}
-      {open && expandable && <CallDetail item={item} />}
     </div>
   )
 }
