@@ -49,6 +49,10 @@ export default function Sidebar({
 
         {/* 纯文字小标题（参照 Claude Recents / WorkBuddy 任务），不带 icon，与下方无 icon 列表对齐 */}
         <div className="mt-4 mb-0.5 px-2.5 text-[12px] font-medium text-muted-foreground">最近</div>
+        {/* 016 Case 3 验收补：空列表给一句，不留空白 */}
+        {items.length === 0 && (
+          <div className="px-2.5 py-2 text-[13px] text-muted-foreground">还没有会话</div>
+        )}
         {items.map((it) => {
           const active = it.id === activeId
           return (

@@ -8,7 +8,6 @@ import { WorkContent, type WorkArtifact } from './components/WorkPanel'
 import ConfirmDialog from './components/ConfirmDialog'
 import { Toaster } from 'sonner'
 import { toastSuccess, toastError } from './lib/toast'
-import { Check, AlertCircle } from 'lucide-react'
 import { ArrowLeft, Download, Loader2, PanelRight, Table2 } from 'lucide-react'
 import { useChat, type Msg, type MsgStatus } from './hooks/useChat'
 import type { ChipRef, Conversation, PersistedMessage } from './types'
@@ -543,25 +542,7 @@ function App(): React.JSX.Element {
     <>
       {/* Toast（016 Case 1）：顶部居中距顶 20px，最多三条多的排队，成功 4 秒失败 8 秒；
           容器标不可拖拽。必须在布局根之外——fixed 定位仍会占 flex 位、挤偏侧栏与红绿灯 */}
-      <Toaster
-        position="top-center"
-        offset={20}
-        visibleToasts={3}
-        gap={8}
-        duration={4000}
-        icons={{
-          success: <Check className="size-4 text-emerald-600" />,
-          error: <AlertCircle className="size-4 text-destructive" />
-        }}
-        toastOptions={{
-          unstyled: true,
-          duration: 4000,
-          classNames: { error: 'toast-error' },
-          className:
-            '[-webkit-app-region:no-drag] flex min-w-[288px] max-w-[400px] items-center gap-2.5 rounded-xl border border-border bg-background px-4 py-3 text-[13px] text-foreground shadow-lg'
-        }}
-        closeButton
-      />
+      <Toaster position="top-center" offset={20} visibleToasts={3} gap={8} />
     <div className="relative flex h-full w-full gap-2 bg-[#e8e8e5] p-2">
       {!collapsed && <Sidebar {...sidebarProps} onCollapse={() => setCollapsed(true)} />}
 
