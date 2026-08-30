@@ -602,20 +602,12 @@ export function CallGroup({
   children?: ReactNode // 挂在组末尾的内容（授权卡，Case 7）
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
-  const anyFailed = items.some(
-    (it) =>
-      it.t === 'tool' &&
-      typeof it.result === 'object' &&
-      !!(it.result as { error?: string })?.error
-  )
+  // 折叠行不随组内失败变色（验收修订：整行红像整个执行都出了问题，失败在展开后的行上看）
   if (collapsible && !expanded) {
     return (
       <button
         onClick={() => setExpanded(true)}
-        className={cn(
-          '-ml-1 flex w-fit items-center gap-1.5 rounded-md px-1 py-0.5 text-[14px] transition-colors hover:bg-muted',
-          anyFailed ? 'text-destructive' : 'text-muted-foreground'
-        )}
+        className="-ml-1 flex w-fit items-center gap-1.5 rounded-md px-1 py-0.5 text-[14px] text-muted-foreground transition-colors hover:bg-muted"
       >
         执行 {items.length} 个步骤
         <ChevronRight className="size-3.5 text-muted-foreground/50" />
@@ -627,10 +619,7 @@ export function CallGroup({
       {collapsible && (
         <button
           onClick={() => setExpanded(false)}
-          className={cn(
-            '-ml-1 mb-1 flex w-fit items-center gap-1.5 rounded-md px-1 py-0.5 text-[14px] transition-colors hover:bg-muted',
-            anyFailed ? 'text-destructive' : 'text-muted-foreground'
-          )}
+          className="-ml-1 mb-1 flex w-fit items-center gap-1.5 rounded-md px-1 py-0.5 text-[14px] text-muted-foreground transition-colors hover:bg-muted"
         >
           执行 {items.length} 个步骤
           <ChevronDown className="size-3.5 text-muted-foreground/50" />
