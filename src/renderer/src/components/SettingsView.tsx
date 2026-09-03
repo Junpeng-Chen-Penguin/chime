@@ -1461,7 +1461,7 @@ function McpPanel({ onDirtyChange }: { onDirtyChange: (d: boolean) => void }): R
                       }}
                       className="ml-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground underline-offset-2 enabled:hover:underline"
                     >
-                      {checkingId === svc.id && <Loader2 className="size-3 animate-spin" />}
+                      {checkingId === svc.id && <Loader2 className="size-3.5 animate-spin" />}
                       检测更新
                     </button>
                   </StatusLine>
@@ -1574,7 +1574,7 @@ function Elapsed(): React.JSX.Element | null {
   }, [])
   if (secs < 10) return null
   const txt = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
-  return <span className="text-muted-foreground/70"> · {txt}</span>
+  return <span className="text-muted-foreground"> · {txt}</span>
 }
 
 function StatusLine({
@@ -1791,7 +1791,7 @@ function SkillPanel(): React.JSX.Element {
                   该文件不支持预览
                 </div>
               ) : viewSrc || !file.path.endsWith('.md') ? (
-                <pre className="overflow-x-auto text-[12.5px] leading-[1.7] whitespace-pre-wrap select-text">
+                <pre className="overflow-x-auto text-[13px] leading-[1.7] whitespace-pre-wrap select-text">
                   {file.content}
                 </pre>
               ) : (

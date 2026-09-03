@@ -506,7 +506,7 @@ export function CallRow({
       {/* 图标列：竖线从图标下方延伸到下一行图标（相邻行连接，详情展开时随行高贯穿） */}
       <div className="flex w-[14px] flex-none flex-col items-center">
         <face.icon
-          className={cn('mt-[5px] size-3.5 flex-none', pulse ? 'text-primary' : 'text-muted-foreground/70')}
+          className={cn('mt-[5px] size-3.5 flex-none', pulse ? 'text-primary' : 'text-muted-foreground/50')}
         />
         {connectDown && <div className="mt-1 w-px flex-1 bg-border" />}
       </div>

@@ -730,7 +730,7 @@ export default function Composer({
                     setWsQuery('')
                     setWsOpen((o) => !o)
                   }}
-                  className="flex items-center gap-1.5 text-[13px] text-foreground/75 transition-colors hover:text-foreground"
+                  className="flex items-center gap-1.5 text-[13px] text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <Folder className="size-4" />
                   {ws.checked.length
@@ -751,7 +751,7 @@ export default function Composer({
                           value={wsQuery}
                           onChange={(e) => setWsQuery(e.target.value)}
                           placeholder="搜索工作空间"
-                          className="h-7 w-full bg-transparent text-[13px] outline-none placeholder:text-muted-foreground/60"
+                          className="h-7 w-full bg-transparent text-[13px] outline-none placeholder:text-muted-foreground"
                         />
                       </div>
                       <div className="max-h-[220px] overflow-y-auto py-1">
