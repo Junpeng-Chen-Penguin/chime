@@ -1171,10 +1171,16 @@ app.whenReady().then(() => {
     }
   })
 
-  // 正式版菜单去掉「显示」栏（内含缩放快捷键）；开发态保留完整菜单（刷新/DevTools）
+  // 正式版菜单去掉「显示」栏（内含缩放快捷键）；开发态保留完整菜单（刷新/DevTools）。
+  // 「文件」栏必须留：关闭窗口的 Cmd+W 挂在它的 close 项上，少了这栏快捷键整个失效
   if (!is.dev) {
     Menu.setApplicationMenu(
-      Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])
+      Menu.buildFromTemplate([
+        { role: 'appMenu' },
+        { role: 'fileMenu' },
+        { role: 'editMenu' },
+        { role: 'windowMenu' }
+      ])
     )
   }
 
