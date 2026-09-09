@@ -228,7 +228,7 @@ export interface KbCard {
 export interface AgentInfo {
   id: number
   name: string
-  prompt: string
+  promptSections: import('../shared/agentPrompt').PromptSections // 五栏提示词（018 Case 11）
   kbSel: { id: number; name: string }[]
   mcpSel: { id: number; name: string }[]
   wsSel: string[] // 默认工作空间（绝对路径，015 Case 1）
@@ -306,7 +306,7 @@ export interface ChimeApi {
   agentSave: (a: {
     id?: number
     name: string
-    prompt: string
+    promptSections: import('../shared/agentPrompt').PromptSections
     kbSel: { id: number; name: string }[]
     mcpSel: { id: number; name: string }[]
     wsSel: string[]

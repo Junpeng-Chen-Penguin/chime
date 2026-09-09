@@ -33,6 +33,7 @@ import {
 import { Markdown } from './Markdown'
 import { estimateTokensBase } from '../../../shared/tokens'
 import { BUILTIN_TOOLS } from '../../../shared/builtinTools'
+import type { PromptSections } from '../../../shared/agentPrompt'
 import deepseekIcon from '@/assets/vendors/deepseek.png'
 import zhipuIcon from '@/assets/vendors/zhipu.png'
 
@@ -1598,22 +1599,20 @@ function StatusLine({
 
 // ── Agent 分区（014 Case 2）：列表 / 编辑两态。Agent = 提示词 + 知识库 + MCP 服务的命名组合 ──
 
-// 提示词预填骨架：括号里是引导文字，用户写时替换；不需要的标题自行删除。
-// 所见即所得：编辑框里是什么就存什么、token 数按实际内容算，不做「没动过骨架按空存」的特判
-const AGENT_PROMPT_SKELETON = `你是XXX，负责XXX。
-
-## 我能做什么
-（写清楚这个 Agent 具体能办哪些事，一条一行）
-
-## 我不做什么
-（哪些问题不归它管，遇到了该怎么回）
-
-## 业务背景
-（模型不可能知道的业务常识、术语、系统之间的关系）
-
-## 回答规矩
-（回答时要遵守的具体规则，比如涉及价格不给具体数字，让用户找商务确认）
-`
+// 提示词分五栏（018 Case 11）：每栏一个标题加一句占位引导，占位不进内容。
+// 拼进系统提示词的格式在 shared/agentPrompt.ts，空栏连标题一起跳过
+const PROMPT_FIELDS: { key: keyof PromptSections; title: string; hint: string }[] = [
+  { key: 'identity', title: '身份与职责', hint: '这个 Agent 是谁、负责哪一摊事' },
+  { key: 'can', title: '能做什么', hint: '具体能办哪些事，一条一行' },
+  { key: 'cannot', title: '不做什么', hint: '哪些问题不归它管，遇到了该怎么回' },
+  { key: 'background', title: '业务背景', hint: '这个 Agent 所属业务特有的常识、术语、系统之间的关系' },
+  {
+    key: 'rules',
+    title: '回答规矩',
+    hint: '回答时要遵守的具体规则，比如涉及价格不给具体数字，让用户找商务确认'
+  }
+]
+const PROMPT_ROWS_MAX = 8
 
 // ── 技能分区（015 Case 4）：列表两列（技能、最近更新）+ 明细页（只读）+ 导入弹窗，界面照 Claude 桌面端技能页 ──
 function SkillPanel(): React.JSX.Element {
@@ -2006,7 +2005,7 @@ function AgentPanel({
   const [editing, setEditing] = useState<{ id?: number } | null>(null) // null = 列表；{} = 新建；{id} = 编辑
   const [sub, setSub] = useState<'base' | 'prompt' | 'kb' | 'tools' | 'skill'>('base') // 编辑页内的分类导航
   const [formName, setFormName] = useState('')
-  const [formPrompt, setFormPrompt] = useState('')
+  const [formSections, setFormSections] = useState<PromptSections>({})
   const [formKbSel, setFormKbSel] = useState<SelEntry[]>([])
   const [formMcpSel, setFormMcpSel] = useState<SelEntry[]>([])
   const [formWsSel, setFormWsSel] = useState<string[]>([]) // 默认工作空间（015 Case 1）
@@ -2024,7 +2023,7 @@ function AgentPanel({
     id: number | string
     name: string
   } | null>(null)
-  const formInit = useRef({ name: '', prompt: '', kb: '[]', mcp: '[]', ws: '[]', skill: '[]' })
+  const formInit = useRef({ name: '', prompt: '{}', kb: '[]', mcp: '[]', ws: '[]', skill: '[]' })
 
   const reload = useCallback(() => {
     window.api.agentList().then(setAgents)
@@ -2042,18 +2041,18 @@ function AgentPanel({
     onDirtyChange(
       editing !== null &&
         (formName !== i.name ||
-          formPrompt !== i.prompt ||
+          JSON.stringify(formSections) !== i.prompt ||
           JSON.stringify(formKbSel) !== i.kb ||
           JSON.stringify(formMcpSel) !== i.mcp ||
           JSON.stringify(formWsSel) !== i.ws ||
           JSON.stringify(formSkillSel) !== i.skill)
     )
-  }, [editing, formName, formPrompt, formKbSel, formMcpSel, formWsSel, formSkillSel, onDirtyChange])
+  }, [editing, formName, formSections, formKbSel, formMcpSel, formWsSel, formSkillSel, onDirtyChange])
   useEffect(() => () => onDirtyChange(false), [onDirtyChange])
 
   const openEdit = (a: AgentInfo | null): void => {
     setFormName(a?.name ?? '')
-    setFormPrompt(a?.prompt ?? AGENT_PROMPT_SKELETON)
+    setFormSections(a?.promptSections ?? {})
     setFormKbSel(a?.kbSel ?? [])
     setFormMcpSel(a?.mcpSel ?? [])
     setFormWsSel(a?.wsSel ?? [])
@@ -2068,7 +2067,7 @@ function AgentPanel({
     setWsError('')
     formInit.current = {
       name: a?.name ?? '',
-      prompt: a?.prompt ?? AGENT_PROMPT_SKELETON,
+      prompt: JSON.stringify(a?.promptSections ?? {}),
       kb: JSON.stringify(a?.kbSel ?? []),
       mcp: JSON.stringify(a?.mcpSel ?? []),
       ws: JSON.stringify(a?.wsSel ?? []),
@@ -2095,7 +2094,7 @@ function AgentPanel({
     const r = await window.api.agentSave({
       id: editing?.id,
       name: formName.trim(),
-      prompt: formPrompt,
+      promptSections: formSections,
       kbSel: formKbSel,
       mcpSel: formMcpSel,
       wsSel: formWsSel,
@@ -2226,17 +2225,35 @@ function AgentPanel({
 
             {sub === 'prompt' && (
               <>
-                <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">
-                  系统提示词
+                <div className="mb-1.5 text-[13px] font-medium text-muted-foreground">提示词</div>
+                {/* 五栏（018 Case 11）：随内容增高到 8 行封顶，之后内部滚动；占位引导不进内容 */}
+                <div className="flex flex-col gap-3">
+                  {PROMPT_FIELDS.map((f) => {
+                    const v = formSections[f.key] ?? ''
+                    const rows = Math.min(PROMPT_ROWS_MAX, Math.max(2, v.split('\n').length))
+                    return (
+                      <div key={f.key}>
+                        <div className="mb-1 text-[13px] text-foreground">{f.title}</div>
+                        <textarea
+                          value={v}
+                          placeholder={f.hint}
+                          rows={rows}
+                          onChange={(e) =>
+                            setFormSections((s) => ({ ...s, [f.key]: e.target.value }))
+                          }
+                          className="w-full resize-none overflow-y-auto rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-[13px] leading-[1.7] outline-none placeholder:text-muted-foreground/60 focus:border-ring focus:ring-[3px] focus:ring-ring/15"
+                        />
+                      </div>
+                    )
+                  })}
                 </div>
-                <textarea
-                  value={formPrompt}
-                  onChange={(e) => setFormPrompt(e.target.value)}
-                  rows={16}
-                  className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2.5 font-mono text-[13px] leading-[1.7] outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/15"
-                />
                 <div className="mt-1 text-[12px] text-muted-foreground">
-                  {estimateTokensBase(formPrompt)} tokens
+                  合计{' '}
+                  {PROMPT_FIELDS.reduce(
+                    (n, f) => n + estimateTokensBase(formSections[f.key] ?? ''),
+                    0
+                  )}{' '}
+                  tokens
                 </div>
               </>
             )}

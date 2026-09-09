@@ -3,6 +3,7 @@ import { join } from 'path'
 import Database from 'better-sqlite3'
 import { VENDORS, WINDOW_FALLBACK, vendorFromBaseUrl } from './vendors'
 import { seal, unseal, isSealed, canSeal } from './secret'
+import { parsePromptSections, type PromptSections } from '../shared/agentPrompt'
 
 export interface ProviderRow {
   apiKey: string
@@ -168,6 +169,21 @@ export function initDb(): void {
       // 列已存在
     }
   }
+  // 迁移（018 三节）：系统提示词会话定格（第一轮拼一次存这里，此后逐字不变）；
+  // Agent 提示词分五栏存 JSON，旧的整段提示词迁进「业务背景」栏，prompt 列保留不再读写
+  for (const col of [
+    'ALTER TABLE conversation ADD COLUMN system_prompt TEXT',
+    "ALTER TABLE agent ADD COLUMN prompt_sections TEXT NOT NULL DEFAULT '{}'"
+  ]) {
+    try {
+      db.exec(col)
+    } catch {
+      // 列已存在
+    }
+  }
+  db.exec(
+    "UPDATE agent SET prompt_sections = json_object('background', prompt) WHERE prompt <> '' AND prompt_sections = '{}'"
+  )
   // 迁移（016 轮状态拆两字段）：status 只记走到哪一步，为什么结束挪进 end_reason。
   // 旧值 stopped/error/interrupted 都是「已结束」，映射成 done + 对应原因，一次跑完
   const msgCols2 = db.prepare('PRAGMA table_info(message)').all() as { name: string }[]
@@ -491,6 +507,18 @@ export function createConversation(id: string, model: string, now: number): Conv
     'INSERT INTO conversation (id, title, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
   ).run(id, '新对话', model, now, now)
   return { id, title: '新对话', model, updatedAt: now }
+}
+
+// 系统提示词会话定格（018 三节）：NULL = 还没拼过（新会话，或改动前创建的会话），第一轮拼一次写入
+export function getConversationSystemPrompt(id: string): string | null {
+  const r = db.prepare('SELECT system_prompt AS s FROM conversation WHERE id = ?').get(id) as
+    | { s: string | null }
+    | undefined
+  return r?.s ?? null
+}
+
+export function setConversationSystemPrompt(id: string, text: string): void {
+  db.prepare('UPDATE conversation SET system_prompt = ? WHERE id = ?').run(text, id)
 }
 
 export function deleteConversation(id: string): void {
@@ -1070,7 +1098,7 @@ export function getConversationMcpSelection(id: string): number[] {
 export interface AgentRow {
   id: number
   name: string
-  prompt: string
+  promptSections: PromptSections // 五栏提示词（018 Case 11）；旧的 prompt 列已迁进业务背景栏，不再读写
   kbSel: KbSelEntry[]
   mcpSel: KbSelEntry[] // 结构相同（id + 名字快照），复用同一类型
   wsSel: string[] // 默认工作空间：绝对路径数组，不存名字快照（名字随取 basename，「已失效」现场判）
@@ -1099,12 +1127,12 @@ function parseStrArr(s: string | null): string[] {
 }
 
 const AGENT_COLS =
-  'id, name, prompt, kb_sel AS kbSel, mcp_sel AS mcpSel, ws_sel AS wsSel, skill_sel AS skillSel, created_at AS createdAt'
+  'id, name, prompt_sections AS promptSections, kb_sel AS kbSel, mcp_sel AS mcpSel, ws_sel AS wsSel, skill_sel AS skillSel, created_at AS createdAt'
 
 interface RawAgentRow {
   id: number
   name: string
-  prompt: string
+  promptSections: string
   kbSel: string
   mcpSel: string
   wsSel: string
@@ -1115,6 +1143,7 @@ interface RawAgentRow {
 function hydrateAgent(r: RawAgentRow): AgentRow {
   return {
     ...r,
+    promptSections: parsePromptSections(r.promptSections),
     kbSel: parseSel(r.kbSel),
     mcpSel: parseSel(r.mcpSel),
     wsSel: parseStrArr(r.wsSel),
@@ -1142,7 +1171,7 @@ export function getAgentByName(name: string): AgentRow | null {
 export function saveAgent(a: {
   id?: number
   name: string
-  prompt: string
+  promptSections: PromptSections
   kbSel: KbSelEntry[]
   mcpSel: KbSelEntry[]
   wsSel: string[]
@@ -1150,12 +1179,20 @@ export function saveAgent(a: {
 }): { ok: true; id: number } | { ok: false; error: string } {
   const dup = db.prepare('SELECT id FROM agent WHERE name = ? AND id != ?').get(a.name, a.id ?? -1)
   if (dup) return { ok: false, error: '已有同名 Agent' }
+  // 空栏不存键：拼段时按「没有」处理，与留空同义
+  const sections = JSON.stringify(
+    Object.fromEntries(
+      Object.entries(a.promptSections).filter(([, v]) => typeof v === 'string' && v.trim())
+    )
+  )
   if (a.id !== undefined) {
     const r = db
-      .prepare('UPDATE agent SET name = ?, prompt = ?, kb_sel = ?, mcp_sel = ?, ws_sel = ?, skill_sel = ? WHERE id = ?')
+      .prepare(
+        'UPDATE agent SET name = ?, prompt_sections = ?, kb_sel = ?, mcp_sel = ?, ws_sel = ?, skill_sel = ? WHERE id = ?'
+      )
       .run(
         a.name,
-        a.prompt,
+        sections,
         JSON.stringify(a.kbSel),
         JSON.stringify(a.mcpSel),
         JSON.stringify(a.wsSel),
@@ -1168,10 +1205,12 @@ export function saveAgent(a: {
     return { ok: true, id: a.id }
   }
   const r = db
-    .prepare('INSERT INTO agent (name, prompt, kb_sel, mcp_sel, ws_sel, skill_sel, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .prepare(
+      'INSERT INTO agent (name, prompt_sections, kb_sel, mcp_sel, ws_sel, skill_sel, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    )
     .run(
       a.name,
-      a.prompt,
+      sections,
       JSON.stringify(a.kbSel),
       JSON.stringify(a.mcpSel),
       JSON.stringify(a.wsSel),

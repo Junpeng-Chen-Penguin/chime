@@ -21,6 +21,8 @@ import {
   getConversationWs,
   setConversationWs,
   touchWsRecent,
+  getConversationSystemPrompt,
+  setConversationSystemPrompt,
   type AgentRow
 } from '../db'
 import { kbReady } from '../kb'
@@ -485,16 +487,19 @@ async function streamCore(core: {
     } as Tool
   }
 
-  // 组装：系统提示词（身份段 + 固定主干 + 输出约定 +（关联知识库）条件段 + 环境信息）+ 消息序列
-  // 会话授权目录清单进环境信息（Case 2）：定格块已跑过，此处非 NULL；轮内申请授权通过的下一轮生效
-  const system = buildSystemPrompt(
-    kbEnv,
-    getMcpInstructions(mcpSelection),
-    agent?.prompt ?? null,
-    getConversationWs(convId) ?? [],
-    turnSkills,
-    activeSkillNames.length > 0
-  )
+  // 系统提示词会话定格（018 三节）：第一轮拼一次存进会话行，此后每轮原样读出。
+  // 中途改 Agent 提示词、库的增删、服务连断、跨天，都不回改它——变了的事走消息序列里的提醒消息。
+  // 会话授权目录清单进环境信息（015 Case 2）：定格块已跑过，此处非 NULL
+  let system = getConversationSystemPrompt(convId)
+  if (system === null) {
+    system = buildSystemPrompt({
+      agent: agent ? { name: agent.name, sections: agent.promptSections } : null,
+      kbLibraries: (kbEnv?.libraries ?? []).map((l) => ({ name: l.name, intro: l.intro })),
+      wsDirs: getConversationWs(convId) ?? [],
+      mcpInstructions: getMcpInstructions(mcpSelection)
+    })
+    setConversationSystemPrompt(convId, system)
+  }
   // 触发线（018 二节）：窗口 − 压缩预留。估算 = 工具清单 + 系统提示词 + 消息序列，各乘该模型的校准比值。
   // 工具清单改动前不进估算，它占单次请求的四成上下
   const line = triggerLine(model)

@@ -58,6 +58,7 @@ import {
   setMcpTrusted
 } from './db'
 import { TABLE_RENDER_CAP, artifactCsv } from './engine/artifact'
+import type { PromptSections } from '../shared/agentPrompt'
 import { syncMcpServices, getMcpServiceRuntime, testMcpConnection } from './mcp/client'
 import { kbBusy, busyKbId, runIndexJob, validateRepoPath, getLastSummary, checkChanges, kbReady, kbStale } from './kb'
 
@@ -237,7 +238,7 @@ export function registerIpc(): void {
       a: {
         id?: number
         name: string
-        prompt: string
+        promptSections: PromptSections
         kbSel: KbSelEntry[]
         mcpSel: KbSelEntry[]
         wsSel: string[]
