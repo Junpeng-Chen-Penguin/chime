@@ -4,6 +4,7 @@
 
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
+import { randomBytes } from 'crypto'
 import { tool, jsonSchema } from 'ai'
 import { listKbs } from '../db'
 import { estimateTokens } from '../../shared/chunker'
@@ -28,7 +29,8 @@ const RESULT_CHAR_LIMIT = 12000
 const WHOLE_DOC_TOKEN_MAX = 3000
 
 export interface TurnToolContext {
-  pool: SourceSnapshot[] // 本轮检索结果池：多次检索连续编号，回答结束按 [n] 反查
+  pool: SourceSnapshot[] // 本轮检索结果池，回答结束按编号反查（会话历史里的池由 orchestrator 并入）
+  poolByCall: Map<string, SourceSnapshot[]> // 每次检索的条目（toolCallId → 条目），随检索 item 落库
   searches: number
   kbIds: number[] // 本会话选用的库（检索范围）
   kbNames: Map<number, string> // 库 id → 名称（来源快照用）
@@ -306,7 +308,7 @@ export function makeSearchTool(ctx: TurnToolContext) {
       },
       required: ['query']
     }),
-    execute: async ({ query }) => {
+    execute: async ({ query }, { toolCallId }) => {
       // 无条件挂载（018 五节）：没关联知识库的会话返回一句说明，不返回空结果
       if (!ctx.kbIds.length) return { notice: '本会话没有关联知识库' }
       // 入参校验：模型偶发空参数调用，空检索词不进链路、不耗次数，回一条它能自我纠正的说明
@@ -345,10 +347,11 @@ export function makeSearchTool(ctx: TurnToolContext) {
           }
         }
 
-        // 结果续接本轮来源池，连续编号
-        const start = ctx.pool.length
-        const numbered = r.sources.map((s, i) => ({
-          n: start + i + 1,
+        // 编号（018 Case 7）：每次检索一个四位随机前缀，序号从 1 起，跨轮唯一——
+        // 改动前每轮从 1 重排，追问时引用前几轮的资料对不上号
+        const prefix = randomBytes(2).toString('hex')
+        const numbered: SourceSnapshot[] = r.sources.map((s, i) => ({
+          n: `${prefix}-${i + 1}`,
           chunkId: s.chunkId,
           kbId: s.kbId,
           kbName: ctx.kbNames.get(s.kbId) ?? '',
@@ -359,6 +362,7 @@ export function makeSearchTool(ctx: TurnToolContext) {
           content: s.content
         }))
         ctx.pool.push(...numbered)
+        ctx.poolByCall.set(toolCallId, numbered) // 随检索 item 落库，来源清单按整个会话查编号
 
         // 按文档上卷（013 Case 4）：同一篇命中 2 片以上，用整篇原文替换这几片——命中多片
         // 说明整篇就是用户要找的，而未命中的邻段（如「入口与角色」）往往正是缺的那块答案。
@@ -409,7 +413,7 @@ export function makeSearchTool(ctx: TurnToolContext) {
         }
 
         // 入场截断：超出上限的条目不进模型上下文，并向模型标注丢了什么（不误把部分当全量）
-        const results: { n: number; file: string; heading: string; content: string }[] = []
+        const results: { n: string; file: string; heading: string; content: string }[] = []
         const dropped: string[] = []
         let used = 0
         for (const s of display) {

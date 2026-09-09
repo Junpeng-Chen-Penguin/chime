@@ -102,6 +102,7 @@ import {
   expandUserMessage,
   saveAssistantTurn,
   loadHistoryMessages,
+  loadSessionPool,
   markConvActive,
   unmarkConvActive,
   type TurnItem,
@@ -371,6 +372,7 @@ async function streamCore(core: {
   // 轮内状态：检索计数与来源池（连续编号）；limitHit = 触接口级禁止（触边界强制作答）
   const toolCtx: TurnToolContext = {
     pool: [],
+    poolByCall: new Map(),
     searches: 0,
     kbIds: kbEnv?.libraries.map((l) => l.id) ?? [],
     kbNames: new Map(kbEnv?.libraries.map((l) => [l.id, l.name]) ?? [])
@@ -1008,6 +1010,9 @@ async function streamCore(core: {
             delete item.ask
           // 超限结果：item 存摘要（全量在结果库），resultRef 指向结果编号
           item.result = lateSummaries.get(part.toolCallId) ?? part.output
+          // 检索的完整来源条目随 item 落库（018 Case 7）：来源清单按整个会话查编号
+          const pool = toolCtx.poolByCall.get(part.toolCallId)
+          if (pool?.length) item.pool = pool
           const userText = userTexts.get(part.toolCallId)
           if (userText) item.userText = userText // 给用户的失败说明（016 六节）
           const ref = overflow.refs.get(part.toolCallId)
@@ -1025,16 +1030,24 @@ async function streamCore(core: {
       }
     }
 
-    // 来源结算（B 路线）：流式结束后扫描回答的 [n] 反查结果池；无 [n] 则无来源区
+    // 来源结算：流式结束后扫描回答里的资料编号 [a3f2-1]，在整个会话的来源池里反查（018 Case 7：
+    // 追问时引用前几轮的资料也能列出来源）；找不到的编号正文照原样显示、清单里不列；无编号则无来源区
     const answer = [...items]
       .reverse()
       .find((i): i is { t: 'text'; text: string } => i.t === 'text')
-    if (answer && toolCtx.pool.length) {
-      const cited = [...new Set([...answer.text.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])))]
-      const list = toolCtx.pool.filter((s) => cited.includes(s.n))
-      if (list.length) {
-        startItem('sources', { t: 'sources', list })
-        endItem()
+    if (answer) {
+      const cited = new Set([...answer.text.matchAll(/\[([0-9a-f]{4}-\d+)\]/g)].map((m) => m[1]))
+      if (cited.size) {
+        const seen = new Set<string>()
+        const list = [...toolCtx.pool, ...loadSessionPool(convId)].filter((s) => {
+          if (!cited.has(s.n) || seen.has(s.n)) return false
+          seen.add(s.n)
+          return true
+        })
+        if (list.length) {
+          startItem('sources', { t: 'sources', list })
+          endItem()
+        }
       }
     }
 

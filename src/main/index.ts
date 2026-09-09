@@ -1108,7 +1108,13 @@ app.whenReady().then(() => {
           Array.isArray(JSON.parse(stopRow?.items ?? ''))
 
         // 闸门（工具级计数）：第 4 次检索请求应被拒绝、不执行
-        const ctx = { pool: [], searches: 0, kbIds: [1], kbNames: new Map([[1, '测试库']]) }
+        const ctx = {
+          pool: [],
+          poolByCall: new Map(),
+          searches: 0,
+          kbIds: [1],
+          kbNames: new Map([[1, '测试库']])
+        }
         const st = makeSearchTool(ctx)
         const call = st.execute as unknown as (
           i: { query: string },

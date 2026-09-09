@@ -14,7 +14,7 @@ export interface DetectResult {
 }
 
 export interface SourceRef {
-  n: number
+  n: string // 资料编号「四位随机前缀-序号」（018 Case 7）；改动前的会话里是数字
   chunkId: number
   kbId: number
   kbName: string
