@@ -1029,6 +1029,36 @@ export function setMcpFingerprint(id: number, fingerprint: string): void {
   db.prepare('UPDATE mcp_service SET tools_fingerprint = ? WHERE id = ?').run(fingerprint, id)
 }
 
+// 上次拉到的工具清单（018 五节）：连不上的服务，本会话的查询表从这里取工具定义
+export function setMcpToolsJson(id: number, json: string): void {
+  db.prepare('UPDATE mcp_service SET tools_json = ? WHERE id = ?').run(json, id)
+}
+
+export function getMcpToolsJson(id: number): string | null {
+  const r = db.prepare('SELECT tools_json AS j FROM mcp_service WHERE id = ?').get(id) as
+    | { j: string | null }
+    | undefined
+  return r?.j ?? null
+}
+
+// 本会话的延迟工具查询表（018 五节）：JSON 数组，只增不减
+export function getConversationDeferredTools<T>(id: string): T[] {
+  const r = db.prepare('SELECT deferred_tools AS d FROM conversation WHERE id = ?').get(id) as
+    | { d: string | null }
+    | undefined
+  if (!r?.d) return []
+  try {
+    const v = JSON.parse(r.d)
+    return Array.isArray(v) ? (v as T[]) : []
+  } catch {
+    return []
+  }
+}
+
+export function setConversationDeferredTools(id: string, table: unknown[]): void {
+  db.prepare('UPDATE conversation SET deferred_tools = ? WHERE id = ?').run(JSON.stringify(table), id)
+}
+
 // 清单变更：自动关信任、置提示标识，并把新指纹记为基线（否则每次重连都重复告警）
 export function markMcpToolsChanged(id: number, fingerprint: string): void {
   db.prepare('UPDATE mcp_service SET trusted = 0, tools_fingerprint = ?, tools_changed = 1 WHERE id = ?').run(

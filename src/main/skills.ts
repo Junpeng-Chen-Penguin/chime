@@ -186,19 +186,19 @@ export function makeActivateSkillTool(opts: {
     })
   return tool({
     description: ACTIVATE_TOOL_DESCRIPTION,
+    // 不带 enum（018 Case 6）：枚举随本会话的技能范围变，整份工具清单跟着变、缓存前缀作废；范围校验在 execute 里
     inputSchema: jsonSchema<{ name: string }>({
       type: 'object',
-      properties: {
-        name: { type: 'string', enum: names, description: '技能名，须在「可用技能」清单中' }
-      },
+      properties: { name: { type: 'string', description: '技能名，须在可用技能清单中' } },
       required: ['name']
     }),
     execute: async (args) => {
       const name = (args as { name?: unknown } | null)?.name
-      // schema 里的 enum 只是给模型看的声明，SDK 不做运行时拦截（提问卡 minItems 先例）——显式校验
       if (typeof name !== 'string' || !names.includes(name))
         return {
-          error: `技能「${typeof name === 'string' ? name : ''}」不在本轮可激活的范围内（可激活：${names.join('、')}）。不要虚构技能内容；没有匹配的技能就按你默认的方式处理`
+          error: names.length
+            ? `技能「${typeof name === 'string' ? name : ''}」不在本会话可激活的范围内（可激活：${names.join('、')}）。不要虚构技能内容；没有匹配的技能就按你默认的方式处理`
+            : '本会话没有可激活的技能。不要虚构技能内容，按你默认的方式处理'
         }
       if (activated.has(name) || inHistory(name))
         return `技能「${name}」已激活，完整正文已在上下文中，直接按正文行事，不必重复激活`

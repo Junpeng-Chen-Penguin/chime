@@ -60,7 +60,6 @@ import {
 } from './budget'
 import {
   makeSearchTool,
-  makeMcpTools,
   makeAskTool,
   makeGrepResultTool,
   makeReadResultTool,
@@ -75,7 +74,15 @@ import {
 } from './tools'
 import { makeFsTools, type FsCard } from './fs-tools'
 import { listSkills, makeActivateSkillTool, ACTIVATE_TOOL_NAME } from '../skills'
-import { sessionFullResultChars, applyTotalGate, type OverflowCtx } from './overflow'
+import { sessionFullResultChars, applyTotalGate, NON_DATA_TOOLS, type OverflowCtx } from './overflow'
+import {
+  ensureDeferredTable,
+  makeToolSearchTool,
+  makeToolInvokeTool,
+  bareName,
+  TOOL_SEARCH_NAME,
+  TOOL_INVOKE_NAME
+} from './deferred'
 import {
   CardQueue,
   INTERRUPT_NOT_STARTED,
@@ -452,6 +459,8 @@ async function streamCore(core: {
 
   // 制品：成功的生成调用不出工具步骤行，tool-result 时把该 item 换成制品卡（成果即过程）
   const artifacts = new Map<string, { id: number; title: string; rowCount: number }>()
+  // 转接调用的目标工具名（018 五节）：toolCallId → mcp__<id>__<name>，总量闸落库时用它记 tool_name
+  const invokeNames = new Map<string, string>()
 
   // 工具组装：内置（询问用户、查结果集、生成制品常备，挂库时含检索）+ 缓存中已启用服务的 MCP 工具全量注册（只读缓存，不现场请求服务）。
   // 服务范围 = 会话自加的 ∪ Agent 挂的（Agent 的服务已删/停用时不在缓存里，自然跳过——Case 5 降级）
@@ -534,31 +543,54 @@ async function streamCore(core: {
     }
   }
 
-  const mcp = makeMcpTools(controller.signal, cards, overflow, mcpSelection)
-  const turnTools: Record<string, Tool> = { ...mcp.tools }
+  // 工具清单（018 Case 2）：十二个内置工具无条件挂载、顺序固定，tools 数组在所有会话完全一致。
+  // MCP 工具不进清单：定义存进本会话的查询表，模型用 tool_search 找回、tool_invoke 转接调用。
+  // history 在下方组装后才赋值，激活工具经 getHistory 延迟取（执行必在流式循环内，晚于赋值）
+  let history: ModelMessage[] = []
+  const deferred = ensureDeferredTable(convId, mcpSelection)
+  const keyOf = (fullName: string): string =>
+    deferred.find((e) => e.fullName === fullName)?.key ?? bareName(fullName)
+  // 转接调用要弹授权卡时先把调用行置 pending（渲染层靠它弹卡、禁用输入框）；行还没建时记下来，建行时补
+  const invokePending = new Set<string>()
+  const onInvokeAuth = (toolCallId: string): void => {
+    invokePending.add(toolCallId)
+    const idx = toolItemIndex.get(toolCallId)
+    if (idx === undefined) return
+    const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
+    if (item.auth) return
+    item.auth = 'pending'
+    persistWaiting()
+    emit({ type: 'item-update', streamId, index: idx, item })
+  }
+  const turnTools: Record<string, Tool> = {}
   turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
   turnTools[GREP_TOOL_NAME] = makeGrepResultTool(convId)
   turnTools[READ_TOOL_NAME] = makeReadResultTool(convId)
   turnTools[ARTIFACT_TOOL_NAME] = makeArtifactTool(convId, (toolCallId, info) =>
     artifacts.set(toolCallId, info)
   )
-  // 文件工具（015 C2 读/列；C3 加写/编辑）：无条件挂载，白名单校验在 execute 内
+  // 文件工具（015 C2 读/列；C3 加写/编辑）：白名单校验在 execute 内
   Object.assign(
     turnTools,
     makeFsTools({ convId, signal: controller.signal, cards, overflow, onFsCard })
   )
-  // 技能：可激活范围 = 本会话的技能范围（会话开始定格、点名清单外的技能时追加，018 Case 6）∪ 本轮点名。
-  // 非空才注册激活工具（模块 5 改为无条件挂载）。
-  // history 在下方组装后才赋值，激活工具经 getHistory 延迟取（执行必在流式循环内，晚于赋值）
-  let history: ModelMessage[] = []
+  // 检索：没关联知识库时 execute 返回一句说明
+  turnTools.search_knowledge_base = makeSearchTool(toolCtx)
+  // 技能：可激活范围 = 本会话的技能范围（会话开始定格、点名清单外的技能时追加，018 Case 6）∪ 本轮点名，
+  // 范围为空时 execute 返回说明
   const activeSkillNames = [...new Set([...scope, ...(slashName ? [slashName] : [])])]
-  if (activeSkillNames.length)
-    turnTools[ACTIVATE_TOOL_NAME] = makeActivateSkillTool({
-      names: activeSkillNames,
-      getHistory: () => history
-    })
-  if (kbEnv) turnTools.search_knowledge_base = makeSearchTool(toolCtx)
-  // 已启用但连不上的服务：工具静默不挂载，不进对话流提醒（07-13 修订——状态常驻输入框标识，与主流一致）
+  turnTools[ACTIVATE_TOOL_NAME] = makeActivateSkillTool({
+    names: activeSkillNames,
+    getHistory: () => history
+  })
+  turnTools[TOOL_SEARCH_NAME] = makeToolSearchTool(deferred)
+  turnTools[TOOL_INVOKE_NAME] = makeToolInvokeTool({
+    table: deferred,
+    signal: controller.signal,
+    cards,
+    overflow,
+    onAuthPending: onInvokeAuth
+  })
 
   // 两份文案的旁路（016 六节）：工具错误结果里的 userText 是给用户看的那句，
   // 在进 SDK 之前剥下来存这里——execute 返回值会原样发给模型，userText 不进模型。
@@ -592,9 +624,8 @@ async function streamCore(core: {
   // 工具清单改动前不进估算，它占单次请求的四成上下
   const line = triggerLine(model)
   const toolsTok = applyRatio(model, toolsTokens(turnTools))
-  // 历史加载放在 turnTools 组装之后（014 Case 5）：把本轮实际挂载的工具名传进去，
-  // 已消失的工具在历史返回里标「已不可用」——模型会把历史当成当前能力的依据（实测）
-  const bundle = loadHistoryMessages(convId, new Set(Object.keys(turnTools)))
+  // 历史里的 MCP 调用按查询表里的名字还原成 tool_invoke 转接（018 五节）
+  const bundle = loadHistoryMessages(convId, keyOf)
   history = bundle.messages
   const sizeOf = (m: ModelMessage): number =>
     estimateTokens(model, typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
@@ -614,9 +645,8 @@ async function streamCore(core: {
   // 被清内容幂等入库（同一调用复用编号），模型凭编号随时查回，不必重调外部接口。
   const RELIEF_KEEP_RECENT = 5
   const RELIEF_MIN_SAVE_TOKENS = 20_000
-  const RELIEF_SKIP = new Set(['search_knowledge_base', ASK_TOOL_NAME, ACTIVATE_TOOL_NAME])
   if (estimate() >= line) {
-    const candidates = bundle.toolOutputs.filter((c) => !RELIEF_SKIP.has(c.toolName))
+    const candidates = bundle.toolOutputs.filter((c) => !NON_DATA_TOOLS.has(c.toolName))
     const clearable = candidates.slice(0, Math.max(0, candidates.length - RELIEF_KEEP_RECENT))
     const partOf = (c: (typeof clearable)[number]): { output: { value: string } } | null => {
       const msg = history[c.msgIdx] as unknown as { content?: { output?: { value?: unknown } }[] }
@@ -764,15 +794,13 @@ async function streamCore(core: {
             .filter(
               (tr) =>
                 typeof tr.output === 'string' &&
-                tr.toolName !== GREP_TOOL_NAME &&
-                tr.toolName !== READ_TOOL_NAME && // 豁免：取数工具取回的片段不再落库
-                tr.toolName !== ASK_TOOL_NAME && // 用户的回答不是外部数据
-                tr.toolName !== ACTIVATE_TOOL_NAME && // 技能正文是指令不是外部数据，与 ask 同理
+                !NON_DATA_TOOLS.has(tr.toolName) && // 非数据工具的返回不落库（018 五节）
                 !overflow.refs.has(tr.toolCallId) // 单结果闸已处理的不重复
             )
             .map((tr) => ({
               toolCallId: tr.toolCallId,
-              toolName: tr.toolName,
+              // 转接调用落库时记真正的 MCP 工具名，结果清单的展示名靠它查（018 五节）
+              toolName: invokeNames.get(tr.toolCallId) ?? tr.toolName,
               text: tr.output as string
             }))
           if (batch.length) {
@@ -863,17 +891,19 @@ async function streamCore(core: {
           break
         case 'tool-input-start': {
           // 016 Case 6：参数开始生成就出调用行，不等参数齐。初始化只依赖 toolName，全在这里做；
-          // 需授权/提问的调用初始为 pending（排队/弹卡由渲染层从 items 推导）
-          const meta = mcp.meta.get(part.toolName)
+          // 需授权/提问的调用初始为 pending（排队/弹卡由渲染层从 items 推导）。
+          // 转接调用（018 五节）此时还不知道目标工具，先按 tool_invoke 建行，tool-call 时改写
           const isAsk = part.toolName === ASK_TOOL_NAME
           const fsEarly = earlyFsCard.get(part.id) // 文件工具的申请授权卡先于本事件挂载时
           startItem('tool', {
             t: 'tool',
             name: part.toolName,
             id: part.id, // 与后续 tool-call 的 toolCallId 同值
-            display: builtinDisplay(part.toolName) ?? meta?.display,
-            desc: meta?.needsAuth ? meta.desc : undefined,
-            auth: meta?.needsAuth || fsEarly ? (earlyAuth.get(part.id) ?? 'pending') : undefined,
+            display: builtinDisplay(part.toolName),
+            auth:
+              invokePending.has(part.id) || fsEarly
+                ? (earlyAuth.get(part.id) ?? 'pending')
+                : undefined,
             fsCard: fsEarly,
             ask: isAsk ? (earlyAsk.get(part.id) ?? { state: 'pending' }) : undefined,
             inputStreaming: true,
@@ -886,36 +916,57 @@ async function streamCore(core: {
         }
         case 'tool-call': {
           // 参数已齐。行在 tool-input-start 已建就补齐 args；没建过（SDK 修复调用等路径
-          // 单发 tool-call）就整行新建，兜底与旧行为一致
-          const meta = mcp.meta.get(part.toolName)
+          // 单发 tool-call）就整行新建，兜底与旧行为一致。
+          // 转接调用（018 五节）：input.name 在查询表里就把这一行改写成目标工具——name 记 mcp__<id>__<name>、
+          // args 记真正的参数、display 用工具的展示名。item-done 带出的名字与改动前一致，Tuner 断言与渲染层都不用改
           const isAsk = part.toolName === ASK_TOOL_NAME
           const fsEarly = earlyFsCard.get(part.toolCallId)
+          const rawInput = (part.input ?? {}) as Record<string, unknown>
+          const entry =
+            part.toolName === TOOL_INVOKE_NAME
+              ? deferred.find((e) => e.key === rawInput.name)
+              : undefined
+          const shown = entry
+            ? {
+                name: entry.fullName,
+                args: (rawInput.arguments && typeof rawInput.arguments === 'object'
+                  ? rawInput.arguments
+                  : {}) as Record<string, unknown>,
+                display: entry.title || `${entry.serviceName}:${bareName(entry.fullName)}`,
+                desc: entry.description
+              }
+            : { name: part.toolName, args: rawInput, display: builtinDisplay(part.toolName), desc: undefined }
+          if (entry) invokeNames.set(part.toolCallId, entry.fullName)
           const existing = toolItemIndex.get(part.toolCallId)
           if (existing !== undefined && items[existing]?.t === 'tool') {
             const it = items[existing] as Extract<TurnItem, { t: 'tool' }>
             delete it.inputStreaming
-            it.args = (part.input ?? {}) as Record<string, unknown>
+            it.name = shown.name
+            it.args = shown.args
+            it.display = shown.display
+            if (shown.desc) it.desc = shown.desc
             // 参数期间可能有 early* 补挂到来，取最新
             if (fsEarly) it.fsCard = fsEarly
             const lateAuth = earlyAuth.get(part.toolCallId)
             if (lateAuth) it.auth = lateAuth
+            else if (invokePending.has(part.toolCallId) && !it.auth) it.auth = 'pending'
             const lateAsk = earlyAsk.get(part.toolCallId)
             if (lateAsk) it.ask = lateAsk
             emit({ type: 'item-update', streamId, index: existing, item: it })
           } else {
             startItem('tool', {
               t: 'tool',
-              name: part.toolName,
+              name: shown.name,
               id: part.toolCallId,
-              display: builtinDisplay(part.toolName) ?? meta?.display,
-              desc: meta?.needsAuth ? meta.desc : undefined,
+              display: shown.display,
+              desc: shown.desc,
               auth:
-                meta?.needsAuth || fsEarly
+                invokePending.has(part.toolCallId) || fsEarly
                   ? (earlyAuth.get(part.toolCallId) ?? 'pending')
                   : undefined,
               fsCard: fsEarly,
               ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
-              args: (part.input ?? {}) as Record<string, unknown>
+              args: shown.args
             })
             toolItemIndex.set(part.toolCallId, cur)
           }

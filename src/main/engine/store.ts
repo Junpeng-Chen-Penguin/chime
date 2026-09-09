@@ -233,10 +233,13 @@ export interface HistoryBundle {
   dialogStart: number // 会话引导行与压缩重建行之后第一条正文消息的下标：三级丢弃从这里起
 }
 
-// currentTools（014 Case 5）：本轮实际挂载的工具名集合。传入时，历史里不在集合内的工具返回
-// 会被标注「已不可用」——实测（2026-08-11）模型会把历史调用记录当成当前能力清单，向用户报错误的能力。
-// 缺省 undefined = 不标注（overflow 自测等旁路调用）
-export function loadHistoryMessages(convId: string, currentTools?: Set<string>): HistoryBundle {
+// keyOf（018 五节）：MCP 工具的模型可见名 mcp__<id>__<name> → 本会话查询表里的名字。
+// 历史里的 MCP 调用一律还原成 tool_invoke 转接（MCP 工具不在 tools 数组里，直调形态模型无法复用），
+// 改动前会话里的直调记录也一并成了合法的转接调用。缺省按去掉前缀的原名
+export function loadHistoryMessages(
+  convId: string,
+  keyOf: (fullName: string) => string = (n) => n.replace(/^mcp__\d+__/, '')
+): HistoryBundle {
   const db = getDb()
   // 二级压缩之后（018 七节）：从最近一次重建的第一行起重建历史，之前的消息不再进模型上下文。
   // 同毫秒写入的行按插入顺序排
@@ -336,18 +339,20 @@ export function loadHistoryMessages(convId: string, currentTools?: Set<string>):
         })
       } else if (it.t === 'tool') {
         const callId = it.id ?? `hist_${++fallbackId}`
-        const value = historyToolOutput(it, currentTools)
+        const value = historyToolOutput(it)
+        const viaInvoke = /^mcp__\d+__/.test(it.name)
+        const toolName = viaInvoke ? 'tool_invoke' : it.name
         asst.push({
           type: 'tool-call',
           toolCallId: callId,
-          toolName: it.name,
-          input: it.args ?? {}
+          toolName,
+          input: viaInvoke ? { name: keyOf(it.name), arguments: it.args ?? {} } : (it.args ?? {})
         })
         results.push({
           part: {
             type: 'tool-result',
             toolCallId: callId,
-            toolName: it.name,
+            toolName,
             output: { type: 'text', value }
           },
           meta: {
@@ -395,29 +400,12 @@ function expandRefs(items: TurnItem[], text: string): string {
   return `${REF_DECLARE}\n\n${blocks.join('\n\n')}${text.trim() ? `\n\n${text}` : ''}`
 }
 
-// 工具返回进历史的文本形态：字符串原样（含超限摘要）；对象结构原样序列化（当轮模型看到的就是它）；
-// 知识库检索定点转换为命中文档名。
-// 定点转换跟随当前能力（014 Case 5）：检索工具已不在清单时，不能再让历史文本指示模型「重新检索」——
-// 那是让它做一件做不到的事；其他已消失的工具在返回末尾附一句不可用声明
-function historyToolOutput(
-  it: Extract<TurnItem, { t: 'tool' }>,
-  currentTools?: Set<string>
-): string {
-  const gone = currentTools !== undefined && !currentTools.has(it.name)
+// 工具返回进历史的文本形态（018 起原样）：字符串原样（含超限摘要）；对象结构原样序列化（当轮模型看到的就是它）。
+// 改动前的两处改写都删了：检索返回换成命中文档名（Case 7：资料留在对话里，要不要重查由模型判断），
+// 与「该工具已不可用」标注（Case 2：内置工具全部常驻、MCP 工具在查询表里只增不减，没有工具会从可用变不可用）
+function historyToolOutput(it: Extract<TurnItem, { t: 'tool' }>): string {
   const r = it.result
-  if (it.name === 'search_knowledge_base' && r && typeof r === 'object' && 'results' in r) {
-    const files = [
-      ...new Set(((r as { results?: { file: string }[] }).results ?? []).map((s) => s.file))
-    ]
-    if (!files.length) return '未命中'
-    const hit = `检索命中${files.map((f) => `《${f}》`).join('')}`
-    return gone
-      ? `${hit}。本会话已不再挂知识库`
-      : `${hit}。片段原文不跨轮保留（资料会更新），追问业务问题时本轮重新检索后作答`
-  }
-  const base =
-    typeof r === 'string' ? r : r === undefined ? '（本次调用未产生结果）' : JSON.stringify(r)
-  return gone ? `${base}\n（该工具在本会话已不可用）` : base
+  return typeof r === 'string' ? r : r === undefined ? '（本次调用未产生结果）' : JSON.stringify(r)
 }
 
 // ── 等待与启动修复（弹卡即落库的配套）────────────────────────

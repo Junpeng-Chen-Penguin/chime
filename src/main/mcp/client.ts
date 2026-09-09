@@ -12,7 +12,13 @@ import {
   ListRootsRequestSchema
 } from '@modelcontextprotocol/sdk/types.js'
 import { createHash } from 'crypto'
-import { listMcpServices, markMcpToolsChanged, setMcpFingerprint, type McpServiceRow } from '../db'
+import {
+  listMcpServices,
+  markMcpToolsChanged,
+  setMcpFingerprint,
+  setMcpToolsJson,
+  type McpServiceRow
+} from '../db'
 
 // roots 支持（015 T1，协议标准能力）：服务端可反查「当前会话授权了哪些目录」（Tuner 校验工具
 // 靠它划边界，对所有 MCP 服务通用）。清单取自当前活跃轮次的会话 ws_list——orchestrator 在轮次
@@ -116,6 +122,8 @@ async function refreshTools(st: ServiceState): Promise<void> {
     outputSchema: t.outputSchema as Record<string, unknown> | undefined,
     annotations: t.annotations as Record<string, unknown> | undefined
   }))
+  // 存一份（018 五节）：会话开始时服务连不上，查询表从这份里取工具定义
+  setMcpToolsJson(st.config.id, JSON.stringify(st.tools))
 }
 
 type FingerprintInput = {

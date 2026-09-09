@@ -67,6 +67,18 @@ export function guardSingle(
   return overflowSummary(id, content)
 }
 
+// 非数据工具（018 五节）：返回不是外部数据，一级清除不清、总量闸不落库。
+// 反问用户的回答体积小且是关键上下文；技能正文是行事指令；查结果与读结果取回的片段本来就不存进结果库；
+// 查找工具返回的是工具定义，换成结果编号后模型无法调用那个工具。检索返回不在名单里，与其他业务数据一视同仁
+export const NON_DATA_TOOLS = new Set([
+  'ask_user_question',
+  'activate_skill',
+  'grep_result',
+  'read_result',
+  'fetch_tool_result', // 历史轮的旧取数工具名
+  'tool_search'
+])
+
 // 会话基线：历史里已全文交给模型的结果字数合计（打开会话/新轮开始时从 items 重建）
 export function sessionFullResultChars(convId: string): number {
   const rows = getDb()
@@ -77,7 +89,7 @@ export function sessionFullResultChars(convId: string): number {
     try {
       for (const it of JSON.parse(r.items) as { t: string; name?: string; result?: unknown; resultRef?: number }[]) {
         if (it.t !== 'tool' || it.resultRef || typeof it.result !== 'string') continue
-        if (it.name === 'fetch_tool_result' || it.name === 'grep_result' || it.name === 'read_result') continue // 豁免：取数工具取回的片段不计（fetch_tool_result 为历史轮的旧工具名）
+        if (it.name && NON_DATA_TOOLS.has(it.name)) continue // 非数据工具的返回不计
         sum += it.result.length
       }
     } catch {

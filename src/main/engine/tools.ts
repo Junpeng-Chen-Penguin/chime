@@ -5,28 +5,13 @@
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { tool, jsonSchema } from 'ai'
-import type { Tool } from 'ai'
 import { listKbs } from '../db'
 import { estimateTokens } from '../../shared/chunker'
 import { retrieve } from '../retrieve'
-import { callMcpTool, getMcpToolList } from '../mcp/client'
+import { callMcpTool } from '../mcp/client'
 import { SEARCH_TOOL_DESCRIPTION } from './prompts'
-import {
-  AUTH_DENIED,
-  INTERRUPT_NOT_STARTED,
-  ASK_INTERRUPTED,
-  type CardQueue,
-  type AskQuestion
-} from './cards'
-import {
-  guardSingle,
-  grepResult,
-  readResult,
-  FETCH_LIMIT,
-  GREP_HEAD_LIMIT,
-  READ_LINES_DEFAULT,
-  type OverflowCtx
-} from './overflow'
+import { ASK_INTERRUPTED, type CardQueue, type AskQuestion } from './cards'
+import { grepResult, readResult, FETCH_LIMIT, GREP_HEAD_LIMIT, READ_LINES_DEFAULT } from './overflow'
 import { createArtifact, type ArtifactRef } from './artifact'
 import type { SourceSnapshot } from './store'
 
@@ -49,57 +34,8 @@ export interface TurnToolContext {
   kbNames: Map<number, string> // 库 id → 名称（来源快照用）
 }
 
-// 注册表元信息（统一工具格式的落点）：展示名、用途（服务自带描述）、需要授权
-export interface ToolMeta {
-  display: string
-  desc: string
-  needsAuth: boolean
-}
-
-// MCP 工具动态注册：模型可见名 mcp__服务id__工具名（重名天然隔离），展示名 title 优先、
-// 未声明的维持「服务名:工具名」（011 Case 4：内置工具本有中文名，MCP 工具经 title 享受同一待遇）。
-// 结果原样交回：成功为纯文本（存储不归一），失败为 { error }（模型据此重试、换路或说明），
-// 拒绝授权为 { denied }、停止未执行为 { interrupted }（历史映射原样保留文案）。
-// 分级授权（011 Case 4）：默认一律过卡片队列；服务开了「信任只读声明」且工具声明 readOnlyHint
-// 为真的直接执行（协议默认非只读，未声明按写操作弹卡）。成功结果过单结果闸（超限落库换摘要）。
-export function makeMcpTools(
-  signal: AbortSignal,
-  cards: CardQueue,
-  overflow: OverflowCtx,
-  allowed: Set<number> // 本会话选用的服务 id（Case 8）：未选用的服务工具不进清单
-): {
-  tools: Record<string, Tool>
-  meta: Map<string, ToolMeta> // 模型可见名 → 元信息（display/desc 随 tool item 落库，渲染层不反查）
-} {
-  const tools: Record<string, Tool> = {}
-  const meta = new Map<string, ToolMeta>()
-  for (const t of getMcpToolList()) {
-    if (!allowed.has(t.serviceId)) continue
-    const name = `mcp__${t.serviceId}__${t.name}`
-    const title = t.title || (typeof t.annotations?.title === 'string' ? t.annotations.title : '')
-    const needsAuth = !(t.serviceTrusted && t.annotations?.readOnlyHint === true)
-    meta.set(name, {
-      display: title || `${t.serviceName}:${t.name}`,
-      desc: t.description,
-      needsAuth
-    })
-    tools[name] = tool({
-      description: t.description,
-      inputSchema: jsonSchema(t.inputSchema as Parameters<typeof jsonSchema>[0]),
-      execute: async (args, { toolCallId }) => {
-        if (needsAuth) {
-          const decision = await cards.request(toolCallId, signal, t.name)
-          if (decision === 'denied') return { denied: AUTH_DENIED }
-          if (decision === 'aborted') return { interrupted: INTERRUPT_NOT_STARTED }
-        }
-        const r = await execMcpTool(name, (args ?? {}) as Record<string, unknown>, signal)
-        if ('error' in r) return r
-        return guardSingle(overflow, toolCallId, name, r.text, r.structured)
-      }
-    })
-  }
-  return { tools, meta }
-}
+// MCP 工具不再在这里注册（018 五节）：定义存进本会话的查询表，模型用 tool_search 找回、tool_invoke 转接调用，
+// 见 deferred.ts。模型可见名仍是 mcp__服务id__工具名（落库与 Tuner 断言用），执行走下面的 execMcpTool
 
 // 取数内置工具（07-13 二次修订）：拆为 grep_result / read_result 两个，形态照搬模型语料里的 Grep/Read——
 // 单工具 mode 切换是语料外结构，模型用不地道。免授权（只读本地已存数据）、超限豁免（取回的片段不再落库）。
@@ -276,7 +212,7 @@ export function makeAskTool(signal: AbortSignal, cards: CardQueue) {
 }
 
 // 按模型可见名执行 MCP 调用：成功为文本 + 可选结构化数据（服务带 structuredContent 时），失败 { error }
-async function execMcpTool(
+export async function execMcpTool(
   name: string,
   args: Record<string, unknown>,
   signal: AbortSignal
@@ -371,6 +307,8 @@ export function makeSearchTool(ctx: TurnToolContext) {
       required: ['query']
     }),
     execute: async ({ query }) => {
+      // 无条件挂载（018 五节）：没关联知识库的会话返回一句说明，不返回空结果
+      if (!ctx.kbIds.length) return { notice: '本会话没有关联知识库' }
       // 入参校验：模型偶发空参数调用，空检索词不进链路、不耗次数，回一条它能自我纠正的说明
       if (typeof query !== 'string' || !query.trim()) {
         return {

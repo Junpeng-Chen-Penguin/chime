@@ -80,6 +80,20 @@ export const BUILTIN_TOOLS: BuiltinToolEntry[] = [
     desc: '当前任务匹配某个技能时，取得该技能的完整做法说明并照着执行',
     verbDoing: '激活中',
     verbDone: '激活技能'
+  },
+  {
+    name: 'tool_search',
+    display: '查找工具',
+    desc: '按你要做的事，在接入的服务里找到能用的工具',
+    verbDoing: '查找中',
+    verbDone: '查找工具'
+  },
+  {
+    name: 'tool_invoke',
+    display: '转接调用',
+    desc: '调用查找到的服务工具，调用行显示成该工具本身的名字',
+    verbDoing: '调用中',
+    verbDone: '调用'
   }
 ]
 
