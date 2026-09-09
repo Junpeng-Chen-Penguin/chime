@@ -85,8 +85,14 @@ export type TurnItem =
   | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] } // 表格行引用（013，user 消息专用）
   | { t: 'skillref'; name: string; desc: string } // 斜杠点名 chip（015 Case 6，user 消息专用）
   | { t: 'mcpref'; name: string } // 斜杠点名 MCP 服务（018 Case 5，user 消息专用）：只存名字快照
+  | { t: 'cmdref'; name: string } // 斜杠面板的内置命令（018 Case 9 手动压缩，user 消息专用）
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
-  | { t: 'compaction'; savedTokens?: number; reason?: string } // 压缩分界线（016 Case 11）
+  | {
+      t: 'compaction' // 压缩的调用行（018 Case 9）：outcome 空 = 进行中
+      outcome?: 'ok' | 'ok_dropped' | 'failed' | 'disabled' | 'manual_failed' | 'aborted'
+      savedTokens?: number
+      reason?: string
+    }
 
 export type ChatEvent =
   | { type: 'turn-start'; streamId: string }
@@ -94,7 +100,6 @@ export type ChatEvent =
   | { type: 'item-delta'; streamId: string; index: number; text: string }
   | { type: 'item-done'; streamId: string; index: number; item: TurnItem }
   | { type: 'item-update'; streamId: string; index: number; item: TurnItem }
-  | { type: 'compacting'; streamId: string; active: boolean } // 本轮开头的摘要请求进行中（018 Case 9）
   | {
       type: 'turn-done'
       streamId: string
@@ -301,18 +306,16 @@ export interface ChimeApi {
       | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }
       | { t: 'skillref'; name: string; desc: string }
       | { t: 'mcpref'; name: string }
+      | { t: 'cmdref'; name: string }
     )[]
     ws?: { picked: string[]; fromAgent: string[] }
     slashSkill?: string
     slashMcp?: number // 018 Case 5：本轮消息斜杠点名的 MCP 服务
     mcpPicked?: number[] // 018 Case 5：上次发送以来在面板里点过的服务
+    command?: 'compact' // 018 Case 9：斜杠面板的「压缩上下文」，这一轮只做压缩、不请模型回答
   }) => void
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
-  compactChat: (payload: {
-    convId: string
-    model: string
-  }) => Promise<{ ok: true } | { ok: false; error: string }> // 手动压缩上下文（018 Case 9）
   cardRespond: (payload: {
     streamId: string
     toolCallId: string

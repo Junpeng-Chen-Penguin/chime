@@ -25,7 +25,6 @@ import { coveredBy, wsName } from './engine/fs-tools'
 import { listSkills, getSkill, deleteSkill, importSkill } from './skills'
 import { detect, listModels, generateTitle, vendorHealth, markVendorHealth, humanize } from './ai'
 import { runTurn, stopTurn, REPAIR_TEXTS, type ChatEvent } from './engine/orchestrator'
-import { compactNow } from './engine/compact'
 import { respondCard, respondAskCard, type AskOutcome } from './engine/cards'
 import { lastUserText, deleteLastAssistant, repairConversation } from './engine/store'
 import {
@@ -181,6 +180,7 @@ export function registerIpc(): void {
         slashSkill?: string // 015 Case 6：本轮消息斜杠点名的技能
         slashMcp?: number // 018 Case 5：本轮消息斜杠点名的 MCP 服务
         mcpPicked?: number[] // 018 Case 5：上次发送以来在面板里点过的服务，并入会话选用清单
+        command?: 'compact' // 018 Case 9：斜杠面板的「压缩上下文」，这一轮只做压缩
       }
     ) => {
       const wc = e.sender
@@ -205,9 +205,6 @@ export function registerIpc(): void {
     stopTurn(streamId)
   })
   // 手动压缩上下文（018 Case 9 Feature 5）：立即跑一次摘要与重建，与自动压缩同一流程；不经过 runTurn
-  ipcMain.handle('chat:compact', (_e, payload: { convId: string; model: string }) =>
-    compactNow(payload.convId, payload.model)
-  )
   // 授权卡回应：路由到该轮的卡片队列（只认队首，过期回应静默忽略）
   ipcMain.on(
     'chat:card-response',

@@ -66,11 +66,20 @@ export type TurnItem =
   | { t: 'skillref'; name: string; desc: string }
   // 斜杠点名 MCP 服务的渲染件（018 Case 5，用户消息专用）：只存发出时的服务名快照，不做悬停
   | { t: 'mcpref'; name: string }
+  | { t: 'cmdref'; name: string } // 斜杠面板的内置命令（018 Case 9 手动压缩）：正文开头「/压缩上下文」染主色
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
   // 压缩分界线（016 Case 11）：这一轮开头丢掉了最早的整轮对话，画在时间线上、随轮落库。
   // savedTokens 是裁剪前后各估算一次的差值；估不出就不带，渲染层只画线。
   // reason（018 七节）：走到整对丢弃的原因（摘要请求出错 / 返回里没有 summary 标签 / 连续失败已停用 / 重建后仍超线），验证记录引用
-  | { t: 'compaction'; savedTokens?: number; reason?: string }
+  // outcome 空 = 进行中（摘要请求在跑）。ok = 摘要成功；ok_dropped = 摘要成功但重建后仍超线、另丢弃了最早的对话；
+  // failed = 摘要出错或没返回摘要、已丢弃；disabled = 摘要连续失败停用、直接丢弃；manual_failed = 手动压缩摘要出错、对话未改动；
+  // aborted = 用户点了停止
+  | {
+      t: 'compaction'
+      outcome?: 'ok' | 'ok_dropped' | 'failed' | 'disabled' | 'manual_failed' | 'aborted'
+      savedTokens?: number
+      reason?: string
+    }
 
 // 016 起状态拆两字段：status 记走到哪一步，end_reason 记为什么不是正常完成。
 // running = 流式进行中（一轮开始即落库）；waiting = 等卡中；done = 已结束
@@ -132,21 +141,23 @@ export function isConvActive(convId: string): boolean {
 // 行数上限界面已拦，这里再兜一道底——数据层进来的永远不超（产品方案：单次 200 行）
 const REF_ROWS_MAX = 200
 
-export function saveUserMessage(convId: string, text: string, refs?: TurnItem[]): void {
+// kind：'compact' = 手动压缩那一轮的用户消息（界面显示、不进模型历史）
+export function saveUserMessage(convId: string, text: string, refs?: TurnItem[], kind?: string): void {
   const db = getDb()
   const now = Date.now()
   const clean = (refs ?? [])
     .filter(
-      (r): r is Extract<TurnItem, { t: 'ref' } | { t: 'skillref' } | { t: 'mcpref' }> =>
-        r.t === 'ref' || r.t === 'skillref' || r.t === 'mcpref'
+      (r): r is Extract<TurnItem, { t: 'ref' } | { t: 'skillref' } | { t: 'mcpref' } | { t: 'cmdref' }> =>
+        r.t === 'ref' || r.t === 'skillref' || r.t === 'mcpref' || r.t === 'cmdref'
     )
     .map((r) => (r.t === 'ref' ? { ...r, rowIndexes: r.rowIndexes.slice(0, REF_ROWS_MAX) } : r))
   db.prepare(
-    'INSERT INTO message (id, conversation_id, role, content, items, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO message (id, conversation_id, role, kind, content, items, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     randomUUID(),
     convId,
     'user',
+    kind ?? null,
     text,
     clean.length ? JSON.stringify(clean) : null,
     'done',
@@ -172,6 +183,7 @@ export function saveAssistantTurn(
     status: TurnPhase
     endReason?: EndReason
     usage?: TurnUsage
+    kind?: string // 'compact' = 手动压缩那一轮（界面显示、不进模型历史）
   }
 ): void {
   const db = getDb()
@@ -199,13 +211,14 @@ export function saveAssistantTurn(
     it.t === 'tool' && it.inputStreaming ? { ...it, inputStreaming: undefined } : it
   )
   db.prepare(
-    `INSERT INTO message (id, conversation_id, role, content, items, usage, status, end_reason, created_at)
-     VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?)
+    `INSERT INTO message (id, conversation_id, role, kind, content, items, usage, status, end_reason, created_at)
+     VALUES (?, ?, 'assistant', ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET content = excluded.content, items = excluded.items,
        usage = excluded.usage, status = excluded.status, end_reason = excluded.end_reason`
   ).run(
     msgId,
     convId,
+    turn.kind ?? null,
     turn.content,
     JSON.stringify(cleanItems),
     usageJson,
@@ -294,6 +307,8 @@ export function loadHistoryMessages(
   let fallbackId = 0 // 旧数据缺 toolCallId 时的稳定补位
 
   for (const r of rows) {
+    // 手动压缩那一轮（018 Case 9 Feature 5）：用户消息「/压缩上下文」与只有一条压缩行的回复只给界面看，不进模型历史
+    if (r.kind === 'compact') continue
     if (r.role === 'reminder') {
       // 提醒消息（018 四节）：user 角色原样发。会话开头连续的引导行与重建行之后才是正文
       reminders.push({ msgIdx: messages.length, kind: r.kind ?? '' })

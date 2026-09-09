@@ -67,7 +67,7 @@ import {
 import type { FsCard } from './fs-tools'
 import { listSkills } from '../skills'
 import { assembleTurnTools } from './toolset'
-import { compactIfNeeded } from './compact'
+import { compactIfNeeded, compactManually } from './compact'
 import { sessionFullResultChars, applyTotalGate, NON_DATA_TOOLS, type OverflowCtx } from './overflow'
 import { ensureDeferredTable, bareName, TOOL_INVOKE_NAME } from './deferred'
 import {
@@ -106,7 +106,6 @@ export type ChatEvent =
   | { type: 'item-delta'; streamId: string; index: number; text: string }
   | { type: 'item-done'; streamId: string; index: number; item: TurnItem }
   | { type: 'item-update'; streamId: string; index: number; item: TurnItem } // 状态流转（授权等），非终态
-  | { type: 'compacting'; streamId: string; active: boolean } // 二级压缩的摘要请求进行中（018 Case 9）：状态行文案换成「正在压缩上下文」
   | {
       type: 'turn-done'
       streamId: string
@@ -191,6 +190,9 @@ export async function runTurn(opts: {
   // 018 Case 5：本轮消息斜杠点名的 MCP 服务 id；mcpPicked 是上次发送以来在面板里点过的服务，并入会话选用清单
   slashMcp?: number
   mcpPicked?: number[]
+  // 018 Case 9 Feature 5：斜杠面板的「压缩上下文」。这一轮不请模型回答，只跑摘要与重建，
+  // 界面上与模型调了一次压缩工具一样：用户消息「/压缩上下文」+ 一条压缩调用行 + 状态行
+  command?: 'compact'
 }): Promise<void> {
   try {
     await runTurnBody(opts)
@@ -230,6 +232,11 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
     return
   }
 
+  if (opts.command === 'compact') {
+    await compactTurn({ streamId, convId, model, emit, msgId, text, refs: opts.refs })
+    return
+  }
+
   const agent = deriveAgent(convId)
   const kbEnv = deriveKbEnv(convId, agent)
   await streamCore({
@@ -248,6 +255,51 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
     refs: opts.refs,
     saveUser: opts.saveUser !== false
   })
+}
+
+// 压缩轮（018 Case 9 Feature 5）：用户消息与回复都标 kind = 'compact'，界面照常显示、不进模型历史。
+// 回复只有一条压缩调用行：进行中无 outcome；成功 ok 带省下的量；摘要出错 manual_failed、对话未改动；用户停止 aborted
+async function compactTurn(o: {
+  streamId: string
+  convId: string
+  model: string
+  emit: Emit
+  msgId: string
+  text: string
+  refs?: TurnItem[]
+}): Promise<void> {
+  const { streamId, convId, emit, msgId } = o
+  saveUserMessage(convId, o.text, o.refs, 'compact')
+  const item: Extract<TurnItem, { t: 'compaction' }> = { t: 'compaction' }
+  const items: TurnItem[] = [item]
+  saveAssistantTurn(convId, msgId, { content: '', items, status: 'running', kind: 'compact' })
+  emit({ type: 'item-start', streamId, index: 0, t: 'compaction', item })
+  const controller = new AbortController()
+  turns.set(streamId, controller)
+  try {
+    const r = await compactManually(convId, o.model, controller.signal)
+    if (r.ok) {
+      item.outcome = 'ok'
+      if (r.savedTokens) item.savedTokens = r.savedTokens
+    } else if (r.reason === 'aborted') item.outcome = 'aborted'
+    else {
+      item.outcome = 'manual_failed'
+      item.reason =
+        r.reason === 'no_system'
+          ? '会话还没有内容'
+          : r.reason === 'no_model'
+            ? '模型无法定位'
+            : r.reason === 'request'
+              ? '摘要请求出错'
+              : '摘要返回里没有 summary 标签'
+    }
+  } finally {
+    turns.delete(streamId)
+  }
+  emit({ type: 'item-done', streamId, index: 0, item })
+  const endReason: EndReason | undefined = item.outcome === 'aborted' ? 'stopped' : undefined
+  saveAssistantTurn(convId, msgId, { content: '', items, status: 'done', endReason, kind: 'compact' })
+  emit({ type: 'turn-done', streamId, endReason, status: endReason ?? 'done' })
 }
 
 // 流式核心：工具组装、卡片队列、streamText 循环、来源结算、落库收场
@@ -647,7 +699,7 @@ async function streamCore(core: {
   // 压缩三级（018 七节）：一级清旧的工具返回换成结果编号，二级请模型写摘要并重建，三级整对丢弃。
   // 逻辑在 compact.ts，这里只接结果：压缩后的历史、要不要画分界线、摘要请求被用户停止时按停止收场
   const outcome = await compactIfNeeded({
-    onSummarize: () => emit({ type: 'compacting', streamId, active: true }),
+    onLevel2: () => startItem('compaction', { t: 'compaction' }),
     convId,
     lm: provider(p.model),
     system,
@@ -663,7 +715,16 @@ async function streamCore(core: {
     deferred,
     retry: !core.saveUser
   })
-  emit({ type: 'compacting', streamId, active: false })
+  // 压缩调用行收尾（018 Case 9）：一级清完仍超线才有这一行；按走到哪一级填结果，渲染层据此换动词与描述
+  const compRow = items.find((i): i is Extract<TurnItem, { t: 'compaction' }> => i.t === 'compaction')
+  if (compRow) {
+    if (outcome.aborted) compRow.outcome = 'aborted'
+    else if (outcome.summarized) compRow.outcome = outcome.dropped ? 'ok_dropped' : 'ok'
+    else compRow.outcome = outcome.reason?.includes('停用') ? 'disabled' : 'failed'
+    if (outcome.savedTokens) compRow.savedTokens = outcome.savedTokens
+    if (outcome.reason) compRow.reason = outcome.reason
+    emit({ type: 'item-done', streamId, index: items.indexOf(compRow), item: compRow })
+  }
   const bundleBefore = bundle
   history = outcome.history
   bundle = outcome.bundle
@@ -693,16 +754,6 @@ async function streamCore(core: {
     // 摘要请求期间用户点了停止：用户消息照常落库（界面上已显示），本轮按停止收场，不计入摘要失败
     finish('stopped')
     return
-  }
-  if (outcome.dropped) {
-    // 压缩分界线（016 Case 11）：插进这一轮开头、随轮落库，重开会话还在。
-    // 省下的量 = 裁剪前后各估算一次的差值；算不出正数就不带，渲染层只画线；reason 供验证记录引用
-    startItem('compaction', {
-      t: 'compaction',
-      ...(outcome.savedTokens ? { savedTokens: outcome.savedTokens } : {}),
-      ...(outcome.reason ? { reason: outcome.reason } : {})
-    })
-    persistRunning()
   }
   const estimatedInput = estimate()
   // 占用拆分（018 Case 10）：技能类 = 技能清单、技能新增、重建的技能正文这几种提醒行，加激活技能工具的返回；

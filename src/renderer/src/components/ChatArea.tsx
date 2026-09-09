@@ -81,7 +81,6 @@ interface Props {
   ws?: WsSelector // 工作空间选择器（015 Case 1）
   workPanelOpen?: boolean
   onToggleWorkPanel?: () => void // 工作面板常驻开关（右上角）
-  compacting?: boolean // 手动压缩进行中（018 Case 9）：输入框禁用
   onCompact?: () => void // 斜杠面板「压缩上下文」
 }
 
@@ -125,7 +124,6 @@ export default function ChatArea({
   ws,
   workPanelOpen,
   onToggleWorkPanel,
-  compacting,
   onCompact
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
@@ -175,7 +173,6 @@ export default function ChatArea({
       sending={sending}
       context={context}
       inputDisabled={authWaiting}
-      compacting={!!compacting}
       askWaiting={!!askItem}
       onPickCommand={(cmd) => {
         if (cmd === 'compact') onCompact?.()
@@ -259,10 +256,9 @@ export default function ChatArea({
                 <div className="flex flex-col gap-8">
                   {messages.map((m) =>
                     m.role === 'reminder' ? (
-                      // 提醒消息行不显示（018 四节）；二级压缩的摘要行画一条压缩分界线（Case 9）
-                      m.kind === 'summary' ? (
-                        <CompactionLine key={m.id} />
-                      ) : null
+                      // 提醒消息行不显示（018 四节）。压缩由那一轮的压缩调用行交代（Case 9 Feature 7），
+                      // 016 的虚线分界线退役
+                      null
                     ) : m.role === 'user' ? (
                       <UserMsg key={m.id} m={m} onOpenArtifact={onOpenArtifact} />
                     ) : (
@@ -277,8 +273,6 @@ export default function ChatArea({
                       />
                     )
                   )}
-                  {/* 手动压缩进行中（018 Case 9 Feature 5）：对话流末尾一条状态行，输入框同时禁用 */}
-                  {compacting && <CompactingRow />}
                 </div>
               </div>
             </div>
@@ -366,22 +360,6 @@ function TitleBar({
 }
 
 // 压缩分界线：虚线嵌文字；省下多少估不出（或二级摘要）时只放一个圆点
-function CompactionLine({ savedTokens }: { savedTokens?: number }): React.JSX.Element {
-  return (
-    <div className="my-3 flex w-full items-center gap-3">
-      <div className="min-w-[24px] flex-1 border-t border-dashed border-border" />
-      {savedTokens ? (
-        <span className="flex-none text-[12px] text-muted-foreground">
-          已压缩上下文，节省约 {savedTokens.toLocaleString()} tokens
-        </span>
-      ) : (
-        <span className="size-1.5 flex-none rounded-full bg-muted-foreground/50" />
-      )}
-      <div className="min-w-[24px] flex-1 border-t border-dashed border-border" />
-    </div>
-  )
-}
-
 // 用户消息：带引用时 chip 排在气泡上方（013 Case 2），样式同输入框上方、无移除钮；
 // 点击打开对应制品并高亮当时引用的那几行
 function UserMsg({
@@ -401,7 +379,11 @@ function UserMsg({
   const mcp = (m.items ?? []).find(
     (it): it is Extract<TurnItem, { t: 'mcpref' }> => it.t === 'mcpref'
   )
-  const named = skill ?? mcp
+  // 斜杠面板的内置命令（018 Case 9 手动压缩）：「/压缩上下文」同样染主色
+  const cmd = (m.items ?? []).find(
+    (it): it is Extract<TurnItem, { t: 'cmdref' }> => it.t === 'cmdref'
+  )
+  const named = skill ?? mcp ?? cmd
   const slashLen = named && m.content.startsWith(`/${named.name}`) ? named.name.length + 1 : 0
   return (
     <div className="flex flex-col items-end gap-1.5">
@@ -446,21 +428,15 @@ function fmtElapsed(ms: number): string {
 }
 
 // 四档文案（Case 12 功能点 2）：间隙一律归「等待回应」——请求刚发出，或上一段结束下一段没开始
-function statusLabel(items: TurnItem[], tailOpen: boolean | undefined, compacting?: boolean): string {
-  // 第五档（018 Case 9）：本轮开头的摘要请求在跑，此时还没有任何块
-  if (compacting) return '正在压缩上下文'
+function statusLabel(items: TurnItem[], tailOpen: boolean | undefined): string {
   const last = items[items.length - 1]
   if (!last) return '等待回应'
+  // 第五档（018 Case 9）：压缩调用行在跑（摘要请求已发出、还没回来）
+  if (last.t === 'compaction' && !last.outcome) return '压缩上下文'
   if (last.t === 'reasoning' && tailOpen) return '思考中'
   if (last.t === 'tool' && last.result === undefined) return '执行工具'
   if (last.t === 'text' && tailOpen) return '回答中'
   return '等待回应'
-}
-
-// 手动压缩的状态行（018 Case 9 Feature 5）：挂在对话流末尾，与整轮状态行同一格式；挂载即计时，压缩完成随 compacting 一起卸载
-function CompactingRow(): React.JSX.Element {
-  const timerRef = useRef<{ acc: number; since: number | null }>({ acc: 0, since: Date.now() })
-  return <ProgressIndicator timer={timerRef.current} label="正在压缩上下文" />
 }
 
 function ProgressIndicator({
@@ -600,9 +576,6 @@ function AssistantMsg({
                 <ChevronRight className="size-4 flex-none text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
               </button>
             )
-          case 'compaction':
-            // 压缩分界线（016 Case 11）：三级丢弃时随轮落库
-            return <CompactionLine key={i} savedTokens={it.savedTokens} />
           case 'boundary':
             // 016 Case 11：工具上限的边界行去掉（信息并进失败的调用行）；error 边界由错误卡呈现
             return null
@@ -613,10 +586,7 @@ function AssistantMsg({
       {/* 整轮进度指示：挂在当前助手消息末尾，紧随已有内容——无内容时就贴着用户消息，不留空隙。
           等待授权期间没有请求在跑，不显示进度指示 */}
       {streaming && pendingIdx < 0 && (
-        <ProgressIndicator
-          timer={timerRef.current}
-          label={statusLabel(items, m.tailOpen, m.compacting)}
-        />
+        <ProgressIndicator timer={timerRef.current} label={statusLabel(items, m.tailOpen)} />
       )}
       {/* 结束原因统一排在页脚之前（016 Case 14 功能点 7）：停止 / 退出中断 / 错误卡 */}
       {m.status === 'stopped' && <PlainRow text="你停止了这次回答，需要继续可以直接说" />}

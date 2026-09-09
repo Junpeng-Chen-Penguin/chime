@@ -252,23 +252,13 @@ function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 手动压缩上下文（018 Case 9 Feature 5）：与自动压缩同一流程，期间输入框禁用；
-  // 成功后重新水合（摘要行画成分界线），失败弹提示、对话不变
-  const [compacting, setCompacting] = useState(false)
-  const compactNow = async (): Promise<void> => {
-    if (!activeId || activeId === draftId || sending || compacting) return
-    setCompacting(true)
-    try {
-      const r = await window.api.compactChat({ convId: activeId, model: activeModel })
-      if (!r.ok) {
-        toastError('压缩上下文', undefined, r.error)
-        return
-      }
-      const msgs = await window.api.getMessages(activeId)
-      chat.hydrate(activeId, msgs.map(toMsg))
-    } finally {
-      setCompacting(false)
-    }
+  // 手动压缩上下文（018 Case 9 Feature 5）：走与发消息相同的通道，主进程按 command 只跑摘要与重建。
+  // 界面上是一条「/压缩上下文」的用户消息加一条压缩调用行，与模型调了一次工具一样；草稿会话没有内容，不做
+  const compactNow = (): void => {
+    if (!activeId || activeId === draftId || sending) return
+    chat.send(activeId, activeModel, '/压缩上下文', [{ t: 'cmdref', name: '压缩上下文' }], undefined, {
+      command: 'compact'
+    })
   }
 
   // 切到已有会话时按需水合
@@ -582,7 +572,6 @@ function App(): React.JSX.Element {
           onExpand={() => setCollapsed(false)}
           messages={messages}
           sending={sending}
-          compacting={compacting}
           onCompact={compactNow}
           context={chat.context[activeId] ?? active?.lastContext ?? null}
           input={input}

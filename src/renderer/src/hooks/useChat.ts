@@ -8,13 +8,15 @@ export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error' | 'interrupte
 export type RefItem = Extract<TurnItem, { t: 'ref' }>
 export type SkillRefItem = Extract<TurnItem, { t: 'skillref' }>
 export type McpRefItem = Extract<TurnItem, { t: 'mcpref' }>
-export type UserItem = RefItem | SkillRefItem | McpRefItem
+export type CmdRefItem = Extract<TurnItem, { t: 'cmdref' }>
+export type UserItem = RefItem | SkillRefItem | McpRefItem | CmdRefItem
 
 // 本轮消息的点名（018 Case 5）：斜杠点名的技能名或服务 id，加上次发送以来在面板里点过的服务
 export interface SendOpts {
   slashSkill?: string
   slashMcp?: number
   mcpPicked?: number[]
+  command?: 'compact' // 018 Case 9：斜杠面板的「压缩上下文」，这一轮只做压缩
 }
 
 export interface Usage {
@@ -34,7 +36,6 @@ export interface Msg {
   status: MsgStatus
   error?: string
   tailOpen?: boolean // 末位块还在流式中（016 状态行四档判定用；展示态，不落库）
-  compacting?: boolean // 本轮开头的摘要请求进行中（018 Case 9）：状态行文案「正在压缩上下文」；展示态
   createdAt: number
 }
 
@@ -142,9 +143,6 @@ export function useChat(onChange?: () => void): ChatHandle {
             // 只有末位块的收尾才关掉流式标（文本块的 done 可能拖到流末尾才补发）
             return { ...m, items, tailOpen: evt.index === items.length - 1 ? false : m.tailOpen }
           })
-          return
-        case 'compacting':
-          patch(r.convId, r.msgId, (m) => ({ ...m, compacting: !!evt.active }))
           return
         case 'item-update':
           patch(r.convId, r.msgId, (m) => {

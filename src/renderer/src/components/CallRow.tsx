@@ -12,6 +12,7 @@ import {
   FileText,
   Folder,
   MessageCircleQuestion,
+  Minimize2,
   Puzzle,
   Search,
   SearchCode,
@@ -44,7 +45,8 @@ function toolSearchDesc(r: ToolSearchResult): string {
 }
 // 一句话说明：说明的第一行
 const firstLine = (d: string): string => d.split('\n').find((l) => l.trim())?.trim() ?? ''
-type CallItem = Extract<TurnItem, { t: 'reasoning' | 'tool' }>
+type CompactionItem = Extract<TurnItem, { t: 'compaction' }>
+type CallItem = Extract<TurnItem, { t: 'reasoning' | 'tool' | 'compaction' }>
 
 // ── 图标映射（键 = 函数名；思考与 MCP 是渲染层固定配置，不进登记表）──
 const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -261,9 +263,39 @@ function toolFace(item: ToolItem, mcpRunning: boolean): RowFace {
   }
 }
 
+// 压缩的调用行（018 Case 9 Feature 7）：程序发起，界面上与模型调了一次压缩工具一样；没有详情可看
+function compactionFace(item: CompactionItem, running: boolean): RowFace {
+  const icon = Minimize2
+  const saved = item.savedTokens ? `节省约 ${formatTokens(item.savedTokens)} tokens` : '已重建对话'
+  switch (item.outcome) {
+    case undefined:
+      // 旧数据（1.24.5 前只在三级丢弃时写这一行，没有 outcome）当作已完成
+      return running ? { icon, verb: '压缩中', desc: '上下文', running: true } : { icon, verb: '压缩', desc: saved }
+    case 'ok':
+      return { icon, verb: '压缩', desc: saved }
+    case 'ok_dropped':
+      return { icon, verb: '压缩', desc: '已重建对话，另丢弃了最早的对话' }
+    case 'failed':
+      return { icon, verb: '压缩失败', desc: '摘要出错，已丢弃最早的对话', failed: true }
+    case 'disabled':
+      return { icon, verb: '压缩失败', desc: '摘要已停用，已丢弃最早的对话', failed: true }
+    case 'manual_failed':
+      return { icon, verb: '压缩失败', desc: '摘要出错，对话未改动', failed: true }
+    case 'aborted':
+      return { icon, verb: '已中断', desc: '上下文未压缩' }
+  }
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
 function faceOf(item: CallItem, running: boolean): RowFace {
   if (item.t === 'reasoning')
     return { icon: Sparkles, verb: running ? '思考中' : '思考', desc: '', running }
+  if (item.t === 'compaction') return compactionFace(item, running)
   return toolFace(item, running)
 }
 
@@ -356,6 +388,7 @@ function KvRows({
 
 // 详情区（Case 6 功能点 3/4）：圆角浅灰底框，上半参数、下半结果，按工具选内容与样式
 function CallDetail({ item }: { item: CallItem }): React.JSX.Element {
+  if (item.t === 'compaction') return <></>
   if (item.t === 'reasoning') {
     return (
       <DetailShell>
@@ -557,6 +590,7 @@ export function CallRow({
   // 制品生成成功不出行（换制品卡，Case 9）——父级已过滤，这里只处理进行中与失败。
   // 思考行流式中也能展开（验收修订：思考中就想看想法），工具行仍要等结果
   const expandable =
+    item.t !== 'compaction' && // 压缩行无需查看结果（018 Case 9 Feature 7）
     (item.t === 'reasoning' || !face.running) &&
     !(item.t === 'tool' && (item.auth === 'denied' || item.auth === 'unanswered')) &&
     !(item.t === 'tool' && item.name === 'create_artifact' && !item.userText)
@@ -626,7 +660,8 @@ export function segmentItems(items: TurnItem[]): Segment[] {
       it.name === 'activate_skill' &&
       typeof it.result === 'string' &&
       !it.result.startsWith('【技能：')
-    const isCall = (it.t === 'reasoning' && !!it.text.trim()) || (it.t === 'tool' && !skipSkill)
+    const isCall =
+      (it.t === 'reasoning' && !!it.text.trim()) || (it.t === 'tool' && !skipSkill) || it.t === 'compaction'
     if (isCall) {
       if (!cur) {
         cur = { kind: 'calls', items: [], indices: [], base: i }

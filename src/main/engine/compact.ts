@@ -26,7 +26,7 @@ import {
 import { getSkill, listSkills, ACTIVATE_TOOL_NAME, SKILL_BODY_PREFIX } from '../skills'
 import { skillsRoot } from './fs-tools'
 import { NON_DATA_TOOLS, type OverflowCtx } from './overflow'
-import { loadHistoryMessages, isConvActive, type HistoryBundle } from './store'
+import { loadHistoryMessages, type HistoryBundle } from './store'
 import {
   insertReminder,
   skillScope,
@@ -260,7 +260,8 @@ export interface CompactOutcome {
   history: ModelMessage[]
   bundle: HistoryBundle
   dropped: boolean // 走到了三级
-  savedTokens?: number
+  summarized?: boolean // 二级摘要成功并重建了
+  savedTokens?: number // 摘要重建或三级丢弃省下的估算量
   reason?: string // 走到三级的原因
   aborted?: boolean // 摘要请求被用户停止：本轮按停止收场，不计失败
 }
@@ -280,7 +281,7 @@ export async function compactIfNeeded(o: {
   keyOf: (fullName: string) => string
   deferred: DeferredTool[]
   retry: boolean
-  onSummarize?: () => void // 二级要发摘要请求时回调一次（渲染层换状态行文案）
+  onLevel2?: () => void // 一级清完仍超线、进入二级时回调一次：这一轮出一条压缩调用行（018 Case 9）
 }): Promise<CompactOutcome> {
   let { history, bundle } = o
   const over = (h: ModelMessage[]): boolean => o.estimateOf(h) >= o.line
@@ -318,12 +319,13 @@ export async function compactIfNeeded(o: {
   if (!over(history)) return { history, bundle, dropped: false }
 
   // 二级
+  o.onLevel2?.()
+  const beforeL2 = o.estimateOf(history)
   let reason: string
   const { failures } = getConversationCompaction(o.convId)
   if (failures >= MAX_COMPACT_FAILURES) reason = '摘要连续失败已停用'
   else {
     const cut = o.retry ? currentTurnStart(history, bundle) : history.length
-    o.onSummarize?.()
     const res = await summarize({
       lm: o.lm,
       system: o.system,
@@ -348,8 +350,20 @@ export async function compactIfNeeded(o: {
       })
       bundle = loadHistoryMessages(o.convId, o.keyOf)
       history = bundle.messages
-      if (!over(history)) return { history, bundle, dropped: false }
+      const saved = beforeL2 - o.estimateOf(history)
+      if (!over(history))
+        return { history, bundle, dropped: false, summarized: true, savedTokens: saved > 0 ? saved : undefined }
       reason = '重建后仍超线'
+      const r = dropOldest(history, bundle.dialogStart, over)
+      const saved2 = beforeL2 - o.estimateOf(r.history)
+      return {
+        history: r.history,
+        bundle,
+        dropped: r.dropped,
+        summarized: true,
+        savedTokens: saved2 > 0 ? saved2 : undefined,
+        reason
+      }
     }
   }
 
@@ -367,16 +381,21 @@ export async function compactIfNeeded(o: {
 }
 
 // ── 手动压缩（Case 9 Feature 5）────────────────────────────────
-// 不经过 runTurn：直接跑摘要与重建。没发过一轮（没有系统提示词）或有轮在跑时不做
-export async function compactNow(
+// 由 orchestrator 的压缩轮调用：直接跑摘要与重建，不请模型回答。没发过一轮（没有系统提示词）时不做。
+// 返回省下的估算量（重建前后消息序列的估算差，不乘校准比值）
+export type ManualCompactResult =
+  | { ok: true; savedTokens?: number }
+  | { ok: false; reason: 'no_system' | 'no_model' | SummaryFailure }
+
+export async function compactManually(
   convId: string,
-  model: string
-): Promise<{ ok: true } | { ok: false; error: string }> {
+  model: string,
+  signal?: AbortSignal
+): Promise<ManualCompactResult> {
   const system = getConversationSystemPrompt(convId)
-  if (system === null) return { ok: false, error: '会话还没有内容' }
-  if (isConvActive(convId)) return { ok: false, error: '回复进行中' }
+  if (system === null) return { ok: false, reason: 'no_system' }
   const p = resolveModelRef(model)
-  if (!p || !p.apiKey) return { ok: false, error: '模型无法定位' }
+  if (!p || !p.apiKey) return { ok: false, reason: 'no_model' }
   const provider = createOpenAICompatible({
     name: 'chime',
     baseURL: p.baseUrl.trim().replace(/\/+$/, ''),
@@ -421,12 +440,15 @@ export async function compactNow(
       onInvokeAuth: () => {}
     })
   )
-  const res = await summarize({ lm: provider(p.model), system, tools, messages: bundle.messages })
-  if (!res.ok)
-    return {
-      ok: false,
-      error: res.reason === 'request' ? '摘要请求出错' : '模型没有返回摘要'
-    }
+  const before = estimateTokensBase(JSON.stringify(bundle.messages))
+  const res = await summarize({
+    lm: provider(p.model),
+    system,
+    tools,
+    messages: bundle.messages,
+    signal
+  })
+  if (!res.ok) return { ok: false, reason: res.reason }
   rebuildAfterSummary({
     convId,
     summary: res.text,
@@ -435,5 +457,7 @@ export async function compactNow(
     displayOf,
     deferred
   })
-  return { ok: true }
+  const after = estimateTokensBase(JSON.stringify(loadHistoryMessages(convId, keyOf).messages))
+  const saved = before - after
+  return { ok: true, savedTokens: saved > 0 ? saved : undefined }
 }

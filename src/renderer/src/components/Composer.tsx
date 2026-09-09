@@ -70,7 +70,6 @@ interface Props {
   onPickModel: (m: string) => void
   sending: boolean
   inputDisabled?: boolean // 等待授权中：输入框禁用，只能操作卡片或点停止
-  compacting?: boolean // 手动压缩进行中（018 Case 9）：输入框禁用，进度由对话流末尾的状态行显示
   askWaiting?: boolean // 提问卡等待中：输入框开放，发送 = 中断提问 + 开启新一轮
   value: string
   onChange: (v: string) => void
@@ -114,7 +113,6 @@ export default function Composer({
   onPickModel,
   sending,
   inputDisabled,
-  compacting,
   askWaiting,
   value,
   onChange,
@@ -334,7 +332,7 @@ export default function Composer({
             ref={taRef}
             rows={1}
             value={value}
-            disabled={inputDisabled || compacting}
+            disabled={inputDisabled}
             onChange={(e) => {
               setSlashIdx(0) // 键入即回到首项（方向键选中不触发 onChange，不受影响）
               onChange(e.target.value)
