@@ -99,7 +99,12 @@ export type ChatEvent =
       endReason?: 'stopped' | 'interrupted' | 'error' // 空 = 正常完成
       status: 'done' | 'stopped' | 'error' | 'interrupted' // 驱动协议兼容字段（endReason 合成）
       error?: string
-      usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
+      usage?: {
+        inputTokens: number
+        outputTokens: number
+        cachedInputTokens?: number
+        firstStep?: { inputTokens: number; cachedInputTokens: number } // 该轮第一次模型请求（018）
+      }
       contextRatio: number
     }
 

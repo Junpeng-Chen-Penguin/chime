@@ -68,7 +68,8 @@ import {
   markConvActive,
   unmarkConvActive,
   type TurnItem,
-  type EndReason
+  type EndReason,
+  type TurnUsage
 } from './store'
 
 export type ChatEvent =
@@ -84,7 +85,7 @@ export type ChatEvent =
       // 驱动协议的兼容字段（Tuner 与 eval 消费）：endReason 合成的收场语义，与 016 前同值域
       status: 'done' | 'stopped' | 'error' | 'interrupted'
       error?: string
-      usage?: { inputTokens: number; outputTokens: number }
+      usage?: TurnUsage
       contextRatio: number
     }
 
@@ -264,7 +265,7 @@ async function streamCore(core: {
   const finish = (
     endReason?: EndReason,
     error?: string,
-    usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number },
+    usage?: TurnUsage,
     contextRatio = 0
   ): void => {
     // 模型可能发出空的 text/reasoning 段（如开了个头就转去调工具），不落库
@@ -574,31 +575,41 @@ async function streamCore(core: {
       inputTokenDetails?: { cacheReadTokens?: number }
     }
   }
-  const sumSteps = (
-    steps: readonly StepUsage[]
-  ): { inputTokens: number; outputTokens: number; cachedInputTokens?: number } | undefined => {
+  const firstStepOf = (st: StepUsage): NonNullable<TurnUsage['firstStep']> => ({
+    inputTokens: st.usage.inputTokens ?? 0,
+    cachedInputTokens: st.usage.inputTokenDetails?.cacheReadTokens ?? 0
+  })
+  const sumSteps = (steps: readonly StepUsage[]): TurnUsage | undefined => {
     if (!steps.length) return undefined
-    return steps.reduce(
-      (acc, st) => ({
-        inputTokens: acc.inputTokens + (st.usage.inputTokens ?? 0),
-        outputTokens: acc.outputTokens + (st.usage.outputTokens ?? 0),
-        cachedInputTokens:
-          (acc.cachedInputTokens ?? 0) + (st.usage.inputTokenDetails?.cacheReadTokens ?? 0)
-      }),
-      { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 }
-    )
+    return {
+      ...steps.reduce(
+        (acc, st) => ({
+          inputTokens: acc.inputTokens + (st.usage.inputTokens ?? 0),
+          outputTokens: acc.outputTokens + (st.usage.outputTokens ?? 0),
+          cachedInputTokens:
+            (acc.cachedInputTokens ?? 0) + (st.usage.inputTokenDetails?.cacheReadTokens ?? 0)
+        }),
+        { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 }
+      ),
+      firstStep: firstStepOf(steps[0])
+    }
   }
-  let abortedUsage:
-    | { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
-    | undefined
+  let abortedUsage: TurnUsage | undefined
   let stepsPromise: Promise<readonly StepUsage[]> | null = null
   // finish-step 逐次累计（首选来源）：LLM 请求一结束就有该次 usage，不等这一步的工具跑完。
-  // 并行调用等授权时停止，onAbort 与 steps 都是空的，只有这里有数
-  const streamed = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, seen: false }
-  const stoppedUsage = async (): Promise<typeof abortedUsage> => {
+  // 并行调用等授权时停止，onAbort 与 steps 都是空的，只有这里有数。
+  // firstStep 只在第一个 finish-step 赋值一次（018 一节）：缓存命中率按这一步算
+  const streamed: {
+    inputTokens: number
+    outputTokens: number
+    cachedInputTokens: number
+    seen: boolean
+    firstStep?: TurnUsage['firstStep']
+  } = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, seen: false }
+  const stoppedUsage = async (): Promise<TurnUsage | undefined> => {
     if (streamed.seen) {
-      const { inputTokens, outputTokens, cachedInputTokens } = streamed
-      return { inputTokens, outputTokens, cachedInputTokens }
+      const { inputTokens, outputTokens, cachedInputTokens, firstStep } = streamed
+      return { inputTokens, outputTokens, cachedInputTokens, firstStep }
     }
     if (abortedUsage) return abortedUsage
     const st = stepsPromise ? await stepsPromise.catch(() => []) : []
@@ -842,6 +853,7 @@ async function streamCore(core: {
           break
         }
         case 'finish-step':
+          if (!streamed.seen) streamed.firstStep = firstStepOf(part)
           streamed.seen = true
           streamed.inputTokens += part.usage.inputTokens ?? 0
           streamed.outputTokens += part.usage.outputTokens ?? 0
@@ -884,7 +896,9 @@ async function streamCore(core: {
       {
         inputTokens: input,
         outputTokens: usage.outputTokens ?? 0,
-        cachedInputTokens: usage.inputTokenDetails?.cacheReadTokens ?? 0
+        cachedInputTokens: usage.inputTokenDetails?.cacheReadTokens ?? 0,
+        // 正常收场也从流里取首步：result.usage 是全部步骤的合计（AI SDK 文档），没有分步
+        firstStep: streamed.firstStep
       },
       contextRatio
     )

@@ -72,6 +72,15 @@ export type TurnPhase = 'running' | 'waiting' | 'done'
 // 空 = 正常完成；stopped = 用户停止；interrupted = 应用退出打断；error = 出错
 export type EndReason = 'stopped' | 'interrupted' | 'error'
 
+// 一轮的用量（018 一节）：整轮合计之外多带第一次模型请求的用量。
+// 缓存命中率按首步算才有意义——第二步起的输入几乎全是第一步的前缀，合计口径把命中率抬高了
+export interface TurnUsage {
+  inputTokens: number
+  outputTokens: number
+  cachedInputTokens?: number
+  firstStep?: { inputTokens: number; cachedInputTokens: number }
+}
+
 // 正在跑的会话集合：启动修复的排除名单（orchestrator 开轮登记、收场注销）。
 // 修复只处理上次进程留下的未完轮，本进程活跃轮不能被它误收场
 const activeConvs = new Set<string>()
@@ -125,17 +134,24 @@ export function saveAssistantTurn(
     items: TurnItem[]
     status: TurnPhase
     endReason?: EndReason
-    usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number }
+    usage?: TurnUsage
   }
 ): void {
   const db = getDb()
   const now = Date.now()
-  // 用量落库（PRD Case 5）：{input, output, cached}；中断轮 usage 为空存 NULL——没有就是没有，不估算
+  // 用量落库（PRD Case 5）：{input, output, cached}；中断轮 usage 为空存 NULL——没有就是没有，不估算。
+  // 018 起多两个键：firstInput / firstCached 是首步的输入与命中，一步都没完成时不写
   const usageJson = turn.usage
     ? JSON.stringify({
         input: turn.usage.inputTokens,
         output: turn.usage.outputTokens,
-        cached: turn.usage.cachedInputTokens ?? 0
+        cached: turn.usage.cachedInputTokens ?? 0,
+        ...(turn.usage.firstStep
+          ? {
+              firstInput: turn.usage.firstStep.inputTokens,
+              firstCached: turn.usage.firstStep.cachedInputTokens
+            }
+          : {})
       })
     : null
   // inputStreaming 是参数流式期间的过程标志（016 二节），只在内存里有意义，落库前剥掉
