@@ -16,8 +16,6 @@ import {
   getAgent,
   listKbs,
   kbStatsFor,
-  findToolResultIdByCallId,
-  insertToolResult,
   getConversationWs,
   setConversationWs,
   touchWsRecent,
@@ -59,30 +57,17 @@ import {
   triggerLine
 } from './budget'
 import {
-  makeSearchTool,
-  makeAskTool,
-  makeGrepResultTool,
-  makeReadResultTool,
-  makeArtifactTool,
   ASK_TOOL_NAME,
-  GREP_TOOL_NAME,
-  READ_TOOL_NAME,
-  ARTIFACT_TOOL_NAME,
   TOOL_ROUND_HARD_LIMIT,
   STEP_COUNT_LIMIT,
   type TurnToolContext
 } from './tools'
-import { makeFsTools, type FsCard } from './fs-tools'
-import { listSkills, makeActivateSkillTool, ACTIVATE_TOOL_NAME } from '../skills'
+import type { FsCard } from './fs-tools'
+import { listSkills } from '../skills'
+import { assembleTurnTools } from './toolset'
+import { compactIfNeeded } from './compact'
 import { sessionFullResultChars, applyTotalGate, NON_DATA_TOOLS, type OverflowCtx } from './overflow'
-import {
-  ensureDeferredTable,
-  makeToolSearchTool,
-  makeToolInvokeTool,
-  bareName,
-  TOOL_SEARCH_NAME,
-  TOOL_INVOKE_NAME
-} from './deferred'
+import { ensureDeferredTable, bareName, TOOL_INVOKE_NAME } from './deferred'
 import {
   CardQueue,
   INTERRUPT_NOT_STARTED,
@@ -564,35 +549,28 @@ async function streamCore(core: {
     persistWaiting()
     emit({ type: 'item-update', streamId, index: idx, item })
   }
-  const turnTools: Record<string, Tool> = {}
-  turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
-  turnTools[GREP_TOOL_NAME] = makeGrepResultTool(convId)
-  turnTools[READ_TOOL_NAME] = makeReadResultTool(convId)
-  turnTools[ARTIFACT_TOOL_NAME] = makeArtifactTool(convId, (toolCallId, info) =>
-    artifacts.set(toolCallId, info)
-  )
-  // 文件工具（015 C2 读/列；C3 加写/编辑）：白名单校验在 execute 内
-  Object.assign(
-    turnTools,
-    makeFsTools({ convId, signal: controller.signal, cards, overflow, onFsCard })
-  )
-  // 检索：没关联知识库时 execute 返回一句说明
-  turnTools.search_knowledge_base = makeSearchTool(toolCtx)
-  // 技能：可激活范围 = 本会话的技能范围（会话开始定格、点名清单外的技能时追加，018 Case 6）∪ 本轮点名，
-  // 范围为空时 execute 返回说明
+  // 技能：可激活范围 = 本会话的技能范围（会话开始定格、点名清单外的技能时追加，018 Case 6）∪ 本轮点名
   const activeSkillNames = [...new Set([...scope, ...(slashName ? [slashName] : [])])]
-  turnTools[ACTIVATE_TOOL_NAME] = makeActivateSkillTool({
-    names: activeSkillNames,
-    getHistory: () => history
-  })
-  turnTools[TOOL_SEARCH_NAME] = makeToolSearchTool(deferred)
-  turnTools[TOOL_INVOKE_NAME] = makeToolInvokeTool({
-    table: deferred,
+  const turnTools: Record<string, Tool> = assembleTurnTools({
+    convId,
     signal: controller.signal,
     cards,
     overflow,
-    onAuthPending: onInvokeAuth
+    onFsCard,
+    toolCtx,
+    skillNames: activeSkillNames,
+    getHistory: () => history,
+    onArtifact: (toolCallId, info) => artifacts.set(toolCallId, info),
+    deferred,
+    onInvokeAuth
   })
+  // 结果清单里的展示名（七节）：内置工具查登记表，MCP 工具查查询表
+  const displayOf = (toolName: string): string =>
+    builtinDisplay(toolName) ??
+    (() => {
+      const e = deferred.find((x) => x.fullName === toolName)
+      return e ? e.title || `${e.serviceName}:${bareName(e.fullName)}` : toolName
+    })()
 
   // 两份文案的旁路（016 六节）：工具错误结果里的 userText 是给用户看的那句，
   // 在进 SDK 之前剥下来存这里——execute 返回值会原样发给模型，userText 不进模型。
@@ -627,69 +605,47 @@ async function streamCore(core: {
   const line = triggerLine(model)
   const toolsTok = applyRatio(model, toolsTokens(turnTools))
   // 历史里的 MCP 调用按查询表里的名字还原成 tool_invoke 转接（018 五节）
-  const bundle = loadHistoryMessages(convId, keyOf)
+  let bundle = loadHistoryMessages(convId, keyOf)
   history = bundle.messages
   const sizeOf = (m: ModelMessage): number =>
     estimateTokens(model, typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
   // 本轮还没落库的追加消息与用户消息也进估算（它们马上要跟在历史后面发出去）
   let pendingTexts = [...pendingRows.map((r) => r.content), ...(core.saveUser ? [core.text] : [])]
-  const estimate = (): number =>
+  const estimateOf = (h: ModelMessage[]): number =>
     toolsTok +
     estimateTokens(model, system) +
-    history.reduce((s, m) => s + sizeOf(m), 0) +
+    h.reduce((s, m) => s + sizeOf(m), 0) +
     pendingTexts.reduce((s, t) => s + estimateTokens(model, t), 0)
+  const estimate = (): number => estimateOf(history)
 
-  // 压力分级（07-14 核心改造，Claude Code 微压缩同构）：
-  // 不到触发线不动；到线从最老的工具返回清起、换原地指针——只清数据不动对话主干，
-  // 保最近 5 条；可省不足 2 万 token 不动手（清除打破服务端缓存，要么省一大笔要么不折腾）；
-  // 检索返回不清（已定点转换成文档名）、提问卡问答不清（体积小且是关键上下文）、
-  // 技能正文不清（是行事指令不是外部数据；清了摘要样例仍带头部标注，去重会误判已激活）。
-  // 被清内容幂等入库（同一调用复用编号），模型凭编号随时查回，不必重调外部接口。
-  const RELIEF_KEEP_RECENT = 5
-  const RELIEF_MIN_SAVE_TOKENS = 20_000
-  if (estimate() >= line) {
-    const candidates = bundle.toolOutputs.filter((c) => !NON_DATA_TOOLS.has(c.toolName))
-    const clearable = candidates.slice(0, Math.max(0, candidates.length - RELIEF_KEEP_RECENT))
-    const partOf = (c: (typeof clearable)[number]): { output: { value: string } } | null => {
-      const msg = history[c.msgIdx] as unknown as { content?: { output?: { value?: unknown } }[] }
-      const part = msg?.content?.[c.partIdx]
-      return part?.output && typeof part.output.value === 'string'
-        ? (part as { output: { value: string } })
-        : null
-    }
-    const savable = clearable.reduce(
-      (s, c) => s + estimateTokens(model, partOf(c)?.output.value ?? ''),
-      0
-    )
-    if (savable >= RELIEF_MIN_SAVE_TOKENS) {
-      for (const c of clearable) {
-        if (estimate() < line) break
-        const p = partOf(c)
-        if (!p || p.output.value.length < 500) continue // 太小的不清：指针比内容还长
-        const id =
-          c.resultRef ??
-          findToolResultIdByCallId(c.toolCallId) ??
-          insertToolResult({
-            conversationId: convId,
-            toolCallId: c.toolCallId,
-            toolName: c.toolName,
-            content: p.output.value
-          })
-        p.output.value = `（这段返回已移出对话释放空间，完整内容在结果编号 #${id}——用 grep_result 搜关键词、read_result 按行读取；任何给用户看的文字不要提编号或存取机制）`
-      }
-    }
-  }
-  // L2 最后防线：清完仍超预算才丢最旧消息对，且不再静默——丢的可能是任务开头的指令，用户须知情。
-  // 切口修整（V1 实测 2026-08-18）：盲切两条可能把带 tool_calls 的 assistant 消息切掉、留下孤立的
-  // tool 消息在队首，DeepSeek 对此报 400（tool 消息必须跟在 tool_calls 之后）——切完把队首孤立 tool 丢掉
-  const estimateBeforeDrop = estimate()
-  let droppedOldest = false
-  while (history.length > 2 && estimate() >= line) {
-    history = history.slice(2)
-    while (history.length && (history[0] as { role?: string }).role === 'tool')
-      history = history.slice(1)
-    droppedOldest = true
-  }
+  const provider = createOpenAICompatible({
+    name: 'chime',
+    baseURL: p.baseUrl.trim().replace(/\/+$/, ''),
+    apiKey: p.apiKey,
+    includeUsage: true
+  })
+  // 附加参数（PRD Case 6）：某家独有的非标准开关随每次请求发出，靠配置不靠改代码
+  const extraBody = Object.keys(p.extraParams).length ? p.extraParams : undefined
+
+  // 压缩三级（018 七节）：一级清旧的工具返回换成结果编号，二级请模型写摘要并重建，三级整对丢弃。
+  // 逻辑在 compact.ts，这里只接结果：压缩后的历史、要不要画分界线、摘要请求被用户停止时按停止收场
+  const outcome = await compactIfNeeded({
+    convId,
+    lm: provider(p.model),
+    system,
+    tools: turnTools,
+    history,
+    bundle,
+    estimateOf,
+    line,
+    signal: controller.signal,
+    skillEntries: skillEntries(scope),
+    displayOf,
+    keyOf,
+    retry: !core.saveUser
+  })
+  history = outcome.history
+  bundle = outcome.bundle
   // 本轮的行现在才写（018 四节）：追加消息在前、用户消息在后，都排在压缩重建的行之后；
   // 写完追加到内存里的 history 末尾，再写空壳 running 行（016 Case 13）。重试时这几行已在库里，只写空壳
   if (core.saveUser) {
@@ -703,25 +659,24 @@ async function streamCore(core: {
     pendingTexts = []
   }
   persistRunning()
-  if (droppedOldest) {
+  if (outcome.aborted) {
+    // 摘要请求期间用户点了停止：用户消息照常落库（界面上已显示），本轮按停止收场，不计入摘要失败
+    finish('stopped', undefined, undefined, Math.min(1, estimate() / contextWindow(model)))
+    return
+  }
+  if (outcome.dropped) {
     // 压缩分界线（016 Case 11）：插进这一轮开头、随轮落库，重开会话还在。
-    // 省下的量 = 裁剪前后各估算一次的差值；算不出正数就不带，渲染层只画线
-    const saved = estimateBeforeDrop - estimate()
-    startItem('compaction', { t: 'compaction', ...(saved > 0 ? { savedTokens: saved } : {}) })
+    // 省下的量 = 裁剪前后各估算一次的差值；算不出正数就不带，渲染层只画线；reason 供验证记录引用
+    startItem('compaction', {
+      t: 'compaction',
+      ...(outcome.savedTokens ? { savedTokens: outcome.savedTokens } : {}),
+      ...(outcome.reason ? { reason: outcome.reason } : {})
+    })
     persistRunning()
   }
   const estimatedInput = estimate()
   // 占用比例的分母是窗口全量（018 Case 1）
   const contextRatio = Math.min(1, estimatedInput / contextWindow(model))
-
-  const provider = createOpenAICompatible({
-    name: 'chime',
-    baseURL: p.baseUrl.trim().replace(/\/+$/, ''),
-    apiKey: p.apiKey,
-    includeUsage: true
-  })
-  // 附加参数（PRD Case 6）：某家独有的非标准开关随每次请求发出，靠配置不靠改代码
-  const extraBody = Object.keys(p.extraParams).length ? p.extraParams : undefined
 
   // 停止时的用量（016 Case 14）：onAbort 交回已完成的各步，逐步加总。
   // 一步都没完成时保持 undefined——页脚按「拿不到不显示」走，不显示 0。

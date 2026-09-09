@@ -8,6 +8,7 @@ import {
   BookOpen,
   Folder,
   FolderPlus,
+  Minimize2,
   Plus,
   Puzzle,
   Search,
@@ -83,6 +84,7 @@ interface Props {
   // 点一行 = 输入框落「/服务名 」并告知 App 该服务已点过（工具进本会话的查询表，之后一直保留）
   slashServices?: { id: number; name: string }[]
   onPickService?: (id: number) => void
+  onPickCommand?: (cmd: 'compact') => void // 内置命令组（018 Case 9）：压缩上下文
   // 自定义 Agent（014 Case 4）
   agents?: { id: number; name: string }[] // 可选清单
   agentSel?: { id: number; name: string } | null // 本会话选用
@@ -114,6 +116,7 @@ export default function Composer({
   kbSel,
   slashServices,
   onPickService,
+  onPickCommand,
   agents,
   agentSel,
   agentLocked,
@@ -164,11 +167,16 @@ export default function Composer({
     }
     slashPrev.current = slashPrefix
   }, [slashPrefix])
-  // 面板分两组（018 Case 5）：技能在前、MCP 服务在后，都只显示名字；按前缀过滤，两组都空就不弹
-  type SlashHit = { kind: 'skill'; name: string } | { kind: 'mcp'; name: string; id: number }
+  // 面板分三组（018 Case 5、Case 9）：内置命令、技能、MCP 服务，都只显示名字；按前缀过滤，全空就不弹
+  type SlashHit =
+    | { kind: 'cmd'; name: string; cmd: 'compact' }
+    | { kind: 'skill'; name: string }
+    | { kind: 'mcp'; name: string; id: number }
+  const COMMANDS: SlashHit[] = [{ kind: 'cmd', name: '压缩上下文', cmd: 'compact' }]
   const slashHits: SlashHit[] =
     slashQuery !== undefined
       ? [
+          ...COMMANDS.filter((c) => c.name.startsWith(slashQuery)),
           ...(skillList ?? [])
             .filter((s) => s.name.startsWith(slashQuery))
             .map((s): SlashHit => ({ kind: 'skill', name: s.name })),
@@ -179,6 +187,12 @@ export default function Composer({
       : []
   const slashPanel = slashHits.length > 0
   const pickHit = (h: SlashHit): void => {
+    if (h.kind === 'cmd') {
+      // 命令立即执行，不落文字
+      onChange('')
+      onPickCommand?.(h.cmd)
+      return
+    }
     onChange(`/${h.name} `)
     if (h.kind === 'mcp') onPickService?.(h.id)
     taRef.current?.focus()
@@ -232,12 +246,12 @@ export default function Composer({
             <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 max-h-[280px] w-[240px] overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-lg">
               {slashHits.map((h, i) => {
                 const first = i === 0 || slashHits[i - 1].kind !== h.kind
-                const Icon = h.kind === 'skill' ? Puzzle : Wrench
+                const Icon = h.kind === 'skill' ? Puzzle : h.kind === 'mcp' ? Wrench : Minimize2
                 return (
                   <div key={`${h.kind}-${h.name}`}>
                     {first && (
                       <div className="px-2.5 pt-1.5 pb-1 text-[12px] text-muted-foreground">
-                        {h.kind === 'skill' ? '技能' : 'MCP 服务'}
+                        {h.kind === 'cmd' ? '命令' : h.kind === 'skill' ? '技能' : 'MCP 服务'}
                       </div>
                     )}
                     <button

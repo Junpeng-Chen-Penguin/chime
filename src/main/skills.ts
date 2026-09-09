@@ -169,11 +169,15 @@ export function makeActivateSkillTool(opts: {
 }): Tool {
   const { names, getHistory } = opts
   const activated = new Set<string>() // 轮内已激活：同轮第二次激活时第一次的返回不在轮初历史里
-  // 该技能正文已在对话记录里且没被压缩掉（流程第 2 步）：扫历史 tool 消息里本工具的成功返回。
-  // L1 与总量闸都豁免本工具，正文只要还在就一定是全文前缀可辨；L2 丢弃的消息已不在数组里
+  // 该技能正文已在对话记录里且没被压缩掉（流程第 2 步）：扫历史 tool 消息里本工具的成功返回，
+  // 以及二级压缩重建的技能正文行（018 七节：user 角色文本里的「### 技能：名字」）。
+  // 一级清除与总量闸都豁免本工具，正文只要还在就一定是全文前缀可辨；三级丢弃的消息已不在数组里
   const inHistory = (name: string): boolean =>
     getHistory().some((m) => {
-      if ((m as { role: string }).role !== 'tool' || !Array.isArray(m.content)) return false
+      const role = (m as { role: string }).role
+      if (role === 'user' && typeof m.content === 'string')
+        return m.content.includes(`### 技能：${name}\n`)
+      if (role !== 'tool' || !Array.isArray(m.content)) return false
       return (
         m.content as { type?: string; toolName?: string; output?: { value?: unknown } }[]
       ).some(

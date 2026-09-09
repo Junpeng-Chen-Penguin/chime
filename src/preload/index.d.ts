@@ -86,7 +86,7 @@ export type TurnItem =
   | { t: 'skillref'; name: string; desc: string } // 斜杠点名 chip（015 Case 6，user 消息专用）
   | { t: 'mcpref'; name: string } // 斜杠点名 MCP 服务（018 Case 5，user 消息专用）：只存名字快照
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
-  | { t: 'compaction'; savedTokens?: number } // 压缩分界线（016 Case 11）
+  | { t: 'compaction'; savedTokens?: number; reason?: string } // 压缩分界线（016 Case 11）
 
 export type ChatEvent =
   | { type: 'turn-start'; streamId: string }
@@ -294,6 +294,10 @@ export interface ChimeApi {
   }) => void
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
+  compactChat: (payload: {
+    convId: string
+    model: string
+  }) => Promise<{ ok: true } | { ok: false; error: string }> // 手动压缩上下文（018 Case 9）
   cardRespond: (payload: {
     streamId: string
     toolCallId: string

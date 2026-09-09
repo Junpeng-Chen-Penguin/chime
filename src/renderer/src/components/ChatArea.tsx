@@ -80,6 +80,8 @@ interface Props {
   ws?: WsSelector // 工作空间选择器（015 Case 1）
   workPanelOpen?: boolean
   onToggleWorkPanel?: () => void // 工作面板常驻开关（右上角）
+  compacting?: boolean // 手动压缩进行中（018 Case 9）：输入框禁用
+  onCompact?: () => void // 斜杠面板「压缩上下文」
 }
 
 export default function ChatArea({
@@ -121,7 +123,9 @@ export default function ChatArea({
   onOpenArtifact,
   ws,
   workPanelOpen,
-  onToggleWorkPanel
+  onToggleWorkPanel,
+  compacting,
+  onCompact
 }: Props): React.JSX.Element {
   const empty = messages.length === 0
   const { scrollRef, onScroll, showJump, scrollToBottom } = useStickToBottom(messages, convId)
@@ -162,8 +166,11 @@ export default function ChatArea({
       models={models}
       onPickModel={onPickModel}
       sending={sending}
-      inputDisabled={authWaiting}
+      inputDisabled={authWaiting || !!compacting}
       askWaiting={!!askItem}
+      onPickCommand={(cmd) => {
+        if (cmd === 'compact') onCompact?.()
+      }}
       value={input}
       onChange={onInput}
       chips={chips}
@@ -242,7 +249,12 @@ export default function ChatArea({
               <div className="mx-auto w-full max-w-[760px] px-8 pt-3 pb-10">
                 <div className="flex flex-col gap-8">
                   {messages.map((m) =>
-                    m.role === 'reminder' ? null : m.role === 'user' ? ( // 提醒消息行不显示（018 四节）
+                    m.role === 'reminder' ? (
+                      // 提醒消息行不显示（018 四节）；二级压缩的摘要行画一条压缩分界线（Case 9）
+                      m.kind === 'summary' ? (
+                        <CompactionLine key={m.id} />
+                      ) : null
+                    ) : m.role === 'user' ? (
                       <UserMsg key={m.id} m={m} onOpenArtifact={onOpenArtifact} />
                     ) : (
                       <AssistantMsg
@@ -343,6 +355,23 @@ function TitleBar({
     >
       {title}
     </button>
+  )
+}
+
+// 压缩分界线：虚线嵌文字；省下多少估不出（或二级摘要）时只放一个圆点
+function CompactionLine({ savedTokens }: { savedTokens?: number }): React.JSX.Element {
+  return (
+    <div className="my-3 flex w-full items-center gap-3">
+      <div className="min-w-[24px] flex-1 border-t border-dashed border-border" />
+      {savedTokens ? (
+        <span className="flex-none text-[12px] text-muted-foreground">
+          已压缩上下文，节省约 {savedTokens.toLocaleString()} tokens
+        </span>
+      ) : (
+        <span className="size-1.5 flex-none rounded-full bg-muted-foreground/50" />
+      )}
+      <div className="min-w-[24px] flex-1 border-t border-dashed border-border" />
+    </div>
   )
 }
 
@@ -557,20 +586,8 @@ function AssistantMsg({
               </button>
             )
           case 'compaction':
-            // 压缩分界线（016 Case 11）：虚线嵌文字；省下多少估不出时只放一个圆点
-            return (
-              <div key={i} className="my-3 flex w-full items-center gap-3">
-                <div className="min-w-[24px] flex-1 border-t border-dashed border-border" />
-                {it.savedTokens ? (
-                  <span className="flex-none text-[12px] text-muted-foreground">
-                    已压缩上下文，节省约 {it.savedTokens.toLocaleString()} tokens
-                  </span>
-                ) : (
-                  <span className="size-1.5 flex-none rounded-full bg-muted-foreground/50" />
-                )}
-                <div className="min-w-[24px] flex-1 border-t border-dashed border-border" />
-              </div>
-            )
+            // 压缩分界线（016 Case 11）：三级丢弃时随轮落库
+            return <CompactionLine key={i} savedTokens={it.savedTokens} />
           case 'boundary':
             // 016 Case 11：工具上限的边界行去掉（信息并进失败的调用行）；error 边界由错误卡呈现
             return null

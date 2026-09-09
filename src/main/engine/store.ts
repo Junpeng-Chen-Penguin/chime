@@ -68,8 +68,9 @@ export type TurnItem =
   | { t: 'mcpref'; name: string }
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
   // 压缩分界线（016 Case 11）：这一轮开头丢掉了最早的整轮对话，画在时间线上、随轮落库。
-  // savedTokens 是裁剪前后各估算一次的差值；估不出就不带，渲染层只画线
-  | { t: 'compaction'; savedTokens?: number }
+  // savedTokens 是裁剪前后各估算一次的差值；估不出就不带，渲染层只画线。
+  // reason（018 七节）：走到整对丢弃的原因（摘要请求出错 / 返回里没有 summary 标签 / 连续失败已停用 / 重建后仍超线），验证记录引用
+  | { t: 'compaction'; savedTokens?: number; reason?: string }
 
 // 016 起状态拆两字段：status 记走到哪一步，end_reason 记为什么不是正常完成。
 // running = 流式进行中（一轮开始即落库）；waiting = 等卡中；done = 已结束
@@ -102,6 +103,10 @@ export function markConvActive(convId: string): void {
 }
 export function unmarkConvActive(convId: string): void {
   activeConvs.delete(convId)
+}
+// 会话有轮在跑（018 七节）：手动压缩不能与进行中的轮抢写消息表
+export function isConvActive(convId: string): boolean {
+  return activeConvs.has(convId)
 }
 
 // 用户消息可带 chip（013 Case 2）：items 只收 ref 一种（用户消息没有别的过程件）。

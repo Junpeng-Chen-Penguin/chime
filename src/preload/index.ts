@@ -63,6 +63,9 @@ const api = {
   retryChat: (payload: { streamId: string; convId: string; model: string }) =>
     ipcRenderer.send('chat:retry', payload),
   stopChat: (streamId: string) => ipcRenderer.send('chat:stop', streamId),
+  // 手动压缩上下文（018 Case 9）：完成或失败才返回
+  compactChat: (payload: { convId: string; model: string }) =>
+    ipcRenderer.invoke('chat:compact', payload),
   // 授权卡回应（同意 / 拒绝；写授权卡另有「总是允许」）
   cardRespond: (payload: {
     streamId: string

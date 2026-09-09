@@ -71,6 +71,59 @@ export const buildMcpAdded = (serviceName: string, instructions: string): string
 export const buildMcpNamed = (serviceName: string): string =>
   wrap(`用户为这条消息指定了服务「${serviceName}」，优先考虑用它的工具处理。`)
 
+// ── 二级压缩重建的几条（018 七节）──────────────────────────────
+// 末段照 Claude Code 的 getCompactUserSummaryMessage：接着做、不复述摘要、不写开场白
+export const buildSummary = (summary: string): string =>
+  wrap(
+    `这是接续之前的对话，之前的上下文已经用完。下面是前半段对话的摘要。\n\n${summary.trim()}\n\n接着做。不要问用户任何问题，不要复述这份摘要，不要写「我继续」这类开场白，当作中间没有断过。`
+  )
+
+export const SKILL_TRUNCATION_MARK =
+  '[……技能正文因压缩被截断，需要完整内容时用 read_file 读技能目录下的 SKILL.md]'
+
+export const buildSkillBodies = (
+  skills: { name: string; dir: string; body: string }[]
+): string =>
+  wrap(
+    `本次会话激活过以下技能，继续按它们的正文行事。\n\n${skills
+      .map((s) => `### 技能：${s.name}\n目录：${s.dir}\n\n${s.body}`)
+      .join('\n\n---\n\n')}`
+  )
+
+// 规模写成「约 N 万字」这类用户视角的量；末句与超限摘要里那句同理：贴着内容再说一次不要向用户提编号
+const sizeText = (chars: number): string =>
+  chars >= 10000 ? `约 ${Math.round(chars / 10000)} 万字` : `约 ${Math.round(chars / 1000)} 千字`
+
+export const buildResultIndex = (
+  results: { id: number; display: string; chars: number }[]
+): string =>
+  wrap(
+    `之前的对话里存下了这些工具返回，完整内容还在。需要时用 grep_result 搜关键词定位，再用 read_result 按行号读取。不要在给用户的回答里提到编号或这套存取机制。\n\n${results
+      .map((r) => `- #${r.id} ${r.display}，${sizeText(r.chars)}`)
+      .join('\n')}`
+  )
+
+// 会话中途点名过的服务说明：照抄 mcp_added 行的正文，每个服务一段
+export function mcpAddedContents(convId: string): string[] {
+  return getDb()
+    .prepare(
+      `SELECT content FROM message WHERE conversation_id = ? AND role = '${REMINDER_ROLE}' AND kind = 'mcp_added' ORDER BY created_at, rowid`
+    )
+    .all(convId)
+    .map((r) => (r as { content: string }).content)
+}
+
+// 上一次压缩重建时记下的已激活技能名（skill_bodies 行的 items.skills）：再次压缩时接着用，
+// 那时第一次压缩前的激活记录已经不在历史里了
+export function previousSkillBodies(convId: string): string[] {
+  const out: string[] = []
+  for (const r of rowsOf(convId, ['skill_bodies'])) {
+    const v = parseItems(r.items).skills
+    if (Array.isArray(v)) for (const n of v) if (typeof n === 'string' && !out.includes(n)) out.push(n)
+  }
+  return out
+}
+
 // ── 落库与派生查询 ─────────────────────────────────────────────
 export function insertReminder(
   convId: string,

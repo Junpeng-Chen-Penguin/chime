@@ -252,6 +252,25 @@ function App(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 手动压缩上下文（018 Case 9 Feature 5）：与自动压缩同一流程，期间输入框禁用；
+  // 成功后重新水合（摘要行画成分界线），失败弹提示、对话不变
+  const [compacting, setCompacting] = useState(false)
+  const compactNow = async (): Promise<void> => {
+    if (!activeId || activeId === draftId || sending || compacting) return
+    setCompacting(true)
+    try {
+      const r = await window.api.compactChat({ convId: activeId, model: activeModel })
+      if (!r.ok) {
+        toastError('压缩上下文', undefined, r.error)
+        return
+      }
+      const msgs = await window.api.getMessages(activeId)
+      chat.hydrate(activeId, msgs.map(toMsg))
+    } finally {
+      setCompacting(false)
+    }
+  }
+
   // 切到已有会话时按需水合
   useEffect(() => {
     if (!activeId || activeId === draftId || chat.threads[activeId]) return
@@ -565,6 +584,8 @@ function App(): React.JSX.Element {
           onExpand={() => setCollapsed(false)}
           messages={messages}
           sending={sending}
+          compacting={compacting}
+          onCompact={compactNow}
           contextRatio={chat.contextRatio[activeId] ?? 0}
           input={input}
           onInput={(v) => setInputs((m) => ({ ...m, [activeId]: v }))}

@@ -619,10 +619,35 @@ export function findToolResultIdByCallId(toolCallId: string): number | null {
 }
 
 // 跨结果搜索用：本会话全部已存结果（按编号升序）
-export function listToolResults(conversationId: string): { id: number; content: string }[] {
+export function listToolResults(
+  conversationId: string
+): { id: number; content: string; toolName: string; chars: number }[] {
   return db
-    .prepare('SELECT id, content FROM tool_result WHERE conversation_id = ? ORDER BY id')
-    .all(conversationId) as { id: number; content: string }[]
+    .prepare(
+      'SELECT id, content, tool_name AS toolName, chars FROM tool_result WHERE conversation_id = ? ORDER BY id'
+    )
+    .all(conversationId) as { id: number; content: string; toolName: string; chars: number }[]
+}
+
+// 二级压缩的位置与失败计数（018 七节）
+export function setConversationCompaction(id: string, compactFrom: number, failures: number): void {
+  db.prepare('UPDATE conversation SET compact_from = ?, compact_failures = ? WHERE id = ?').run(
+    compactFrom,
+    failures,
+    id
+  )
+}
+
+export function getConversationCompaction(id: string): { compactFrom: number | null; failures: number } {
+  const r = db
+    .prepare('SELECT compact_from AS cf, compact_failures AS f FROM conversation WHERE id = ?')
+    .get(id) as { cf: number | null; f: number } | undefined
+  return { compactFrom: r?.cf ?? null, failures: r?.f ?? 0 }
+}
+
+export function bumpConversationCompactFailures(id: string): number {
+  db.prepare('UPDATE conversation SET compact_failures = compact_failures + 1 WHERE id = ?').run(id)
+  return getConversationCompaction(id).failures
 }
 
 export function getMessages(conversationId: string): MessageRow[] {
