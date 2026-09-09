@@ -37,7 +37,7 @@ import Composer, {
   type WsSelector
 } from './Composer'
 
-// 规则 5：单条消息上限（字符），发送前就地拦下；与主进程常量同值（engine/budget SEND_CHAR_LIMIT）
+// 规则 5：单条消息上限（字符），发送前就地拦下。只在渲染层用，主进程不再有同名常量（018 二节）
 const SEND_CHAR_LIMIT = 30000
 
 interface Props {

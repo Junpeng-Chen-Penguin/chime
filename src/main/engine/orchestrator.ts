@@ -28,7 +28,14 @@ import { humanize, markVendorHealth } from '../ai'
 import { builtinDisplay } from '../../shared/builtinTools'
 import { buildSystemPrompt, type KbEnv } from './prompts'
 import { getMcpInstructions, setActiveRootsProvider } from '../mcp/client'
-import { budgetFor, estimateTokens, recordUsage } from './budget'
+import {
+  applyRatio,
+  contextWindow,
+  estimateTokens,
+  recordUsage,
+  toolsTokens,
+  triggerLine
+} from './budget'
 import {
   makeSearchTool,
   makeMcpTools,
@@ -488,26 +495,29 @@ async function streamCore(core: {
     turnSkills,
     activeSkillNames.length > 0
   )
-  const budget = budgetFor(model)
+  // 触发线（018 二节）：窗口 − 压缩预留。估算 = 工具清单 + 系统提示词 + 消息序列，各乘该模型的校准比值。
+  // 工具清单改动前不进估算，它占单次请求的四成上下
+  const line = triggerLine(model)
+  const toolsTok = applyRatio(model, toolsTokens(turnTools))
   // 历史加载放在 turnTools 组装之后（014 Case 5）：把本轮实际挂载的工具名传进去，
   // 已消失的工具在历史返回里标「已不可用」——模型会把历史当成当前能力的依据（实测）
   const bundle = loadHistoryMessages(convId, new Set(Object.keys(turnTools)))
   history = bundle.messages
   const sizeOf = (m: ModelMessage): number =>
-    estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
-  const estimate = (): number => estimateTokens(system) + history.reduce((s, m) => s + sizeOf(m), 0)
+    estimateTokens(model, typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
+  const estimate = (): number =>
+    toolsTok + estimateTokens(model, system) + history.reduce((s, m) => s + sizeOf(m), 0)
 
   // 压力分级（07-14 核心改造，Claude Code 微压缩同构）：
-  // L0 压力低不动；L1 超 70% 从最老的工具返回清起、换原地指针——只清数据不动对话主干，
+  // 不到触发线不动；到线从最老的工具返回清起、换原地指针——只清数据不动对话主干，
   // 保最近 5 条；可省不足 2 万 token 不动手（清除打破服务端缓存，要么省一大笔要么不折腾）；
   // 检索返回不清（已定点转换成文档名）、提问卡问答不清（体积小且是关键上下文）、
   // 技能正文不清（是行事指令不是外部数据；清了摘要样例仍带头部标注，去重会误判已激活）。
   // 被清内容幂等入库（同一调用复用编号），模型凭编号随时查回，不必重调外部接口。
-  const L1_PRESSURE = 0.7
   const RELIEF_KEEP_RECENT = 5
   const RELIEF_MIN_SAVE_TOKENS = 20_000
   const RELIEF_SKIP = new Set(['search_knowledge_base', ASK_TOOL_NAME, ACTIVATE_TOOL_NAME])
-  if (estimate() > budget * L1_PRESSURE) {
+  if (estimate() >= line) {
     const candidates = bundle.toolOutputs.filter((c) => !RELIEF_SKIP.has(c.toolName))
     const clearable = candidates.slice(0, Math.max(0, candidates.length - RELIEF_KEEP_RECENT))
     const partOf = (c: (typeof clearable)[number]): { output: { value: string } } | null => {
@@ -517,10 +527,13 @@ async function streamCore(core: {
         ? (part as { output: { value: string } })
         : null
     }
-    const savable = clearable.reduce((s, c) => s + estimateTokens(partOf(c)?.output.value ?? ''), 0)
+    const savable = clearable.reduce(
+      (s, c) => s + estimateTokens(model, partOf(c)?.output.value ?? ''),
+      0
+    )
     if (savable >= RELIEF_MIN_SAVE_TOKENS) {
       for (const c of clearable) {
-        if (estimate() <= budget * L1_PRESSURE) break
+        if (estimate() < line) break
         const p = partOf(c)
         if (!p || p.output.value.length < 500) continue // 太小的不清：指针比内容还长
         const id =
@@ -541,7 +554,7 @@ async function streamCore(core: {
   // tool 消息在队首，DeepSeek 对此报 400（tool 消息必须跟在 tool_calls 之后）——切完把队首孤立 tool 丢掉
   const estimateBeforeDrop = estimate()
   let droppedOldest = false
-  while (history.length > 2 && estimate() > budget) {
+  while (history.length > 2 && estimate() >= line) {
     history = history.slice(2)
     while (history.length && (history[0] as { role?: string }).role === 'tool')
       history = history.slice(1)
@@ -555,7 +568,8 @@ async function streamCore(core: {
     persistRunning()
   }
   const estimatedInput = estimate()
-  const contextRatio = Math.min(1, estimatedInput / budget)
+  // 占用比例的分母是窗口全量（018 Case 1）
+  const contextRatio = Math.min(1, estimatedInput / contextWindow(model))
 
   const provider = createOpenAICompatible({
     name: 'chime',
@@ -873,7 +887,8 @@ async function streamCore(core: {
 
     const usage = await result.usage
     const input = usage.inputTokens ?? 0
-    recordUsage(estimatedInput, input)
+    // 校准用首次请求的实测（018 二节）：估算的是轮初那一次组装，与它配对的是第一次请求
+    recordUsage(model, estimatedInput, streamed[0]?.inputTokens ?? 0)
     markVendorHealth(p.vendor, true)
     finish(
       undefined, // 正常完成：无结束原因
