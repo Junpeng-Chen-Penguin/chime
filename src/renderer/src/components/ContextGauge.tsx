@@ -9,6 +9,7 @@ import type { ContextUsage } from '../../../preload/index.d'
 import { cn } from '@/lib/utils'
 
 const COMPACT_RESERVE = 33_000 // 与主进程 budget.ts 同值：摘要输出预留 20000 + 缓冲 13000
+const WARN_RATIO = 0.8 // 占用到触发线的这个比例，进度圈变警告色
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
@@ -80,6 +81,9 @@ export function ContextGauge({ context }: { context: ContextUsage | null }): Rea
   const used = usedTokens(context)
   const shown = context.actualInput ?? used
   const ratio = Math.min(1, used / context.window)
+  // 接近自动压缩（Case 10 Feature 1 功能点 5）：估算占用到触发线的 80% 时圈变警告色。
+  // 阈值按触发线不按窗口：触发线占窗口的比例随模型变（1M 是 96.7%，128K 是 74.8%）
+  const warn = used >= (context.window - COMPACT_RESERVE) * WARN_RATIO
   const r = 6
   const circ = 2 * Math.PI * r
   const cats = categoriesOf(context)
@@ -89,7 +93,10 @@ export function ContextGauge({ context }: { context: ContextUsage | null }): Rea
         onClick={() => setOpen((v) => !v)}
         title=""
         aria-label="上下文占用"
-        className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted"
+        className={cn(
+          'grid size-7 place-items-center rounded-md transition-colors hover:bg-muted',
+          warn ? 'text-amber-600' : 'text-muted-foreground'
+        )}
       >
         <svg width="16" height="16" viewBox="0 0 16 16" className="-rotate-90">
           <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
@@ -109,6 +116,7 @@ export function ContextGauge({ context }: { context: ContextUsage | null }): Rea
       {!open && (
         <div className="pointer-events-none absolute bottom-[calc(100%+6px)] left-1/2 z-20 hidden -translate-x-1/2 rounded-md bg-foreground px-2 py-1 text-[11px] whitespace-nowrap text-background group-hover:block">
           上下文 {fmtTokens(shown)} / {fmtTokens(context.window)} ({pct(used, context.window)})
+          {warn ? '，接近自动压缩' : ''}
         </div>
       )}
       {/* 面板右边缘对齐进度圈、向左展开：进度圈在输入框右下，左对齐会被窗口右边缘裁掉 */}

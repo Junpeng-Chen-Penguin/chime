@@ -716,10 +716,12 @@ app.whenReady().then(() => {
         const { listSkills } = await import('./skills')
         const slashOf = (
           text: string
-        ): { slashSkill?: string; slashMcp?: number; mcpPicked?: number[] } => {
+        ): { slashSkill?: string; slashMcp?: number; mcpPicked?: number[]; command?: 'compact' } => {
           if (!text.startsWith('/')) return {}
           const name = text.slice(1).split(/\s+/)[0]
           if (!name) return {}
+          // 018 Case 9：斜杠面板的内置命令，评估里同样以「/压缩上下文」触发手动压缩
+          if (name === '压缩上下文') return { command: 'compact' }
           if (listSkills().some((s) => s.name === name)) return { slashSkill: name }
           const svc = listMcpServices().find((s) => s.enabled && s.name === name)
           return svc ? { slashMcp: svc.id, mcpPicked: [svc.id] } : {}
