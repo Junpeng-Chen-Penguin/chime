@@ -85,6 +85,7 @@ export interface ContextUsage {
   window: number
   actualInput: number | null // 本轮第一次请求的实测输入 tokens，收场时回填；面板标题用它
   builtinTools: number
+  mcpTools: number // 工具名清单消息（占窗口的那部分；定义本身在本地查询表里，见 deferred）
   systemPrompt: number
   skills: number // 技能清单消息、技能新增消息、重建的技能正文，加上激活技能工具的返回
   messages: number // 消息序列其余全部

@@ -131,20 +131,44 @@ export function searchDeferred(table: DeferredTool[], query: string): DeferredTo
     .map((x) => x.e)
 }
 
-const SEARCH_DESCRIPTION = `查找本会话可用的其他工具。除清单里这些内置工具之外，会话里接入的服务还提供更多工具，它们的定义没有放进清单，需要时用本工具按自然语言描述查找。
-用法：query 写你要做的事或要查的对象，如「查询项目的授权状态」「提交续签汇报」。一次最多返回 3 个最相关的工具，每个带名字、说明和完整参数定义；拿到定义后用 tool_invoke 调用，填工具名与参数。
+const SEARCH_DESCRIPTION = `查找本会话可用的其他工具。除清单里这些内置工具之外，会话里接入的服务还提供更多工具，它们的名字在对话里的工具名清单里，定义没有放进清单，需要时用本工具取得。
+用法：query 写工具名，或写你要做的事、要查的对象，如「查询项目的授权状态」「提交续签汇报」。一次最多返回 3 个最相关的工具，每个带名字、说明和完整参数定义；拿到定义后用 tool_invoke 调用，填工具名与参数。
+query 留空时返回本会话全部服务工具的名字和一句话说明，按服务分组，不带参数定义，用来浏览有什么可用。
 没有匹配时返回说明和本会话有哪些服务，可以换个说法再找；确实没有对应工具就如实告诉用户做不了。`
+
+// 一句话说明：说明的第一行，超过 80 字截断
+function brief(description: string): string {
+  const line = description.split('\n').find((l) => l.trim())?.trim() ?? ''
+  return line.length > 80 ? line.slice(0, 80) + '…' : line
+}
+
+export function browseDeferred(table: DeferredTool[]): { service: string; tools: { name: string; description: string }[] }[] {
+  const groups = new Map<string, { name: string; description: string }[]>()
+  for (const e of table) {
+    const g = groups.get(e.serviceName) ?? []
+    g.push({ name: e.key, description: brief(e.description) })
+    groups.set(e.serviceName, g)
+  }
+  return [...groups].map(([service, tools]) => ({ service, tools }))
+}
 
 export function makeToolSearchTool(table: DeferredTool[]): Tool {
   return tool({
     description: SEARCH_DESCRIPTION,
+    // 类型上写成必填让 tool() 的重载能选中；JSON Schema 里不设 required，模型可以不传
     inputSchema: jsonSchema<{ query: string }>({
       type: 'object',
-      properties: { query: { type: 'string', description: '要做的事或要查的对象，自然语言' } },
-      required: ['query']
+      properties: {
+        query: { type: 'string', description: '工具名，或要做的事、要查的对象；留空浏览全部' }
+      }
     }),
-    execute: async ({ query }) => {
-      const hits = typeof query === 'string' ? searchDeferred(table, query) : []
+    execute: async ({ query }): Promise<Record<string, unknown>> => {
+      const q = typeof query === 'string' ? query.trim() : ''
+      if (!q) {
+        const services = browseDeferred(table)
+        return services.length ? { services } : { notice: '本会话没有接入任何服务' }
+      }
+      const hits = searchDeferred(table, q)
       if (!hits.length) {
         const services = [...new Set(table.map((e) => e.serviceName))]
         return {

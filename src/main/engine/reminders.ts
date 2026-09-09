@@ -14,7 +14,7 @@ export type ReminderKind =
   | 'date_change'
   | 'skill_added'
   | 'mcp_added'
-  | 'mcp_named'
+  | 'tool_listing' // 延迟工具的名字清单（照 Claude Code 的 deferred_tools_delta）：会话开始全量、新加服务发增量、压缩后重发全量
   | 'summary'
   | 'skill_bodies'
   | 'result_index'
@@ -68,8 +68,14 @@ export const buildMcpAdded = (serviceName: string, instructions: string): string
   )
 }
 
-export const buildMcpNamed = (serviceName: string): string =>
-  wrap(`用户为这条消息指定了服务「${serviceName}」，优先考虑用它的工具处理。`)
+// 工具名清单：只列名字、按服务分组，说明与参数定义由模型调 tool_search 取（Claude Code 同样只播报名字）。
+// 分组标题是服务名，用户以「/服务名」开头的消息靠它对上是哪个服务
+export const buildToolListing = (groups: { serviceName: string; names: string[] }[]): string =>
+  wrap(
+    `以下工具来自本会话接入的服务，现在可以用了：定义没有放进工具清单，用 tool_search 按名字或用途取得定义，再用 tool_invoke 调用。\n\n${groups
+      .map((g) => `## ${g.serviceName}\n${g.names.map((n) => `- ${n}`).join('\n')}`)
+      .join('\n\n')}`
+  )
 
 // ── 二级压缩重建的几条（018 七节）──────────────────────────────
 // 末段照 Claude Code 的 getCompactUserSummaryMessage：接着做、不复述摘要、不写开场白
@@ -184,6 +190,16 @@ export function skillScope(convId: string): string[] {
 // 某服务在本会话播报过说明没有（Case 5 Feature 3：第一次点名才播报）
 export function mcpAnnounced(convId: string, serviceId: number): boolean {
   return rowsOf(convId, ['mcp_added']).some((r) => parseItems(r.items).serviceId === serviceId)
+}
+
+// 哪些服务的工具名已经播报过：全部 tool_listing 行的 items.serviceIds 并集，压缩位置之前的也算
+export function toolsAnnounced(convId: string): Set<number> {
+  const out = new Set<number>()
+  for (const r of rowsOf(convId, ['tool_listing'])) {
+    const v = parseItems(r.items).serviceIds
+    if (Array.isArray(v)) for (const id of v) if (typeof id === 'number') out.add(id)
+  }
+  return out
 }
 
 // 首条消息的 created_at：改动前创建的会话补两行时排在它前面

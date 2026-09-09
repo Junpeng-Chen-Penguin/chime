@@ -37,6 +37,7 @@ import {
   buildSummary,
   buildSkillBodies,
   buildResultIndex,
+  buildToolListing,
   mcpAddedContents,
   previousSkillBodies,
   SKILL_TRUNCATION_MARK,
@@ -135,9 +136,12 @@ export function rebuildAfterSummary(o: {
   summarized: ModelMessage[] // 摘要范围，找激活过的技能用
   skillEntries: SkillEntry[] // 本会话的技能范围（skill_listing 重新生成）
   displayOf: (toolName: string) => string
+  deferred: DeferredTool[] // 本会话的延迟工具查询表，工具名清单重发全量用
   createdAtBase?: number // 重试路径：该轮首行的 created_at − 7；缺省当前时间
 }): void {
-  const at = o.createdAtBase ?? Date.now()
+  // 自动压缩：重建行的 created_at 从当前时间往前退 16 毫秒起逐行加 1。紧接着落库的追加消息与用户消息取当前时间，
+  // 同一毫秒内也排在重建行之后（之前用 Date.now() + i，最后一两行会排到用户消息后面）
+  const at = o.createdAtBase ?? Date.now() - 16
   let i = 0
   const today = todayText()
   insertReminder(o.convId, 'user_context', buildUserContext(today), { date: dateKey(today) }, at + i++)
@@ -188,6 +192,22 @@ export function rebuildAfterSummary(o: {
     )
   for (const content of mcpAddedContents(o.convId))
     insertReminder(o.convId, 'mcp_replay', content, null, at + i++)
+  // 工具名清单重发全量（照 Claude Code 压缩后重新播报全部延迟工具）：之前发过的都在摘要范围里没了
+  if (o.deferred.length) {
+    const groups = new Map<number, { serviceName: string; names: string[] }>()
+    for (const e of o.deferred) {
+      const g = groups.get(e.serviceId) ?? { serviceName: e.serviceName, names: [] }
+      g.names.push(e.key)
+      groups.set(e.serviceId, g)
+    }
+    insertReminder(
+      o.convId,
+      'tool_listing',
+      buildToolListing([...groups.values()]),
+      { serviceIds: [...groups.keys()] },
+      at + i++
+    )
+  }
 
   setConversationCompaction(o.convId, at, 0)
 }
@@ -258,6 +278,7 @@ export async function compactIfNeeded(o: {
   skillEntries: SkillEntry[]
   displayOf: (toolName: string) => string
   keyOf: (fullName: string) => string
+  deferred: DeferredTool[]
   retry: boolean
 }): Promise<CompactOutcome> {
   let { history, bundle } = o
@@ -320,6 +341,7 @@ export async function compactIfNeeded(o: {
         summarized: history.slice(0, cut),
         skillEntries: o.skillEntries,
         displayOf: o.displayOf,
+        deferred: o.deferred,
         createdAtBase: base
       })
       bundle = loadHistoryMessages(o.convId, o.keyOf)
@@ -408,7 +430,8 @@ export async function compactNow(
     summary: res.text,
     summarized: bundle.messages,
     skillEntries,
-    displayOf
+    displayOf,
+    deferred
   })
   return { ok: true }
 }

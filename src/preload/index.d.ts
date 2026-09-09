@@ -115,6 +115,7 @@ export interface ContextUsage {
   window: number
   actualInput: number | null
   builtinTools: number
+  mcpTools: number // 工具名清单消息占的窗口
   systemPrompt: number
   skills: number
   messages: number

@@ -40,7 +40,8 @@ import {
   buildDateChange,
   buildSkillAdded,
   buildMcpAdded,
-  buildMcpNamed,
+  buildToolListing,
+  toolsAnnounced,
   type ReminderKind,
   type SkillEntry
 } from './reminders'
@@ -496,9 +497,12 @@ async function streamCore(core: {
         at + 1
       )
   }
+  // 本会话的延迟工具查询表（018 五节）：会话开始与点名新服务时追加，只增不减
+  const deferred = ensureDeferredTable(convId, mcpSelection)
   // 追加消息（018 四节）：这一刻算出本轮有哪些变化要告知模型，先放内存，压缩完再落库。
-  // 次序固定：日期已变更 → 技能清单新增 → 用户新增了服务 → 用户为这条消息指定了服务。
-  // 重试时这几条上一次已落库，不再生成
+  // 次序固定：日期已变更 → 技能清单新增 → 用户新增了服务 → 工具名清单。
+  // 工具名清单照 Claude Code 的 deferred_tools_delta：查询表里有、还没播报过名字的服务，把它们的工具名发一次——
+  // 新会话第一轮就是全量，中途点名新服务就是那一个服务的。重试时这几条上一次已落库，不再生成
   const slashName = core.slashSkill && skillLib.has(core.slashSkill) ? core.slashSkill : null
   const scope = skillScope(convId)
   const pendingRows: { kind: ReminderKind; content: string; items: Record<string, unknown> | null }[] =
@@ -518,19 +522,27 @@ async function streamCore(core: {
         items: { skills: [slashName] }
       })
     const named = core.slashMcp !== undefined ? getMcpService(core.slashMcp) : null
-    if (named) {
-      if (!mcpAnnounced(convId, named.id)) {
-        const instr = getMcpInstructions(new Set([named.id]))[0]?.instructions ?? ''
-        pendingRows.push({
-          kind: 'mcp_added',
-          content: buildMcpAdded(named.name, instr),
-          items: { serviceId: named.id }
-        })
+    if (named && !mcpAnnounced(convId, named.id)) {
+      const instr = getMcpInstructions(new Set([named.id]))[0]?.instructions ?? ''
+      pendingRows.push({
+        kind: 'mcp_added',
+        content: buildMcpAdded(named.name, instr),
+        items: { serviceId: named.id }
+      })
+    }
+    const announced = toolsAnnounced(convId)
+    const fresh = deferred.filter((e) => !announced.has(e.serviceId))
+    if (fresh.length) {
+      const groups = new Map<number, { serviceName: string; names: string[] }>()
+      for (const e of fresh) {
+        const g = groups.get(e.serviceId) ?? { serviceName: e.serviceName, names: [] }
+        g.names.push(e.key)
+        groups.set(e.serviceId, g)
       }
       pendingRows.push({
-        kind: 'mcp_named',
-        content: buildMcpNamed(named.name),
-        items: { serviceId: named.id }
+        kind: 'tool_listing',
+        content: buildToolListing([...groups.values()]),
+        items: { serviceIds: [...groups.keys()] }
       })
     }
   }
@@ -539,7 +551,6 @@ async function streamCore(core: {
   // MCP 工具不进清单：定义存进本会话的查询表，模型用 tool_search 找回、tool_invoke 转接调用。
   // history 在下方组装后才赋值，激活工具经 getHistory 延迟取（执行必在流式循环内，晚于赋值）
   let history: ModelMessage[] = []
-  const deferred = ensureDeferredTable(convId, mcpSelection)
   const keyOf = (fullName: string): string =>
     deferred.find((e) => e.fullName === fullName)?.key ?? bareName(fullName)
   // 转接调用要弹授权卡时先把调用行置 pending（渲染层靠它弹卡、禁用输入框）；行还没建时记下来，建行时补
@@ -647,13 +658,24 @@ async function streamCore(core: {
     skillEntries: skillEntries(scope),
     displayOf,
     keyOf,
+    deferred,
     retry: !core.saveUser
   })
+  const bundleBefore = bundle
   history = outcome.history
   bundle = outcome.bundle
   // 本轮的行现在才写（018 四节）：追加消息在前、用户消息在后，都排在压缩重建的行之后；
   // 写完追加到内存里的 history 末尾，再写空壳 running 行（016 Case 13）。重试时这几行已在库里，只写空壳
   if (core.saveUser) {
+    // 这一轮同时点名了新服务又触发了压缩时，重建已经把全量工具名清单写进去了，本轮那条增量不再写
+    if (outcome.dropped || outcome.bundle !== bundleBefore) {
+      const done = toolsAnnounced(convId)
+      const i = pendingRows.findIndex((r) => r.kind === 'tool_listing')
+      if (i >= 0) {
+        const ids = (pendingRows[i].items?.serviceIds as number[]) ?? []
+        if (ids.every((id) => done.has(id))) pendingRows.splice(i, 1)
+      }
+    }
     for (const r of pendingRows) insertReminder(convId, r.kind, r.content, r.items)
     saveUserMessage(convId, core.text, core.refs)
     history = [
@@ -686,11 +708,20 @@ async function streamCore(core: {
   const skillMsgIdx = new Set(
     bundle.reminders.filter((r) => skillKinds.has(r.kind)).map((r) => r.msgIdx)
   )
+  // 工具名清单消息计入「MCP 工具」分类，不算进对话
+  const mcpMsgIdx = new Set(
+    bundle.reminders.filter((r) => r.kind === 'tool_listing').map((r) => r.msgIdx)
+  )
   let skillTok = 0
+  let mcpTok = 0
   const perSkill = new Map<string, number>(activeSkillNames.map((n) => [n, 0]))
   history.forEach((m, i) => {
     if (skillMsgIdx.has(i)) {
       skillTok += sizeOf(m)
+      return
+    }
+    if (mcpMsgIdx.has(i)) {
+      mcpTok += sizeOf(m)
       return
     }
     if ((m as { role: string }).role !== 'tool' || !Array.isArray(m.content)) return
@@ -720,9 +751,10 @@ async function streamCore(core: {
     window: contextWindow(model),
     actualInput: null,
     builtinTools: toolsTok,
+    mcpTools: mcpTok,
     systemPrompt: estimateTokens(model, system),
     skills: skillTok,
-    messages: Math.max(0, history.reduce((s, m) => s + sizeOf(m), 0) - skillTok),
+    messages: Math.max(0, history.reduce((s, m) => s + sizeOf(m), 0) - skillTok - mcpTok),
     deferred: {
       tokens: deferredTok,
       count: deferred.length,
