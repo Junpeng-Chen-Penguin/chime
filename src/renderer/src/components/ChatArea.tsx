@@ -174,7 +174,8 @@ export default function ChatArea({
       onPickModel={onPickModel}
       sending={sending}
       context={context}
-      inputDisabled={authWaiting || !!compacting}
+      inputDisabled={authWaiting}
+      compacting={!!compacting}
       askWaiting={!!askItem}
       onPickCommand={(cmd) => {
         if (cmd === 'compact') onCompact?.()

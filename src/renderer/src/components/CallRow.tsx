@@ -14,6 +14,7 @@ import {
   MessageCircleQuestion,
   Puzzle,
   Search,
+  SearchCode,
   Sparkles,
   Table,
   Wrench,
@@ -25,6 +26,24 @@ import type { SearchToolResult, TurnItem } from '../../../preload/index.d'
 import { diffLines } from 'diff'
 
 type ToolItem = Extract<TurnItem, { t: 'tool' }>
+
+// 查找工具的返回（018 Case 2）：命中列表 / 留空浏览的分组列表 / 无命中说明
+interface ToolSearchResult {
+  tools?: { name: string; description: string }[]
+  services?: { service: string; tools: { name: string; description: string }[] }[]
+  notice?: string
+}
+function toolSearchQuery(args: Record<string, unknown> | undefined): string {
+  const q = args && typeof args.query === 'string' ? args.query.trim() : ''
+  return q || '全部工具'
+}
+function toolSearchDesc(r: ToolSearchResult): string {
+  if (r.tools?.length) return `找到 ${r.tools.length} 个工具`
+  if (r.services) return `全部 ${r.services.reduce((n, g) => n + g.tools.length, 0)} 个工具`
+  return '没有匹配的工具'
+}
+// 一句话说明：说明的第一行
+const firstLine = (d: string): string => d.split('\n').find((l) => l.trim())?.trim() ?? ''
 type CallItem = Extract<TurnItem, { t: 'reasoning' | 'tool' }>
 
 // ── 图标映射（键 = 函数名；思考与 MCP 是渲染层固定配置，不进登记表）──
@@ -39,7 +58,8 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   list_dir: Folder,
   write_file: FilePlus,
   edit_file: FilePen,
-  activate_skill: Puzzle
+  activate_skill: Puzzle,
+  tool_search: SearchCode // 018 Case 2 Feature 7
 }
 
 // ── 描述位截断（Case 5 功能点 6）：35 字上限，路径中间截断，其余尾部截断，title 看全文 ──
@@ -160,6 +180,10 @@ function toolFace(item: ToolItem, mcpRunning: boolean): RowFace {
       }
       case 'activate_skill':
         return { desc: truncTail(String((args as { name?: string }).name ?? '')) }
+      case 'tool_search': {
+        const q = toolSearchQuery(args as Record<string, unknown>)
+        return { desc: truncTail(q), full: q }
+      }
       case 'ask_user_question':
       case 'create_artifact':
       case 'read_result':
@@ -225,6 +249,8 @@ function toolFace(item: ToolItem, mcpRunning: boolean): RowFace {
       return { icon, verb: done, desc: `${lines.length} 行` }
     case 'activate_skill':
       return { icon, verb: done, desc: truncTail(String((args as { name?: string }).name ?? '')) }
+    case 'tool_search':
+      return { icon, verb: done, desc: toolSearchDesc((r ?? {}) as ToolSearchResult) }
     default:
       // 超限已存的结果 r 是摘要，规模看不出，退回通用词
       return {
@@ -371,6 +397,40 @@ function CallDetail({ item }: { item: CallItem }): React.JSX.Element {
             </div>
           ))}
         </div>
+      </DetailShell>
+    )
+  }
+
+  // 查找工具（018 Case 2 Feature 7）：上半查询词，下半结构化列表——工具名加一句话说明，浏览时按服务分组
+  if (name === 'tool_search') {
+    const sr = (r ?? {}) as ToolSearchResult
+    const groups = sr.services ?? (sr.tools ? [{ service: '', tools: sr.tools }] : [])
+    return (
+      <DetailShell>
+        <SectionLabel>查询</SectionLabel>
+        <div className="mb-2 text-[13px]">{toolSearchQuery(item.args)}</div>
+        <Divider />
+        <SectionLabel>结果</SectionLabel>
+        {groups.length === 0 ? (
+          <div className="text-[13px] leading-[1.7]">{sr.notice ?? '没有匹配的工具'}</div>
+        ) : (
+          <ClampBox maxH={240}>
+            <div className="flex flex-col gap-1">
+              {groups.map((g, gi) => (
+                <div key={gi} className="flex flex-col gap-1">
+                  {g.service && <div className="text-[13px] font-medium">{g.service}</div>}
+                  {g.tools.map((t) => (
+                    <div key={t.name} className="flex items-baseline gap-1.5 text-[13px]">
+                      <span className="text-muted-foreground/60">-</span>
+                      <span className="flex-none font-mono text-[12px]">{t.name}</span>
+                      <span className="min-w-0 truncate text-muted-foreground">{firstLine(t.description)}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </ClampBox>
+        )}
       </DetailShell>
     )
   }

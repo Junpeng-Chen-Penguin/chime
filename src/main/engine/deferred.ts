@@ -234,13 +234,15 @@ export function makeToolInvokeTool(opts: {
     execute: async (input, { toolCallId }) => {
       const name = typeof input?.name === 'string' ? input.name : ''
       const entry = table.find((e) => e.key === name)
-      if (!entry) return { error: `没有叫「${name}」的工具，先用 tool_search 确认名字` }
+      // userText 是调用行描述位给用户看的那句（016 六节），orchestrator 在进 SDK 前剥掉
+      if (!entry) return { error: `没有叫「${name}」的工具，先用 tool_search 确认名字`, userText: '工具名不存在' }
       const args = (input.arguments && typeof input.arguments === 'object' ? input.arguments : {}) as Record<string, unknown>
       const bad = validateArgs(entry, args)
       if (bad)
         return {
           error: `参数不符：${bad}`,
-          tool: { name: entry.key, description: entry.description, parameters: entry.inputSchema }
+          tool: { name: entry.key, description: entry.description, parameters: entry.inputSchema },
+          userText: '参数不符'
         }
       // 分级授权与 makeMcpTools 时相同：服务开了信任只读声明且工具声明只读的直接执行，其余过卡片队列
       const trusted = getMcpService(entry.serviceId)?.trusted ?? false

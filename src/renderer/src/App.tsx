@@ -305,11 +305,9 @@ function App(): React.JSX.Element {
   const agentServiceIds = curAgent
     ? (agents.find((a) => a.id === curAgent.id)?.mcpSel.map((e) => e.id) ?? [])
     : []
-  // 斜杠面板里可点名的服务（018 Case 5）：通用会话是本地全部已启用的，Agent 会话是该 Agent 配置的；
-  // 连不上的照常列出、照常可点
-  const slashServices = curAgent
-    ? services.filter((s) => agentServiceIds.includes(s.id))
-    : services
+  // 斜杠面板里可点名的服务（018 Case 5）：本地全部已启用的，通用会话与 Agent 会话相同——
+  // Agent 配置的服务是会话开始就带上的，点名是用户临时加一个，两者不冲突。连不上的照常列出、照常可点
+  const slashServices = services
 
   // ── 工作空间派生与操作（015 Case 1）────────────────────
   const wsNameOf = (p: string): string => p.split('/').filter(Boolean).pop() ?? p
