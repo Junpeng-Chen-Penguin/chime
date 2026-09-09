@@ -21,6 +21,7 @@ export interface Usage {
   input: number
   output: number
   cached: number
+  steps?: { input: number; output: number; cached: number }[] // 该轮每次模型请求（018）；旧轮次没有
 }
 
 export interface Msg {
@@ -165,7 +166,16 @@ export function useChat(onChange?: () => void): ChatHandle {
               error: evt.error,
               content: answer,
               usage: u
-                ? { input: u.inputTokens, output: u.outputTokens, cached: u.cachedInputTokens ?? 0 }
+                ? {
+                    input: u.inputTokens,
+                    output: u.outputTokens,
+                    cached: u.cachedInputTokens ?? 0,
+                    steps: u.steps?.map((s) => ({
+                      input: s.inputTokens,
+                      output: s.outputTokens,
+                      cached: s.cachedInputTokens
+                    }))
+                  }
                 : m.usage
             }
           })

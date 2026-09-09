@@ -78,7 +78,14 @@ interface Props {
   onOpenChip?: (c: import('../types').ChipRef) => void // 点主体回看：打开制品并高亮引用行
   onSubmit: () => void
   onStop: () => void
-  sessionUsage?: { input: number; output: number; cached: number } | null // 会话累计（正常轮次之和）
+  // 会话累计（正常轮次之和）；firstInput / firstCached 是各轮第一次请求的输入与命中合计，命中率按它们算（018）
+  sessionUsage?: {
+    input: number
+    output: number
+    cached: number
+    firstInput: number
+    firstCached: number
+  } | null
   context?: ContextUsage | null // 上下文占用（018 Case 10）：进度圈与详情面板的数据；null 不显示
   kbOptions: KbOption[]
   kbSel: KbSelEntry[] // 历史会话关联的库（014 起知识库只从 Agent 进入，此控件仅历史会话只读展示）
@@ -270,7 +277,7 @@ export default function Composer({
                       )}
                     >
                       <Icon className="size-3.5 flex-none text-muted-foreground" />
-                      <span className="min-w-0 truncate">/{h.name}</span>
+                      <span className="min-w-0 truncate">{h.name}</span>
                     </button>
                   </div>
                 )
@@ -749,11 +756,11 @@ export default function Composer({
                 <span className="text-muted-foreground">输入</span>
                 <span className="tabular-nums">{sessionUsage.input.toLocaleString()}</span>
               </div>
-              {sessionUsage.cached > 0 && (
+              {sessionUsage.firstInput > 0 && (
                 <div className="mt-1.5 flex justify-between gap-8">
-                  <span className="pl-1 text-muted-foreground">└ 缓存命中</span>
+                  <span className="pl-1 text-muted-foreground">└ 缓存命中率</span>
                   <span className="tabular-nums text-muted-foreground">
-                    {sessionUsage.cached.toLocaleString()}
+                    {Math.round((sessionUsage.firstCached / sessionUsage.firstInput) * 100)}%
                   </span>
                 </div>
               )}

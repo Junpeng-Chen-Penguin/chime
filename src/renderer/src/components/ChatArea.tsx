@@ -19,7 +19,7 @@ import {
   X
 } from 'lucide-react'
 import { cn, stripCitations } from '@/lib/utils'
-import type { Msg } from '@/hooks/useChat'
+import type { Msg, Usage } from '@/hooks/useChat'
 import type {
   SourceRef,
   TurnItem,
@@ -145,20 +145,26 @@ export default function ChatArea({
   const authWaiting = activeCard?.auth === 'pending'
   const askItem = activeCard?.ask?.state === 'pending' ? activeCard : undefined
 
-  // 会话累计用量：各正常轮次之和（中断轮无 usage 自然不计入）
+  // 会话累计用量：各正常轮次之和（中断轮无 usage 自然不计入）。
+  // 命中率按各轮第一次请求算（018）：没有分步数据的旧轮次退回整轮口径
   const sessionUsage = useMemo(() => {
     let input = 0
     let output = 0
     let cached = 0
+    let firstInput = 0
+    let firstCached = 0
     let any = false
     for (const m of messages) {
       if (m.role !== 'assistant' || !m.usage) continue
       any = true
+      const first = m.usage.steps?.[0]
+      firstInput += first ? first.input : m.usage.input
+      firstCached += first ? first.cached : m.usage.cached
       input += m.usage.input
       output += m.usage.output
       cached += m.usage.cached
     }
-    return any ? { input, output, cached } : null
+    return any ? { input, output, cached, firstInput, firstCached } : null
   }, [messages])
 
   const composer = (
@@ -1094,13 +1100,19 @@ function MessageActions({
 }
 
 // 本轮用量（PRD Case 5）：按钮形态尾随复制 / 重新生成，悬停看输入（含缓存命中）与输出拆分
-function UsageChip({
-  usage
-}: {
-  usage: { input: number; output: number; cached: number }
-}): React.JSX.Element {
+function UsageChip({ usage }: { usage: Usage }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const total = usage.input + usage.output
+  // 缓存命中率按这一轮第一次请求算（018）：第二次起的输入几乎全是第一次的前缀，整轮口径把命中率抬高。
+  // 改动前的轮次没有分步数据，退回整轮口径
+  const first = usage.steps?.[0]
+  const rate = first
+    ? first.input > 0
+      ? first.cached / first.input
+      : null
+    : usage.input > 0
+      ? usage.cached / usage.input
+      : null
   return (
     <div
       className="relative"
@@ -1116,12 +1128,10 @@ function UsageChip({
             <span className="text-muted-foreground">输入</span>
             <span className="tabular-nums">{usage.input.toLocaleString()}</span>
           </div>
-          {usage.cached > 0 && (
+          {rate !== null && (
             <div className="mt-1.5 flex justify-between gap-8">
-              <span className="pl-1 text-muted-foreground">└ 缓存命中</span>
-              <span className="tabular-nums text-muted-foreground">
-                {usage.cached.toLocaleString()}
-              </span>
+              <span className="pl-1 text-muted-foreground">└ 缓存命中率</span>
+              <span className="tabular-nums text-muted-foreground">{Math.round(rate * 100)}%</span>
             </div>
           )}
           <div className="mt-1.5 flex justify-between gap-8">
