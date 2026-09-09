@@ -277,6 +277,8 @@ export default function ChatArea({
                       />
                     )
                   )}
+                  {/* 手动压缩进行中（018 Case 9 Feature 5）：对话流末尾一条状态行，输入框同时禁用 */}
+                  {compacting && <CompactingRow />}
                 </div>
               </div>
             </div>
@@ -444,13 +446,21 @@ function fmtElapsed(ms: number): string {
 }
 
 // 四档文案（Case 12 功能点 2）：间隙一律归「等待回应」——请求刚发出，或上一段结束下一段没开始
-function statusLabel(items: TurnItem[], tailOpen: boolean | undefined): string {
+function statusLabel(items: TurnItem[], tailOpen: boolean | undefined, compacting?: boolean): string {
+  // 第五档（018 Case 9）：本轮开头的摘要请求在跑，此时还没有任何块
+  if (compacting) return '正在压缩上下文'
   const last = items[items.length - 1]
   if (!last) return '等待回应'
   if (last.t === 'reasoning' && tailOpen) return '思考中'
   if (last.t === 'tool' && last.result === undefined) return '执行工具'
   if (last.t === 'text' && tailOpen) return '回答中'
   return '等待回应'
+}
+
+// 手动压缩的状态行（018 Case 9 Feature 5）：挂在对话流末尾，与整轮状态行同一格式；挂载即计时，压缩完成随 compacting 一起卸载
+function CompactingRow(): React.JSX.Element {
+  const timerRef = useRef<{ acc: number; since: number | null }>({ acc: 0, since: Date.now() })
+  return <ProgressIndicator timer={timerRef.current} label="正在压缩上下文" />
 }
 
 function ProgressIndicator({
@@ -603,7 +613,10 @@ function AssistantMsg({
       {/* 整轮进度指示：挂在当前助手消息末尾，紧随已有内容——无内容时就贴着用户消息，不留空隙。
           等待授权期间没有请求在跑，不显示进度指示 */}
       {streaming && pendingIdx < 0 && (
-        <ProgressIndicator timer={timerRef.current} label={statusLabel(items, m.tailOpen)} />
+        <ProgressIndicator
+          timer={timerRef.current}
+          label={statusLabel(items, m.tailOpen, m.compacting)}
+        />
       )}
       {/* 结束原因统一排在页脚之前（016 Case 14 功能点 7）：停止 / 退出中断 / 错误卡 */}
       {m.status === 'stopped' && <PlainRow text="你停止了这次回答，需要继续可以直接说" />}

@@ -94,6 +94,7 @@ export type ChatEvent =
   | { type: 'item-delta'; streamId: string; index: number; text: string }
   | { type: 'item-done'; streamId: string; index: number; item: TurnItem }
   | { type: 'item-update'; streamId: string; index: number; item: TurnItem }
+  | { type: 'compacting'; streamId: string; active: boolean } // 本轮开头的摘要请求进行中（018 Case 9）
   | {
       type: 'turn-done'
       streamId: string

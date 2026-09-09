@@ -9,6 +9,7 @@ interface ChatEvent {
     | 'item-done'
     | 'item-update'
     | 'turn-done'
+    | 'compacting'
     | 'notice'
   streamId: string
   [k: string]: unknown

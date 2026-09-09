@@ -280,6 +280,7 @@ export async function compactIfNeeded(o: {
   keyOf: (fullName: string) => string
   deferred: DeferredTool[]
   retry: boolean
+  onSummarize?: () => void // 二级要发摘要请求时回调一次（渲染层换状态行文案）
 }): Promise<CompactOutcome> {
   let { history, bundle } = o
   const over = (h: ModelMessage[]): boolean => o.estimateOf(h) >= o.line
@@ -322,6 +323,7 @@ export async function compactIfNeeded(o: {
   if (failures >= MAX_COMPACT_FAILURES) reason = '摘要连续失败已停用'
   else {
     const cut = o.retry ? currentTurnStart(history, bundle) : history.length
+    o.onSummarize?.()
     const res = await summarize({
       lm: o.lm,
       system: o.system,

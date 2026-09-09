@@ -34,6 +34,7 @@ export interface Msg {
   status: MsgStatus
   error?: string
   tailOpen?: boolean // 末位块还在流式中（016 状态行四档判定用；展示态，不落库）
+  compacting?: boolean // 本轮开头的摘要请求进行中（018 Case 9）：状态行文案「正在压缩上下文」；展示态
   createdAt: number
 }
 
@@ -141,6 +142,9 @@ export function useChat(onChange?: () => void): ChatHandle {
             // 只有末位块的收尾才关掉流式标（文本块的 done 可能拖到流末尾才补发）
             return { ...m, items, tailOpen: evt.index === items.length - 1 ? false : m.tailOpen }
           })
+          return
+        case 'compacting':
+          patch(r.convId, r.msgId, (m) => ({ ...m, compacting: !!evt.active }))
           return
         case 'item-update':
           patch(r.convId, r.msgId, (m) => {

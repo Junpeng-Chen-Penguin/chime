@@ -106,6 +106,7 @@ export type ChatEvent =
   | { type: 'item-delta'; streamId: string; index: number; text: string }
   | { type: 'item-done'; streamId: string; index: number; item: TurnItem }
   | { type: 'item-update'; streamId: string; index: number; item: TurnItem } // 状态流转（授权等），非终态
+  | { type: 'compacting'; streamId: string; active: boolean } // 二级压缩的摘要请求进行中（018 Case 9）：状态行文案换成「正在压缩上下文」
   | {
       type: 'turn-done'
       streamId: string
@@ -646,6 +647,7 @@ async function streamCore(core: {
   // 压缩三级（018 七节）：一级清旧的工具返回换成结果编号，二级请模型写摘要并重建，三级整对丢弃。
   // 逻辑在 compact.ts，这里只接结果：压缩后的历史、要不要画分界线、摘要请求被用户停止时按停止收场
   const outcome = await compactIfNeeded({
+    onSummarize: () => emit({ type: 'compacting', streamId, active: true }),
     convId,
     lm: provider(p.model),
     system,
@@ -661,6 +663,7 @@ async function streamCore(core: {
     deferred,
     retry: !core.saveUser
   })
+  emit({ type: 'compacting', streamId, active: false })
   const bundleBefore = bundle
   history = outcome.history
   bundle = outcome.bundle

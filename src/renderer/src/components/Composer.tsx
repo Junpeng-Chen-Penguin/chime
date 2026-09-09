@@ -70,7 +70,7 @@ interface Props {
   onPickModel: (m: string) => void
   sending: boolean
   inputDisabled?: boolean // 等待授权中：输入框禁用，只能操作卡片或点停止
-  compacting?: boolean // 手动压缩进行中（018 Case 9）：输入框禁用，占位提示换成压缩中
+  compacting?: boolean // 手动压缩进行中（018 Case 9）：输入框禁用，进度由对话流末尾的状态行显示
   askWaiting?: boolean // 提问卡等待中：输入框开放，发送 = 中断提问 + 开启新一轮
   value: string
   onChange: (v: string) => void
@@ -369,9 +369,7 @@ export default function Composer({
               }
             }}
             placeholder={
-              compacting
-                ? '正在压缩上下文…'
-                : inputDisabled
+              inputDisabled
                 ? '等待授权中，请先处理上方卡片'
                 : askWaiting
                   ? '或直接回复……'
