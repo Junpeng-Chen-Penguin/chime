@@ -8,6 +8,7 @@ export interface Conversation {
   kbSelection?: { id: number; name: string }[]
   agentId?: number | null // 选用的 Agent（014）；null = 通用对话
   agentName?: string | null // 名字快照：Agent 删除后仍显示原名
+  lastContext?: import('../../preload/index.d').ContextUsage | null // 上一轮的占用拆分（018 Case 10）
 }
 
 export interface PersistedMessage {

@@ -24,7 +24,8 @@ import type {
   SourceRef,
   TurnItem,
   AskOutcomePayload,
-  AskQuestionSpec
+  AskQuestionSpec,
+  ContextUsage
 } from '../../../preload/index.d'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { Markdown } from './Markdown'
@@ -48,7 +49,7 @@ interface Props {
   onExpand: () => void
   messages: Msg[]
   sending: boolean
-  contextRatio: number
+  context: ContextUsage | null // 上下文占用拆分（018 Case 10）；一轮都没发过为 null
   input: string
   onInput: (v: string) => void
   chips?: import('../types').ChipRef[] // 待发送的表格行引用（013 Case 2）
@@ -92,7 +93,7 @@ export default function ChatArea({
   onExpand,
   messages,
   sending,
-  contextRatio,
+  context,
   input,
   onInput,
   onSubmit,
@@ -166,6 +167,7 @@ export default function ChatArea({
       models={models}
       onPickModel={onPickModel}
       sending={sending}
+      context={context}
       inputDisabled={authWaiting || !!compacting}
       askWaiting={!!askItem}
       onPickCommand={(cmd) => {
@@ -285,18 +287,14 @@ export default function ChatArea({
           {/* 提问卡：悬浮于输入框上方，不占对话流位置（key 随卡切换重置内部作答状态） */}
           {askItem?.id && <AskCard key={askItem.id} item={askItem} onRespond={onRespondAsk} />}
 
-          {/* 输入框上方轻提示：过长消息就地拦下；压力高（L2，90%）才建议新开——
-              70%~90% 由引擎清老工具返回静默缓解，无需打扰用户 */}
-          {(overLimit || contextRatio > 0.9) && (
+          {/* 输入框上方轻提示：过长消息就地拦下。上下文占用改为常驻的进度圈（018 Case 10），
+              压缩静默进行，不再提示新开会话 */}
+          {overLimit && (
             <div className="mx-auto w-full max-w-[800px] px-8 pb-1">
-              {overLimit ? (
-                <div className="text-[12px] text-destructive">
-                  消息过长，请精简或拆分（当前 {input.length.toLocaleString()} 字，上限{' '}
-                  {SEND_CHAR_LIMIT.toLocaleString()} 字）
-                </div>
-              ) : (
-                <div className="text-[12px] text-muted-foreground">对话较长，建议新开会话</div>
-              )}
+              <div className="text-[12px] text-destructive">
+                消息过长，请精简或拆分（当前 {input.length.toLocaleString()} 字，上限{' '}
+                {SEND_CHAR_LIMIT.toLocaleString()} 字）
+              </div>
             </div>
           )}
           {composer}

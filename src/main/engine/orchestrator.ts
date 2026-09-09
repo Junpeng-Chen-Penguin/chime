@@ -23,6 +23,7 @@ import {
   setConversationSystemPrompt,
   addConversationMcpSelection,
   getMcpService,
+  setConversationLastContext,
   type AgentRow
 } from '../db'
 import {
@@ -93,8 +94,10 @@ import {
   type TurnItem,
   type EndReason,
   type TurnUsage,
+  type ContextUsage,
   type StepUsage as StepUsageRecord
 } from './store'
+import { estimateTokensBase } from '../../shared/tokens'
 
 export type ChatEvent =
   | { type: 'turn-start'; streamId: string }
@@ -110,7 +113,7 @@ export type ChatEvent =
       status: 'done' | 'stopped' | 'error' | 'interrupted'
       error?: string
       usage?: TurnUsage
-      contextRatio: number
+      context?: ContextUsage // 本轮的上下文占用拆分（018 Case 10）；出错收场没有
     }
 
 export type Emit = (e: ChatEvent) => void
@@ -197,8 +200,7 @@ export async function runTurn(opts: {
       streamId: opts.streamId,
       endReason: 'error',
       status: 'error',
-      error: '处理出错，请重试',
-      contextRatio: 0
+      error: '处理出错，请重试'
     })
   }
 }
@@ -221,8 +223,7 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
       streamId,
       endReason: 'error',
       status: 'error',
-      error: '请先在设置里配置 API 密钥',
-      contextRatio: 0
+      error: '请先在设置里配置 API 密钥'
     })
     return
   }
@@ -273,8 +274,7 @@ async function streamCore(core: {
       streamId,
       endReason: 'error',
       status: 'error',
-      error: p ? '该模型所属的服务商未启用或未配置密钥' : '模型无法定位，请重新选择',
-      contextRatio: 0
+      error: p ? '该模型所属的服务商未启用或未配置密钥' : '模型无法定位，请重新选择'
     })
     return
   }
@@ -302,14 +302,19 @@ async function streamCore(core: {
     endReason?: EndReason,
     error?: string,
     usage?: TurnUsage,
-    contextRatio = 0
+    context?: ContextUsage
   ): void => {
     // 模型可能发出空的 text/reasoning 段（如开了个头就转去调工具），不落库
     const kept = items.filter((i) => (i.t !== 'text' && i.t !== 'reasoning') || i.text.trim())
     const content =
       [...kept].reverse().find((i): i is { t: 'text'; text: string } => i.t === 'text')?.text ?? ''
     saveAssistantTurn(convId, msgId, { content, items: kept, status: 'done', endReason, usage })
-    emit({ type: 'turn-done', streamId, endReason, status: endReason ?? 'done', error, usage, contextRatio })
+    // 占用拆分（018 Case 10）：标题里的总量用第一次请求的实测输入，随会话行存一份供重开会话时取
+    if (context) {
+      context.actualInput = usage?.steps?.[0]?.inputTokens ?? context.actualInput
+      setConversationLastContext(convId, JSON.stringify(context))
+    }
+    emit({ type: 'turn-done', streamId, endReason, status: endReason ?? 'done', error, usage, context })
   }
   // 弹卡即落库 / 卡片回应后落库：等待中的快照（最终态由 finish 覆盖）
   const persistWaiting = (): void => {
@@ -661,7 +666,7 @@ async function streamCore(core: {
   persistRunning()
   if (outcome.aborted) {
     // 摘要请求期间用户点了停止：用户消息照常落库（界面上已显示），本轮按停止收场，不计入摘要失败
-    finish('stopped', undefined, undefined, Math.min(1, estimate() / contextWindow(model)))
+    finish('stopped')
     return
   }
   if (outcome.dropped) {
@@ -675,8 +680,56 @@ async function streamCore(core: {
     persistRunning()
   }
   const estimatedInput = estimate()
-  // 占用比例的分母是窗口全量（018 Case 1）
-  const contextRatio = Math.min(1, estimatedInput / contextWindow(model))
+  // 占用拆分（018 Case 10）：技能类 = 技能清单、技能新增、重建的技能正文这几种提醒行，加激活技能工具的返回；
+  // 对话 = 消息序列其余全部。延迟加载的工具定义按查询表里的名字、说明、参数估
+  const skillKinds = new Set(['skill_listing', 'skill_added', 'skill_bodies'])
+  const skillMsgIdx = new Set(
+    bundle.reminders.filter((r) => skillKinds.has(r.kind)).map((r) => r.msgIdx)
+  )
+  let skillTok = 0
+  const perSkill = new Map<string, number>(activeSkillNames.map((n) => [n, 0]))
+  history.forEach((m, i) => {
+    if (skillMsgIdx.has(i)) {
+      skillTok += sizeOf(m)
+      return
+    }
+    if ((m as { role: string }).role !== 'tool' || !Array.isArray(m.content)) return
+    for (const part of m.content as { type?: string; toolName?: string; output?: { value?: unknown } }[]) {
+      if (part.type !== 'tool-result' || part.toolName !== 'activate_skill') continue
+      if (typeof part.output?.value !== 'string') continue
+      const t = estimateTokens(model, part.output.value)
+      skillTok += t
+      const mm = /^【技能：(.+?)】/.exec(part.output.value)
+      if (mm) perSkill.set(mm[1], (perSkill.get(mm[1]) ?? 0) + t)
+    }
+  })
+  const byService = new Map<string, { count: number; tokens: number }>()
+  let deferredTok = 0
+  for (const e of deferred) {
+    const t = applyRatio(
+      model,
+      estimateTokensBase(
+        JSON.stringify({ name: e.key, description: e.description, parameters: e.inputSchema })
+      )
+    )
+    deferredTok += t
+    const s = byService.get(e.serviceName) ?? { count: 0, tokens: 0 }
+    byService.set(e.serviceName, { count: s.count + 1, tokens: s.tokens + t })
+  }
+  const ctxUsage: ContextUsage = {
+    window: contextWindow(model),
+    actualInput: null,
+    builtinTools: toolsTok,
+    systemPrompt: estimateTokens(model, system),
+    skills: skillTok,
+    messages: Math.max(0, history.reduce((s, m) => s + sizeOf(m), 0) - skillTok),
+    deferred: {
+      tokens: deferredTok,
+      count: deferred.length,
+      byService: [...byService].map(([name, v]) => ({ name, ...v }))
+    },
+    skillItems: [...perSkill].map(([name, tokens]) => ({ name, tokens }))
+  }
 
   // 停止时的用量（016 Case 14）：onAbort 交回已完成的各步，逐步加总。
   // 一步都没完成时保持 undefined——页脚按「拿不到不显示」走，不显示 0。
@@ -1011,7 +1064,7 @@ async function streamCore(core: {
     // 停止收场：已流出内容保留，用量取 onAbort 收到的已完成各步合计
     if (controller.signal.aborted) {
       settleUnfinished('用户停止')
-      finish('stopped', undefined, await stoppedUsage(), contextRatio)
+      finish('stopped', undefined, await stoppedUsage(), ctxUsage)
       return
     }
 
@@ -1030,13 +1083,13 @@ async function streamCore(core: {
         // 分步从流里取：result.usage 是全部步骤的合计（AI SDK 文档），没有分步
         steps: [...streamed]
       },
-      contextRatio
+      ctxUsage
     )
   } catch (e) {
     if (controller.signal.aborted) {
       // 等授权中停止、一步没完成的停止都从这里进
       settleUnfinished('用户停止')
-      finish('stopped', undefined, await stoppedUsage(), contextRatio)
+      finish('stopped', undefined, await stoppedUsage(), ctxUsage)
     } else {
       const msg = humanizeError(e)
       // 鉴权 / 服务端错误 → 标记该服务商异常（控件警示 + 前往设置），下次成功或检测通过后解除
@@ -1045,7 +1098,7 @@ async function streamCore(core: {
       // 出错也补齐未完成的调用（016 Case 14 功能点 4），不留停在进行中的行
       settleUnfinished('出错中止')
       items.push({ t: 'boundary', kind: 'error', text: msg })
-      finish('error', msg, undefined, contextRatio)
+      finish('error', msg, undefined, ctxUsage)
     }
   } finally {
     setActiveRootsProvider(null)

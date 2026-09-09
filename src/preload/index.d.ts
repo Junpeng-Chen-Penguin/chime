@@ -107,8 +107,20 @@ export type ChatEvent =
         // 该轮每次模型请求的用量，按顺序（018）；缓存命中率按第一项算
         steps?: { inputTokens: number; outputTokens: number; cachedInputTokens: number }[]
       }
-      contextRatio: number
+      context?: ContextUsage // 本轮的上下文占用拆分（018 Case 10）；出错收场没有
     }
+
+// 上下文占用拆分（018 Case 10）：与主进程 store.ts 的 ContextUsage 同形
+export interface ContextUsage {
+  window: number
+  actualInput: number | null
+  builtinTools: number
+  systemPrompt: number
+  skills: number
+  messages: number
+  deferred: { tokens: number; count: number; byService: { name: string; count: number; tokens: number }[] }
+  skillItems: { name: string; tokens: number }[]
+}
 
 export interface Conversation {
   id: string
@@ -116,6 +128,7 @@ export interface Conversation {
   model: string
   updatedAt: number
   kbSelection?: { id: number; name: string }[]
+  lastContext?: ContextUsage | null // 上一轮的占用拆分（018 Case 10）；一轮都没发过为 null
 }
 
 export interface PersistedMessage {

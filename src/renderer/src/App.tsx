@@ -586,7 +586,7 @@ function App(): React.JSX.Element {
           sending={sending}
           compacting={compacting}
           onCompact={compactNow}
-          contextRatio={chat.contextRatio[activeId] ?? 0}
+          context={chat.context[activeId] ?? active?.lastContext ?? null}
           input={input}
           onInput={(v) => setInputs((m) => ({ ...m, [activeId]: v }))}
           chips={chips[activeId] ?? []}

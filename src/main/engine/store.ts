@@ -78,6 +78,24 @@ export type TurnPhase = 'running' | 'waiting' | 'done'
 // 空 = 正常完成；stopped = 用户停止；interrupted = 应用退出打断；error = 出错
 export type EndReason = 'stopped' | 'interrupted' | 'error'
 
+// 上下文占用拆分（018 Case 10）：组装完、发出请求前算一次，随 turn-done 带出并存进会话行。
+// 各分类相加等于估算总量：对话扣掉了技能类的消息，堆叠条才能画成 100%。
+// 延迟加载的 MCP 工具定义存在本地，不占窗口，单列
+export interface ContextUsage {
+  window: number
+  actualInput: number | null // 本轮第一次请求的实测输入 tokens，收场时回填；面板标题用它
+  builtinTools: number
+  systemPrompt: number
+  skills: number // 技能清单消息、技能新增消息、重建的技能正文，加上激活技能工具的返回
+  messages: number // 消息序列其余全部
+  deferred: {
+    tokens: number
+    count: number
+    byService: { name: string; count: number; tokens: number }[]
+  }
+  skillItems: { name: string; tokens: number }[] // 本会话技能范围内每个技能的占用
+}
+
 // 一次模型请求的用量
 export interface StepUsage {
   inputTokens: number

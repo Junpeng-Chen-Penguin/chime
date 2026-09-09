@@ -18,6 +18,8 @@ import {
   X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ContextGauge } from './ContextGauge'
+import type { ContextUsage } from '../../../preload/index.d'
 
 // 工作空间选择器条目（015 Case 1）
 export interface WsUiEntry {
@@ -77,6 +79,7 @@ interface Props {
   onSubmit: () => void
   onStop: () => void
   sessionUsage?: { input: number; output: number; cached: number } | null // 会话累计（正常轮次之和）
+  context?: ContextUsage | null // 上下文占用（018 Case 10）：进度圈与详情面板的数据；null 不显示
   kbOptions: KbOption[]
   kbSel: KbSelEntry[] // 历史会话关联的库（014 起知识库只从 Agent 进入，此控件仅历史会话只读展示）
   services?: ServiceStatus[] // 已启用的外部服务及连接状态
@@ -112,6 +115,7 @@ export default function Composer({
   onSubmit,
   onStop,
   sessionUsage,
+  context,
   kbOptions,
   kbSel,
   slashServices,
@@ -551,8 +555,9 @@ export default function Composer({
               )}
             </div>
 
-            {/* 右下：模型选择（模型名 + ▾）+ 发送 */}
+            {/* 右下：上下文进度圈（018 Case 10）+ 模型选择（模型名 + ▾）+ 发送 */}
             <div className="flex min-w-0 items-center gap-1.5">
+              <ContextGauge context={context ?? null} />
               <div className="relative">
                 <button
                   onClick={() => {

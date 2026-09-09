@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { TurnItem, AskOutcomePayload } from '../../../preload/index.d'
+import type { TurnItem, AskOutcomePayload, ContextUsage } from '../../../preload/index.d'
 
 // interrupted = 应用退出打断、启动修复后收场（仅出现在水合的历史消息里）
 export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error' | 'interrupted'
@@ -42,7 +42,7 @@ const uid = (p: string): string => `${p}-${Date.now()}-${seq++}`
 export interface ChatHandle {
   threads: Record<string, Msg[]>
   streamingConv: string | null
-  contextRatio: Record<string, number> // 每会话最近一轮的上下文用量比例（>0.7 轻提示）
+  context: Record<string, ContextUsage> // 每会话最近一轮的上下文占用拆分（018 Case 10）
   hydrate: (convId: string, msgs: Msg[]) => void
   // ws：首条消息随带的工作空间选中集合（015 Case 1），之后的消息不带（主进程已定格、会忽略）；
   // slashSkill：本轮消息的有效斜杠点名（015 Case 6，App 已对库校验）
@@ -71,7 +71,7 @@ export interface ChatHandle {
 export function useChat(onChange?: () => void): ChatHandle {
   const [threads, setThreads] = useState<Record<string, Msg[]>>({})
   const [streamingConv, setStreamingConv] = useState<string | null>(null)
-  const [contextRatio, setContextRatio] = useState<Record<string, number>>({})
+  const [context, setContext] = useState<Record<string, ContextUsage>>({})
   const threadsRef = useRef(threads)
   const routeRef = useRef<{ convId: string; msgId: string; streamId: string } | null>(null)
   const titledRef = useRef(new Set<string>())
@@ -169,7 +169,10 @@ export function useChat(onChange?: () => void): ChatHandle {
                 : m.usage
             }
           })
-          setContextRatio((c) => ({ ...c, [r.convId]: evt.contextRatio }))
+          if (evt.context) {
+            const ctx = evt.context
+            setContext((c) => ({ ...c, [r.convId]: ctx }))
+          }
           onChangeRef.current?.()
           // 首轮回复成功后，让模型生成精炼标题（每会话仅一次）
           if (status === 'done') {
@@ -302,7 +305,7 @@ export function useChat(onChange?: () => void): ChatHandle {
   return {
     threads,
     streamingConv,
-    contextRatio,
+    context,
     hydrate,
     send,
     stop,

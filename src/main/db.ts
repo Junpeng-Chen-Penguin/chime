@@ -479,6 +479,7 @@ export interface ConversationRow {
   kbSelection?: KbSelEntry[]
   agentId?: number | null // 选用的 Agent；配置按 id 现查（跟随最新），null = 通用对话
   agentName?: string | null // 名字快照：Agent 删除后界面显示「{名字}（已删除）」用
+  lastContext?: unknown // 上一轮的占用拆分（018 Case 10）；一轮都没发过为 null
 }
 
 export interface MessageRow {
@@ -496,7 +497,7 @@ export interface MessageRow {
 export function listConversations(): ConversationRow[] {
   const rows = db
     .prepare(
-      'SELECT id, title, model, updated_at AS updatedAt, kb_selection AS kbSelection, agent_id AS agentId, agent_name AS agentName FROM conversation ORDER BY updated_at DESC'
+      'SELECT id, title, model, updated_at AS updatedAt, kb_selection AS kbSelection, agent_id AS agentId, agent_name AS agentName, last_context AS lastContext FROM conversation ORDER BY updated_at DESC'
     )
     .all() as unknown as {
     id: string
@@ -506,6 +507,7 @@ export function listConversations(): ConversationRow[] {
     kbSelection: string | null
     agentId: number | null
     agentName: string | null
+    lastContext: string | null
   }[]
   return rows.map((r) => {
     let sel: KbSelEntry[] = []
@@ -514,7 +516,13 @@ export function listConversations(): ConversationRow[] {
     } catch {
       // 坏数据按未选处理
     }
-    return { ...r, kbSelection: sel }
+    let lastContext: unknown = null
+    try {
+      if (r.lastContext) lastContext = JSON.parse(r.lastContext)
+    } catch {
+      // 坏数据按没有处理
+    }
+    return { ...r, kbSelection: sel, lastContext }
   })
 }
 
@@ -643,6 +651,11 @@ export function getConversationCompaction(id: string): { compactFrom: number | n
     .prepare('SELECT compact_from AS cf, compact_failures AS f FROM conversation WHERE id = ?')
     .get(id) as { cf: number | null; f: number } | undefined
   return { compactFrom: r?.cf ?? null, failures: r?.f ?? 0 }
+}
+
+// 上一轮的占用拆分（018 Case 10）：重开会话时面板从这里取
+export function setConversationLastContext(id: string, json: string): void {
+  db.prepare('UPDATE conversation SET last_context = ? WHERE id = ?').run(json, id)
 }
 
 export function bumpConversationCompactFailures(id: string): number {
