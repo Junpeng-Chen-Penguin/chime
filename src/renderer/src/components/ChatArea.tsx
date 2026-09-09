@@ -69,13 +69,10 @@ interface Props {
   agentServiceIds: number[]
   onSelectAgent: (a: { id: number; name: string } | null) => void
   onManageAgents: () => void
-  onManageServices: () => void
   onConfigureModel: () => void
   services: ServiceStatus[]
-  selectedServiceIds: number[]
-  onToggleService: (id: number) => void
-  onRetryServices: () => void
-  onOpenSettings: () => void
+  slashServices: { id: number; name: string }[] // 斜杠面板里可点名的服务（018 Case 5）
+  onPickService: (id: number) => void
   onOpenSource: (file: string, sources: SourceRef[]) => void
   onRespondCard: (toolCallId: string, decision: 'approved' | 'denied' | 'always') => void
   onRespondAsk: (toolCallId: string, outcome: AskOutcomePayload) => void
@@ -114,13 +111,10 @@ export default function ChatArea({
   agentServiceIds,
   onSelectAgent,
   onManageAgents,
-  onManageServices,
   onConfigureModel,
   services,
-  selectedServiceIds,
-  onToggleService,
-  onRetryServices,
-  onOpenSettings,
+  slashServices,
+  onPickService,
   onOpenSource,
   onRespondCard,
   onRespondAsk,
@@ -189,13 +183,10 @@ export default function ChatArea({
       agentServiceIds={agentServiceIds}
       onSelectAgent={onSelectAgent}
       onManageAgents={onManageAgents}
-      onManageServices={onManageServices}
       onConfigureModel={onConfigureModel}
       services={services}
-      selectedServiceIds={selectedServiceIds}
-      onToggleService={onToggleService}
-      onRetryServices={onRetryServices}
-      onOpenSettings={onOpenSettings}
+      slashServices={slashServices}
+      onPickService={onPickService}
       ws={ws}
     />
   )
@@ -251,7 +242,7 @@ export default function ChatArea({
               <div className="mx-auto w-full max-w-[760px] px-8 pt-3 pb-10">
                 <div className="flex flex-col gap-8">
                   {messages.map((m) =>
-                    m.role === 'user' ? (
+                    m.role === 'reminder' ? null : m.role === 'user' ? ( // 提醒消息行不显示（018 四节）
                       <UserMsg key={m.id} m={m} onOpenArtifact={onOpenArtifact} />
                     ) : (
                       <AssistantMsg
@@ -370,7 +361,12 @@ function UserMsg({
   const skill = (m.items ?? []).find(
     (it): it is Extract<TurnItem, { t: 'skillref' }> => it.t === 'skillref'
   )
-  const slashLen = skill && m.content.startsWith(`/${skill.name}`) ? skill.name.length + 1 : 0
+  // 点名 MCP 服务（018 Case 5）：同样染主色，只存名字、不做悬停
+  const mcp = (m.items ?? []).find(
+    (it): it is Extract<TurnItem, { t: 'mcpref' }> => it.t === 'mcpref'
+  )
+  const named = skill ?? mcp
+  const slashLen = named && m.content.startsWith(`/${named.name}`) ? named.name.length + 1 : 0
   return (
     <div className="flex flex-col items-end gap-1.5">
       {refs.length > 0 && (
@@ -392,7 +388,7 @@ function UserMsg({
       <div className="max-w-[82%] rounded-[18px] bg-[#f0f0ee] px-4 py-2.5 text-[16px] leading-[1.7] break-words whitespace-pre-wrap text-foreground select-text">
         {slashLen ? (
           <>
-            <span title={skill!.desc} className="text-primary">
+            <span title={skill?.desc} className="text-primary">
               {m.content.slice(0, slashLen)}
             </span>
             {m.content.slice(slashLen)}

@@ -84,6 +84,7 @@ export type TurnItem =
   | { t: 'artifact'; id: number; title: string; rowCount: number; result?: string } // 制品卡
   | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] } // 表格行引用（013，user 消息专用）
   | { t: 'skillref'; name: string; desc: string } // 斜杠点名 chip（015 Case 6，user 消息专用）
+  | { t: 'mcpref'; name: string } // 斜杠点名 MCP 服务（018 Case 5，user 消息专用）：只存名字快照
   | { t: 'boundary'; kind: 'limit' | 'error'; text?: string }
   | { t: 'compaction'; savedTokens?: number } // 压缩分界线（016 Case 11）
 
@@ -120,7 +121,8 @@ export interface Conversation {
 export interface PersistedMessage {
   id: string
   conversationId: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'reminder' // reminder：提醒消息行（018 四节），界面不显示，summary 画压缩分界线
+  kind?: string | null // reminder 行的种类
   content: string
   items: string | null // TurnItem[] 的 JSON，仅 assistant 行有
   usage: string | null // {input, output, cached} JSON；中断轮 NULL
@@ -283,9 +285,12 @@ export interface ChimeApi {
     refs?: (
       | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }
       | { t: 'skillref'; name: string; desc: string }
+      | { t: 'mcpref'; name: string }
     )[]
     ws?: { picked: string[]; fromAgent: string[] }
     slashSkill?: string
+    slashMcp?: number // 018 Case 5：本轮消息斜杠点名的 MCP 服务
+    mcpPicked?: number[] // 018 Case 5：上次发送以来在面板里点过的服务
   }) => void
   retryChat: (payload: { streamId: string; convId: string; model: string }) => void
   stopChat: (streamId: string) => void
@@ -322,7 +327,6 @@ export interface ChimeApi {
   mcpAckToolsChanged: (id: number) => Promise<void>
   mcpSetTrusted: (input: { id: number; trusted: boolean }) => Promise<void>
   mcpRetry: () => Promise<void>
-  setConversationMcpSelection: (input: { id: string; serviceIds: number[] }) => Promise<void>
   getConversationMcpSelection: (id: string) => Promise<number[]>
   mcpSave: (input: {
     id?: number

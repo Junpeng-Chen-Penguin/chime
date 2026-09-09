@@ -23,8 +23,28 @@ import {
   touchWsRecent,
   getConversationSystemPrompt,
   setConversationSystemPrompt,
+  addConversationMcpSelection,
+  getMcpService,
   type AgentRow
 } from '../db'
+import {
+  insertReminder,
+  hasUserContext,
+  firstMessageAt,
+  toldDate,
+  skillScope,
+  mcpAnnounced,
+  todayText,
+  dateKey,
+  buildUserContext,
+  buildSkillListing,
+  buildDateChange,
+  buildSkillAdded,
+  buildMcpAdded,
+  buildMcpNamed,
+  type ReminderKind,
+  type SkillEntry
+} from './reminders'
 import { kbReady } from '../kb'
 import { humanize, markVendorHealth } from '../ai'
 import { builtinDisplay } from '../../shared/builtinTools'
@@ -72,6 +92,7 @@ import {
 } from './cards'
 import {
   saveUserMessage,
+  expandUserMessage,
   saveAssistantTurn,
   loadHistoryMessages,
   markConvActive,
@@ -167,9 +188,11 @@ export async function runTurn(opts: {
   // 015 Case 1：首条消息随带的工作空间选中集合（合并后全部上授权卡统一确认，Agent 默认值不构成授权）。
   // 已定格（ws_list 非 NULL）的会话忽略此字段
   ws?: { picked: string[]; fromAgent: string[] }
-  // 015 Case 6：本轮消息斜杠点名的技能（renderer 已对库校验）——只并入激活工具的可选范围，
-  // 不进系统提示词清单段（清单只放 Agent 配的）
+  // 015 Case 6：本轮消息斜杠点名的技能（renderer 已对库校验）——点名清单外的技能时追加进本会话的技能范围
   slashSkill?: string
+  // 018 Case 5：本轮消息斜杠点名的 MCP 服务 id；mcpPicked 是上次发送以来在面板里点过的服务，并入会话选用清单
+  slashMcp?: number
+  mcpPicked?: number[]
 }): Promise<void> {
   try {
     await runTurnBody(opts)
@@ -191,7 +214,9 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
   const { streamId, convId, text, model, emit } = opts
   const p = resolveModelRef(model)
 
-  if (opts.saveUser !== false) saveUserMessage(convId, text, opts.refs)
+  // 用户消息不在这里落库（018 四节）：压缩重建的行与本轮的追加消息要排在它前面，
+  // 组装完、压缩完才写，见 streamCore。点过的服务先并入选用清单，本轮的工具组装就能带上它
+  if (opts.mcpPicked?.length) addConversationMcpSelection(convId, opts.mcpPicked)
   emit({ type: 'turn-start', streamId })
 
   const msgId = randomUUID()
@@ -221,7 +246,11 @@ async function runTurnBody(opts: Parameters<typeof runTurn>[0]): Promise<void> {
     kbEnv,
     agent,
     ws: opts.ws,
-    slashSkill: opts.slashSkill
+    slashSkill: opts.slashSkill,
+    slashMcp: opts.slashMcp,
+    text,
+    refs: opts.refs,
+    saveUser: opts.saveUser !== false
   })
 }
 
@@ -237,6 +266,10 @@ async function streamCore(core: {
   agent: AgentRow | null
   ws?: { picked: string[]; fromAgent: string[] }
   slashSkill?: string
+  slashMcp?: number
+  text: string // 本轮用户消息；压缩完成后才落库（重试时已在库里，saveUser 为 false）
+  refs?: TurnItem[]
+  saveUser: boolean
 }): Promise<void> {
   const { streamId, convId, model, emit, msgId, items, kbEnv, agent } = core
   const p = resolveModelRef(model)
@@ -318,9 +351,9 @@ async function streamCore(core: {
       emit({ type: 'item-update', streamId, index: idx, item: it })
     })
   }
-  // 一轮开始就落库（016 Case 13）：空壳标 running，应用退出这一轮也不消失
+  // 空壳 running 行（016 Case 13）挪到用户消息落库之后再写（018 四节）：它的 created_at 只在首次写入时定，
+  // 写早了会排在本轮用户消息前面
   markConvActive(convId)
-  persistRunning()
 
   const controller = new AbortController()
   turns.set(streamId, controller)
@@ -426,6 +459,81 @@ async function streamCore(core: {
     ...getConversationMcpSelection(convId),
     ...(agent?.mcpSel ?? []).map((e) => e.id)
   ])
+
+  // 系统提示词会话定格（018 三节）：第一轮拼一次存进会话行，此后每轮原样读出。
+  // 中途改 Agent 提示词、库的增删、服务连断、跨天，都不回改它——变了的事走消息序列里的提醒消息。
+  // 会话授权目录清单进环境信息（015 Case 2）：定格块已跑过，此处非 NULL
+  let system = getConversationSystemPrompt(convId)
+  if (system === null) {
+    system = buildSystemPrompt({
+      agent: agent ? { name: agent.name, sections: agent.promptSections } : null,
+      kbLibraries: (kbEnv?.libraries ?? []).map((l) => ({ name: l.name, intro: l.intro })),
+      wsDirs: getConversationWs(convId) ?? [],
+      mcpInstructions: getMcpInstructions(mcpSelection)
+    })
+    setConversationSystemPrompt(convId, system)
+  }
+
+  // 会话引导（018 四节）：没有会话背景消息的会话（新会话，或改动前创建的）补两行——
+  // 会话背景消息装当天日期，技能清单消息装本会话的技能范围（通用会话取本地全部，Agent 会话取配置的），
+  // 排在全部消息之前。生成之后内容固定，跨天与技能库变动都走追加消息
+  const skillLib = new Map(listSkills().map((s) => [s.name, s.description]))
+  const skillEntries = (names: string[]): SkillEntry[] =>
+    names.filter((n) => skillLib.has(n)).map((n) => ({ name: n, description: skillLib.get(n)! }))
+  if (!hasUserContext(convId)) {
+    const first = firstMessageAt(convId)
+    const at = first === null ? Date.now() : first - 2
+    const today = todayText()
+    insertReminder(convId, 'user_context', buildUserContext(today), { date: dateKey(today) }, at)
+    const initial = skillEntries(agent ? agent.skillSel : [...skillLib.keys()])
+    if (initial.length)
+      insertReminder(
+        convId,
+        'skill_listing',
+        buildSkillListing(initial),
+        { skills: initial.map((s) => s.name) },
+        at + 1
+      )
+  }
+  // 追加消息（018 四节）：这一刻算出本轮有哪些变化要告知模型，先放内存，压缩完再落库。
+  // 次序固定：日期已变更 → 技能清单新增 → 用户新增了服务 → 用户为这条消息指定了服务。
+  // 重试时这几条上一次已落库，不再生成
+  const slashName = core.slashSkill && skillLib.has(core.slashSkill) ? core.slashSkill : null
+  const scope = skillScope(convId)
+  const pendingRows: { kind: ReminderKind; content: string; items: Record<string, unknown> | null }[] =
+    []
+  if (core.saveUser) {
+    const today = todayText()
+    if (toldDate(convId) !== dateKey(today))
+      pendingRows.push({
+        kind: 'date_change',
+        content: buildDateChange(today),
+        items: { date: dateKey(today) }
+      })
+    if (slashName && !scope.includes(slashName))
+      pendingRows.push({
+        kind: 'skill_added',
+        content: buildSkillAdded(skillEntries([slashName])),
+        items: { skills: [slashName] }
+      })
+    const named = core.slashMcp !== undefined ? getMcpService(core.slashMcp) : null
+    if (named) {
+      if (!mcpAnnounced(convId, named.id)) {
+        const instr = getMcpInstructions(new Set([named.id]))[0]?.instructions ?? ''
+        pendingRows.push({
+          kind: 'mcp_added',
+          content: buildMcpAdded(named.name, instr),
+          items: { serviceId: named.id }
+        })
+      }
+      pendingRows.push({
+        kind: 'mcp_named',
+        content: buildMcpNamed(named.name),
+        items: { serviceId: named.id }
+      })
+    }
+  }
+
   const mcp = makeMcpTools(controller.signal, cards, overflow, mcpSelection)
   const turnTools: Record<string, Tool> = { ...mcp.tools }
   turnTools[ASK_TOOL_NAME] = makeAskTool(controller.signal, cards)
@@ -439,18 +547,11 @@ async function streamCore(core: {
     turnTools,
     makeFsTools({ convId, signal: controller.signal, cards, overflow, onFsCard })
   )
-  // 技能（015 C5）：Agent 清单现场对库过滤（已删除的自然剔除）。可激活范围 = Agent 清单 ∪
-  // 本轮斜杠点名（C6，主进程对库再校验一道），非空才注册激活工具；提示词清单段只放 Agent 配的。
+  // 技能：可激活范围 = 本会话的技能范围（会话开始定格、点名清单外的技能时追加，018 Case 6）∪ 本轮点名。
+  // 非空才注册激活工具（模块 5 改为无条件挂载）。
   // history 在下方组装后才赋值，激活工具经 getHistory 延迟取（执行必在流式循环内，晚于赋值）
   let history: ModelMessage[] = []
-  const skillLib = new Map(listSkills().map((s) => [s.name, s.description]))
-  const turnSkills = (agent?.skillSel ?? [])
-    .filter((n) => skillLib.has(n))
-    .map((n) => ({ name: n, description: skillLib.get(n)! }))
-  const slashName = core.slashSkill && skillLib.has(core.slashSkill) ? core.slashSkill : null
-  const activeSkillNames = [
-    ...new Set([...turnSkills.map((s) => s.name), ...(slashName ? [slashName] : [])])
-  ]
+  const activeSkillNames = [...new Set([...scope, ...(slashName ? [slashName] : [])])]
   if (activeSkillNames.length)
     turnTools[ACTIVATE_TOOL_NAME] = makeActivateSkillTool({
       names: activeSkillNames,
@@ -487,19 +588,6 @@ async function streamCore(core: {
     } as Tool
   }
 
-  // 系统提示词会话定格（018 三节）：第一轮拼一次存进会话行，此后每轮原样读出。
-  // 中途改 Agent 提示词、库的增删、服务连断、跨天，都不回改它——变了的事走消息序列里的提醒消息。
-  // 会话授权目录清单进环境信息（015 Case 2）：定格块已跑过，此处非 NULL
-  let system = getConversationSystemPrompt(convId)
-  if (system === null) {
-    system = buildSystemPrompt({
-      agent: agent ? { name: agent.name, sections: agent.promptSections } : null,
-      kbLibraries: (kbEnv?.libraries ?? []).map((l) => ({ name: l.name, intro: l.intro })),
-      wsDirs: getConversationWs(convId) ?? [],
-      mcpInstructions: getMcpInstructions(mcpSelection)
-    })
-    setConversationSystemPrompt(convId, system)
-  }
   // 触发线（018 二节）：窗口 − 压缩预留。估算 = 工具清单 + 系统提示词 + 消息序列，各乘该模型的校准比值。
   // 工具清单改动前不进估算，它占单次请求的四成上下
   const line = triggerLine(model)
@@ -510,8 +598,13 @@ async function streamCore(core: {
   history = bundle.messages
   const sizeOf = (m: ModelMessage): number =>
     estimateTokens(model, typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
+  // 本轮还没落库的追加消息与用户消息也进估算（它们马上要跟在历史后面发出去）
+  let pendingTexts = [...pendingRows.map((r) => r.content), ...(core.saveUser ? [core.text] : [])]
   const estimate = (): number =>
-    toolsTok + estimateTokens(model, system) + history.reduce((s, m) => s + sizeOf(m), 0)
+    toolsTok +
+    estimateTokens(model, system) +
+    history.reduce((s, m) => s + sizeOf(m), 0) +
+    pendingTexts.reduce((s, t) => s + estimateTokens(model, t), 0)
 
   // 压力分级（07-14 核心改造，Claude Code 微压缩同构）：
   // 不到触发线不动；到线从最老的工具返回清起、换原地指针——只清数据不动对话主干，
@@ -565,6 +658,19 @@ async function streamCore(core: {
       history = history.slice(1)
     droppedOldest = true
   }
+  // 本轮的行现在才写（018 四节）：追加消息在前、用户消息在后，都排在压缩重建的行之后；
+  // 写完追加到内存里的 history 末尾，再写空壳 running 行（016 Case 13）。重试时这几行已在库里，只写空壳
+  if (core.saveUser) {
+    for (const r of pendingRows) insertReminder(convId, r.kind, r.content, r.items)
+    saveUserMessage(convId, core.text, core.refs)
+    history = [
+      ...history,
+      ...pendingRows.map((r): ModelMessage => ({ role: 'user', content: r.content })),
+      { role: 'user', content: expandUserMessage(core.text, core.refs) }
+    ]
+    pendingTexts = []
+  }
+  persistRunning()
   if (droppedOldest) {
     // 压缩分界线（016 Case 11）：插进这一轮开头、随轮落库，重开会话还在。
     // 省下的量 = 裁剪前后各估算一次的差值；算不出正数就不带，渲染层只画线

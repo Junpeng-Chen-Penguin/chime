@@ -53,9 +53,12 @@ const api = {
     refs?: (
       | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }
       | { t: 'skillref'; name: string; desc: string }
+      | { t: 'mcpref'; name: string }
     )[]
     ws?: { picked: string[]; fromAgent: string[] }
     slashSkill?: string
+    slashMcp?: number
+    mcpPicked?: number[]
   }) => ipcRenderer.send('chat:send', payload),
   retryChat: (payload: { streamId: string; convId: string; model: string }) =>
     ipcRenderer.send('chat:retry', payload),
@@ -110,8 +113,6 @@ const api = {
     ipcRenderer.invoke('conv:setKbSel', input),
   getConversationKbSel: (id: string) => ipcRenderer.invoke('conv:getKbSel', id),
   kbOptions: () => ipcRenderer.invoke('kb:options'),
-  setConversationMcpSelection: (input: { id: string; serviceIds: number[] }) =>
-    ipcRenderer.invoke('conv:setMcpSel', input),
   getConversationMcpSelection: (id: string): Promise<number[]> =>
     ipcRenderer.invoke('conv:getMcpSel', id),
   openDoc: (input: { kbId: number; filePath: string }) => ipcRenderer.invoke('doc:open', input),

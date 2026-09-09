@@ -7,7 +7,15 @@ export type MsgStatus = 'done' | 'streaming' | 'stopped' | 'error' | 'interrupte
 // 表格行引用（013 Case 2）与斜杠点名 chip（015 Case 6）：随用户消息发送的 TurnItem 分支
 export type RefItem = Extract<TurnItem, { t: 'ref' }>
 export type SkillRefItem = Extract<TurnItem, { t: 'skillref' }>
-export type UserItem = RefItem | SkillRefItem
+export type McpRefItem = Extract<TurnItem, { t: 'mcpref' }>
+export type UserItem = RefItem | SkillRefItem | McpRefItem
+
+// 本轮消息的点名（018 Case 5）：斜杠点名的技能名或服务 id，加上次发送以来在面板里点过的服务
+export interface SendOpts {
+  slashSkill?: string
+  slashMcp?: number
+  mcpPicked?: number[]
+}
 
 export interface Usage {
   input: number
@@ -17,7 +25,8 @@ export interface Usage {
 
 export interface Msg {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'reminder' // reminder：提醒消息行（018），只有 kind 为 summary 的画压缩分界线
+  kind?: string | null
   content: string // assistant：最终回答文本（复制、自动标题用）
   items?: TurnItem[] // assistant：一轮的有序过程
   usage?: Usage // 正常收尾才有；中断轮无（不显示不估算）
@@ -43,7 +52,7 @@ export interface ChatHandle {
     text: string,
     refs?: UserItem[],
     ws?: { picked: string[]; fromAgent: string[] },
-    slashSkill?: string
+    opts?: SendOpts
   ) => void
   stop: () => void
   retry: (convId: string, model: string) => void
@@ -54,7 +63,7 @@ export interface ChatHandle {
     model: string,
     text: string,
     refs?: UserItem[],
-    slashSkill?: string
+    opts?: SendOpts
   ) => void
 }
 
@@ -72,7 +81,7 @@ export function useChat(onChange?: () => void): ChatHandle {
     model: string
     text: string
     refs?: UserItem[]
-    slashSkill?: string
+    opts?: SendOpts
   } | null>(null)
   const sendRef = useRef<
     (
@@ -81,7 +90,7 @@ export function useChat(onChange?: () => void): ChatHandle {
       text: string,
       refs?: UserItem[],
       ws?: { picked: string[]; fromAgent: string[] },
-      slashSkill?: string
+      opts?: SendOpts
     ) => void
   >(() => {})
 
@@ -182,7 +191,7 @@ export function useChat(onChange?: () => void): ChatHandle {
           const p = pendingSendRef.current
           if (p) {
             pendingSendRef.current = null
-            sendRef.current(p.convId, p.model, p.text, p.refs, undefined, p.slashSkill)
+            sendRef.current(p.convId, p.model, p.text, p.refs, undefined, p.opts)
           }
           return
         }
@@ -209,7 +218,7 @@ export function useChat(onChange?: () => void): ChatHandle {
       text,
       refs?: UserItem[],
       ws?: { picked: string[]; fromAgent: string[] },
-      slashSkill?: string
+      opts?: SendOpts
     ) => {
       if (routeRef.current) return
       const now = Date.now()
@@ -231,7 +240,7 @@ export function useChat(onChange?: () => void): ChatHandle {
       }
       setThreads((t) => ({ ...t, [convId]: [...(t[convId] ?? []), userMsg, asstMsg] }))
       const streamId = begin(convId, asstMsg.id)
-      window.api.sendChat({ streamId, convId, text, model, refs, ws, slashSkill })
+      window.api.sendChat({ streamId, convId, text, model, refs, ws, ...opts })
     },
     [begin]
   )
@@ -281,10 +290,10 @@ export function useChat(onChange?: () => void): ChatHandle {
   // 提问卡等待中打字发送 = 中断提问 + 开启新一轮（Claude 同此）：
   // 停止本轮（卡记未回应），本轮收场事件到达后把输入的文字作为新消息发出
   const interruptAskAndSend = useCallback(
-    (convId: string, model: string, text: string, refs?: UserItem[], slashSkill?: string) => {
+    (convId: string, model: string, text: string, refs?: UserItem[], opts?: SendOpts) => {
       const r = routeRef.current
       if (!r) return
-      pendingSendRef.current = { convId, model, text, refs, slashSkill }
+      pendingSendRef.current = { convId, model, text, refs, opts }
       window.api.stopChat(r.streamId)
     },
     []

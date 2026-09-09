@@ -32,7 +32,6 @@ import {
   kbStats,
   setConversationKbSelection,
   getConversationKbSelection,
-  setConversationMcpSelection,
   getConversationMcpSelection,
   listKbs,
   createKb,
@@ -174,10 +173,13 @@ export function registerIpc(): void {
         refs?: (
           | { t: 'ref'; artifactId: number; title: string; rowIndexes: number[] }
           | { t: 'skillref'; name: string; desc: string }
+          | { t: 'mcpref'; name: string }
         )[]
         // 015 Case 1：首条消息随带工作空间选中集合（picked 与 fromAgent 合并后全部上授权卡统一确认）
         ws?: { picked: string[]; fromAgent: string[] }
         slashSkill?: string // 015 Case 6：本轮消息斜杠点名的技能
+        slashMcp?: number // 018 Case 5：本轮消息斜杠点名的 MCP 服务
+        mcpPicked?: number[] // 018 Case 5：上次发送以来在面板里点过的服务，并入会话选用清单
       }
     ) => {
       const wc = e.sender
@@ -372,9 +374,7 @@ export function registerIpc(): void {
   })
 
   // Case 8 会话选用工具：读写本会话选用的 MCP 服务清单
-  ipcMain.handle('conv:setMcpSel', (_e, input: { id: string; serviceIds: number[] }) =>
-    setConversationMcpSelection(input.id, input.serviceIds)
-  )
+  // 会话选用的服务只增不减（018 Case 5）：勾选取消的通道已删，追加随 chat:send 的 mcpPicked 走
   ipcMain.handle('conv:getMcpSel', (_e, id: string) => getConversationMcpSelection(id))
 
   // ── 会话工作空间（015 Case 1）──────────────────────

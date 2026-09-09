@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader2,
+import {
   ArrowUp,
   Bot,
   ChevronDown,
@@ -79,10 +79,10 @@ interface Props {
   kbOptions: KbOption[]
   kbSel: KbSelEntry[] // 历史会话关联的库（014 起知识库只从 Agent 进入，此控件仅历史会话只读展示）
   services?: ServiceStatus[] // 已启用的外部服务及连接状态
-  selectedServiceIds?: number[] // 本会话自选的服务（Case 8）
-  onToggleService?: (id: number) => void
-  onRetryServices?: () => void
-  onOpenSettings?: () => void
+  // 斜杠面板里可点名的服务（018 Case 5）：通用会话是本地全部已启用的，Agent 会话是该 Agent 配置的。
+  // 点一行 = 输入框落「/服务名 」并告知 App 该服务已点过（工具进本会话的查询表，之后一直保留）
+  slashServices?: { id: number; name: string }[]
+  onPickService?: (id: number) => void
   // 自定义 Agent（014 Case 4）
   agents?: { id: number; name: string }[] // 可选清单
   agentSel?: { id: number; name: string } | null // 本会话选用
@@ -91,7 +91,6 @@ interface Props {
   agentServiceIds?: number[] // Agent 挂的服务（在服务菜单里标「来自 Agent」，不可取消）
   onSelectAgent?: (a: { id: number; name: string } | null) => void
   onManageAgents?: () => void // 跳设置的 Agent 栏
-  onManageServices?: () => void // 跳设置的工具栏（016 Case 3）
   onConfigureModel?: () => void // 未配置模型时点选择器跳设置（016 Case 3）
   ws?: WsSelector // 工作空间选择器（015 Case 1），输入框卡片下方
 }
@@ -113,40 +112,27 @@ export default function Composer({
   sessionUsage,
   kbOptions,
   kbSel,
-  services,
-  selectedServiceIds,
-  onToggleService,
-  onRetryServices,
-  onOpenSettings,
+  slashServices,
+  onPickService,
   agents,
   agentSel,
   agentLocked,
   agentGone,
-  agentServiceIds,
   onSelectAgent,
   onManageAgents,
-  onManageServices,
   onConfigureModel,
   ws
 }: Props): React.JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [kbMenuOpen, setKbMenuOpen] = useState(false)
-  // 加号菜单（014 Case 4）：一级（Agent / MCP 服务）+ 右侧二级面板
+  // 加号菜单（014 Case 4）：一级只剩 Agent 一项（018 Case 5：MCP 服务的点名改走斜杠面板）+ 右侧二级面板
   const [plusOpen, setPlusOpen] = useState(false)
-  const [plusSub, setPlusSub] = useState<'agent' | 'mcp' | null>(null)
+  const [plusSub, setPlusSub] = useState<'agent' | null>(null)
   // 工作空间选择器（015 Case 1）
   const [wsOpen, setWsOpen] = useState(false)
-  const [retrying, setRetrying] = useState(false) // 016 Case 2：重试连接进行中
   const [wsQuery, setWsQuery] = useState('')
   const taRef = useRef<HTMLTextAreaElement>(null)
-  const svcList = services ?? []
   const agentList = agents ?? []
-  const fromAgent = new Set(agentServiceIds ?? [])
-  // 会话的服务范围 = 自选 ∪ Agent 挂的（后者只算还存在的）
-  const selectedIds = [
-    ...new Set([...(selectedServiceIds ?? []), ...[...fromAgent].filter((id) => svcList.some((s) => s.id === id))])
-  ]
-  const anyDown = svcList.some((s) => s.status !== 'connected')
   const closePlus = (): void => {
     setPlusOpen(false)
     setPlusSub(null)
@@ -178,21 +164,34 @@ export default function Composer({
     }
     slashPrev.current = slashPrefix
   }, [slashPrefix])
-  const slashHits =
-    slashQuery !== undefined && skillList
-      ? skillList.filter((s) => s.name.startsWith(slashQuery))
+  // 面板分两组（018 Case 5）：技能在前、MCP 服务在后，都只显示名字；按前缀过滤，两组都空就不弹
+  type SlashHit = { kind: 'skill'; name: string } | { kind: 'mcp'; name: string; id: number }
+  const slashHits: SlashHit[] =
+    slashQuery !== undefined
+      ? [
+          ...(skillList ?? [])
+            .filter((s) => s.name.startsWith(slashQuery))
+            .map((s): SlashHit => ({ kind: 'skill', name: s.name })),
+          ...(slashServices ?? [])
+            .filter((s) => s.name.startsWith(slashQuery))
+            .map((s): SlashHit => ({ kind: 'mcp', name: s.name, id: s.id }))
+        ]
       : []
   const slashPanel = slashHits.length > 0
-  const pickSkill = (name: string): void => {
-    onChange(`/${name} `)
+  const pickHit = (h: SlashHit): void => {
+    onChange(`/${h.name} `)
+    if (h.kind === 'mcp') onPickService?.(h.id)
     taRef.current?.focus()
   }
-  // 有效点名的输入框内反馈（验收二轮拍板 2026-08-18）：开头「/技能名」命中库里的名字时文字显示主色，
+  // 有效点名的输入框内反馈（验收二轮拍板 2026-08-18）：开头「/名字」命中技能库或服务清单时文字显示主色，
   // 与消息气泡上的点名同一个样式（一个功能一种表达）。textarea 做不了部分变色，镜像层用完全相同的
   // 字体字重把主色字盖在黑字正上方——字重必须与正文一致，否则字宽不同盖不严
   const mentionLen = (() => {
     const m = /^\/([^\s/]+)(\s|$)/.exec(value)
-    return m && skillList?.some((s) => s.name === m[1]) ? m[1].length + 1 : 0
+    if (!m) return 0
+    const known =
+      skillList?.some((s) => s.name === m[1]) || (slashServices ?? []).some((s) => s.name === m[1])
+    return known ? m[1].length + 1 : 0
   })()
   const hlRef = useRef<HTMLDivElement>(null)
 
@@ -227,27 +226,37 @@ export default function Composer({
           )}
         >
         <div className="relative rounded-2xl border border-input bg-background shadow-[0_1px_3px_rgba(0,0,0,0.04),0_8px_28px_-8px_rgba(0,0,0,0.14)] transition focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15">
-          {/* 斜杠技能面板（015 Case 6）：输入框上方，只列技能名（不限当前 Agent）。
-              mousedown 选中（blur 前生效），悬停同步高亮；库空或无匹配都不弹 */}
+          {/* 斜杠面板（015 Case 6、018 Case 5）：输入框上方，技能一组在前、MCP 服务一组在后，每组带组标题，
+              只列名字。mousedown 选中（blur 前生效），悬停同步高亮；两组都无匹配不弹 */}
           {slashPanel && (
-            <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 max-h-[240px] w-[240px] overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-              {slashHits.map((s, i) => (
-                <button
-                  key={s.name}
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    pickSkill(s.name)
-                  }}
-                  onMouseEnter={() => setSlashIdx(i)}
-                  className={cn(
-                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
-                    i === slashIdx && 'bg-muted'
-                  )}
-                >
-                  <Puzzle className="size-3.5 flex-none text-muted-foreground" />
-                  <span className="min-w-0 truncate">/{s.name}</span>
-                </button>
-              ))}
+            <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 max-h-[280px] w-[240px] overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-lg">
+              {slashHits.map((h, i) => {
+                const first = i === 0 || slashHits[i - 1].kind !== h.kind
+                const Icon = h.kind === 'skill' ? Puzzle : Wrench
+                return (
+                  <div key={`${h.kind}-${h.name}`}>
+                    {first && (
+                      <div className="px-2.5 pt-1.5 pb-1 text-[12px] text-muted-foreground">
+                        {h.kind === 'skill' ? '技能' : 'MCP 服务'}
+                      </div>
+                    )}
+                    <button
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        pickHit(h)
+                      }}
+                      onMouseEnter={() => setSlashIdx(i)}
+                      className={cn(
+                        'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
+                        i === slashIdx && 'bg-muted'
+                      )}
+                    >
+                      <Icon className="size-3.5 flex-none text-muted-foreground" />
+                      <span className="min-w-0 truncate">/{h.name}</span>
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           )}
           {/* 待发送的表格行引用（013 Case 2）：横排、放不下换行；不带序号——一个制品
@@ -323,7 +332,7 @@ export default function Composer({
                 }
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
-                  pickSkill(slashHits[Math.min(slashIdx, slashHits.length - 1)].name)
+                  pickHit(slashHits[Math.min(slashIdx, slashHits.length - 1)])
                   return
                 }
               }
@@ -350,19 +359,15 @@ export default function Composer({
                 <button
                   onClick={() => (plusOpen ? closePlus() : setPlusOpen(true))}
                   onBlur={() => setTimeout(closePlus, 150)}
-                  title="添加 Agent 或 MCP 服务"
+                  title="添加 Agent"
                   className="grid size-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted"
                 >
                   <Plus className="size-4" />
                 </button>
                 {plusOpen && (
                   <div className="absolute bottom-[calc(100%+8px)] left-0 z-20 w-[168px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-                    {(
-                      [
-                        { key: 'agent' as const, icon: Bot, label: 'Agent' },
-                        { key: 'mcp' as const, icon: Wrench, label: 'MCP 服务' }
-                      ]
-                    ).map(({ key, icon: Icon, label }) => (
+                    {[{ key: 'agent' as const, icon: Bot, label: 'Agent' }].map(
+                      ({ key, icon: Icon, label }) => (
                       <div key={key} className="relative">
                         <button
                           onMouseEnter={() => setPlusSub(key)}
@@ -437,106 +442,6 @@ export default function Composer({
                           </div>
                         )}
 
-                        {plusSub === key && key === 'mcp' && (
-                          <div className="absolute top-0 left-[calc(100%+10px)] z-30 min-w-[280px] rounded-xl border border-border bg-popover p-1.5 shadow-lg">
-                            {svcList.length === 0 && (
-                              <div className="px-2.5 py-1.5 text-[13px] text-muted-foreground">
-                                还没有已启用的 MCP 服务，可在「
-                                <button
-                                  onMouseDown={(e) => {
-                                    e.preventDefault()
-                                    closePlus()
-                                    onManageServices?.()
-                                  }}
-                                  className="text-primary hover:underline"
-                                >
-                                  工具
-                                </button>
-                                」分区添加
-                              </div>
-                            )}
-                            {svcList.map((s) => {
-                              const viaAgent = fromAgent.has(s.id)
-                              const picked = selectedIds.includes(s.id)
-                              const down = s.status !== 'connected'
-                              const disabled = viaAgent || (down && !picked)
-                              return (
-                                <button
-                                  key={s.id}
-                                  onMouseDown={(e) => {
-                                    e.preventDefault()
-                                    if (!disabled) onToggleService?.(s.id)
-                                  }}
-                                  className={cn(
-                                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
-                                    disabled ? 'cursor-default opacity-60' : 'hover:bg-muted'
-                                  )}
-                                >
-                                  {/* 方形勾选框 = 多选（与提问卡多选同款；圆形留给单选） */}
-                                  <span
-                                    className={cn(
-                                      'grid size-5 flex-none place-items-center rounded-md border',
-                                      picked
-                                        ? 'border-primary bg-primary text-primary-foreground'
-                                        : 'border-border'
-                                    )}
-                                  >
-                                    {picked && <Check className="size-3.5" strokeWidth={3} />}
-                                  </span>
-                                  <span className="min-w-0 flex-1 truncate">{s.name}</span>
-                                  {viaAgent ? (
-                                    <span className="flex-none text-[12px] text-muted-foreground">来自 Agent</span>
-                                  ) : (
-                                    <>
-                                      <span
-                                        className={cn(
-                                          'size-1.5 flex-none rounded-full',
-                                          down ? 'bg-destructive' : 'bg-emerald-600'
-                                        )}
-                                      />
-                                      <span className="flex-none text-[12px] text-muted-foreground">
-                                        {s.status === 'connected'
-                                          ? '已连接'
-                                          : s.status === 'auth'
-                                            ? '认证失效'
-                                            : '连接失败'}
-                                      </span>
-                                    </>
-                                  )}
-                                </button>
-                              )
-                            })}
-                            <div className="mt-1 flex gap-1 border-t border-border px-1 pt-1.5">
-                              {anyDown && (
-                                <button
-                                  disabled={retrying}
-                                  onMouseDown={(e) => {
-                                    e.preventDefault()
-                                    if (retrying) return
-                                    setRetrying(true)
-                                    Promise.resolve(onRetryServices?.()).finally(() =>
-                                      setRetrying(false)
-                                    )
-                                  }}
-                                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors enabled:hover:bg-muted"
-                                >
-                                  {retrying && <Loader2 className="size-3.5 animate-spin" />}
-                                  重试连接
-                                </button>
-                              )}
-                              <button
-                                onMouseDown={(e) => {
-                                  e.preventDefault()
-                                  closePlus()
-                                  onOpenSettings?.()
-                                }}
-                                className="flex-1 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors hover:bg-muted"
-                              >
-                                管理服务
-                              </button>
-                            </div>
-                          </div>
-                        )}
                       </div>
                     ))}
                   </div>

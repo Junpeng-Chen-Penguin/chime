@@ -13,7 +13,8 @@ export interface Conversation {
 export interface PersistedMessage {
   id: string
   conversationId: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'reminder' // reminder：提醒消息行（018），界面不显示，summary 画压缩分界线
+  kind?: string | null
   content: string
   items: string | null // TurnItem[] 的 JSON；assistant 行是过程件，user 行只有表格行引用（013）
   usage: string | null // {input, output, cached} JSON

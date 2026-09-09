@@ -16,6 +16,7 @@ import type { SourceRef, TurnItem, ArtifactView, WsEntry } from '../../preload/i
 const toMsg = (p: PersistedMessage): Msg => ({
   id: p.id,
   role: p.role,
+  kind: p.kind,
   content: p.content,
   items: p.items ? JSON.parse(p.items) : undefined,
   usage: p.usage ? JSON.parse(p.usage) : undefined,
@@ -80,8 +81,9 @@ function App(): React.JSX.Element {
   const [services, setServices] = useState<
     { id: number; name: string; status: 'connected' | 'auth' | 'error' }[]
   >([])
-  // 会话选用的 MCP 服务（Case 8）：按会话缓存，真实会话首次激活时从库读，草稿只在内存
-  const [mcpSel, setMcpSel] = useState<Record<string, number[]>>({})
+  // 上次发送以来在斜杠面板里点过的服务（018 Case 5）：随下一条消息发给主进程并入会话选用清单。
+  // 点了又把「/服务名」删掉的也在里面——服务的工具仍要进本会话的查询表
+  const [mcpPicked, setMcpPicked] = useState<Record<string, number[]>>({})
 
   const reloadKb = useCallback(() => {
     window.api.kbOptions().then(setKbOptions)
@@ -119,15 +121,6 @@ function App(): React.JSX.Element {
     reloadServices()
     return window.api.onMcpStatus(reloadServices)
   }, [reloadServices])
-
-  // 激活真实会话时补读它的选用清单（草稿会话默认空、只在内存）
-  useEffect(() => {
-    if (!activeId || activeId === draftId || activeId in mcpSel) return
-    window.api
-      .getConversationMcpSelection(activeId)
-      .then((ids) => setMcpSel((m) => ({ ...m, [activeId]: ids })))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, draftId])
 
   // 会话变更（切换 / 新建 / 删除当前）统一关闭侧板——内容与原会话强相关。
   // 例外（015）：工作面板是常驻视图，跨会话保持开启，内容随会话
@@ -293,6 +286,11 @@ function App(): React.JSX.Element {
   const agentServiceIds = curAgent
     ? (agents.find((a) => a.id === curAgent.id)?.mcpSel.map((e) => e.id) ?? [])
     : []
+  // 斜杠面板里可点名的服务（018 Case 5）：通用会话是本地全部已启用的，Agent 会话是该 Agent 配置的；
+  // 连不上的照常列出、照常可点
+  const slashServices = curAgent
+    ? services.filter((s) => agentServiceIds.includes(s.id))
+    : services
 
   // ── 工作空间派生与操作（015 Case 1）────────────────────
   const wsNameOf = (p: string): string => p.split('/').filter(Boolean).pop() ?? p
@@ -416,32 +414,35 @@ function App(): React.JSX.Element {
         rowIndexes
       })
     )
-    // 斜杠点名（015 Case 6）：开头「/技能名」对库校验——存在的计入本轮点名并存 chip 渲染件
-    //（简介存发出时的快照）；不存在的当普通文本，不设字段
-    let slashSkill: string | undefined
+    // 斜杠点名（015 Case 6、018 Case 5）：开头「/名字」先对技能库校验，再对本会话可点名的服务校验——
+    // 命中的计入本轮点名并存 chip 渲染件（技能存简介快照，服务只存名字）；都不命中当普通文本，不设字段
+    const sendOpts: import('@/hooks/useChat').SendOpts = {}
     if (text.startsWith('/')) {
       const name = text.slice(1).split(/\s+/)[0]
       if (name) {
         const hit = (await window.api.skillList()).find((s) => s.name === name)
         if (hit) {
-          slashSkill = name
+          sendOpts.slashSkill = name
           refs.push({ t: 'skillref', name, desc: hit.description })
+        } else {
+          const svc = slashServices.find((s) => s.name === name)
+          if (svc) {
+            sendOpts.slashMcp = svc.id
+            refs.push({ t: 'mcpref', name })
+          }
         }
       }
     }
+    const picked = [...new Set([...(mcpPicked[activeId] ?? []), ...(sendOpts.slashMcp !== undefined ? [sendOpts.slashMcp] : [])])]
+    if (picked.length) sendOpts.mcpPicked = picked
     const clearPending = (): void => {
       setInputs((m) => ({ ...m, [activeId]: '' }))
       setChips((m) => ({ ...m, [activeId]: [] }))
+      setMcpPicked((m) => ({ ...m, [activeId]: [] }))
     }
     // 提问卡等待中打字发送 = 中断提问 + 开启新一轮（Claude 同此；想回答问题用卡内作答）
     if (askActive) {
-      chat.interruptAskAndSend(
-        activeId,
-        activeModel,
-        text,
-        refs.length ? refs : undefined,
-        slashSkill
-      )
+      chat.interruptAskAndSend(activeId, activeModel, text, refs.length ? refs : undefined, sendOpts)
       clearPending()
       return
     }
@@ -458,10 +459,6 @@ function App(): React.JSX.Element {
             agentId: agent.id,
             agentName: agent.name
           })
-        // 草稿期勾选的服务随会话落库（Case 8）
-        const sel = mcpSel[activeId]
-        if (sel?.length)
-          await window.api.setConversationMcpSelection({ id: activeId, serviceIds: sel })
         setConversations((cs) => [
           { ...c, agentId: agent?.id ?? null, agentName: agent?.name ?? null },
           ...cs
@@ -478,7 +475,7 @@ function App(): React.JSX.Element {
       frozenWs === null
         ? { picked: wsChecked.filter((p) => !fromAgentWs.includes(p)), fromAgent: fromAgentWs }
         : undefined
-    chat.send(activeId, activeModel, text, refs.length ? refs : undefined, wsPayload, slashSkill)
+    chat.send(activeId, activeModel, text, refs.length ? refs : undefined, wsPayload, sendOpts)
   }
 
   const confirmDelete = async (): Promise<void> => {
@@ -587,22 +584,15 @@ function App(): React.JSX.Element {
           agentServiceIds={agentServiceIds}
           onSelectAgent={selectAgent}
           onManageAgents={() => openSettings('agent')}
-          onManageServices={() => openSettings('mcp')}
           onConfigureModel={() => openSettings('provider')}
           services={services}
-          selectedServiceIds={mcpSel[activeId] ?? []}
-          onToggleService={(id) => {
-            const cur = mcpSel[activeId] ?? []
-            const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]
-            setMcpSel((m) => ({ ...m, [activeId]: next }))
-            // 真实会话立即持久化；草稿会话等发首条消息时随会话落库
-            if (activeId !== draftId)
-              window.api.setConversationMcpSelection({ id: activeId, serviceIds: next })
-          }}
-          onRetryServices={() => {
-            window.api.mcpRetry().then(reloadServices)
-          }}
-          onOpenSettings={() => openSettings('mcp')}
+          slashServices={slashServices}
+          onPickService={(id) =>
+            setMcpPicked((m) => ({
+              ...m,
+              [activeId]: [...new Set([...(m[activeId] ?? []), id])]
+            }))
+          }
           onRename={(t) => {
             if (!activeId || activeId === draftId) return
             // 016 Case 1：界面先变，保存失败回到改之前的标题

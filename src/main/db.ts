@@ -184,6 +184,22 @@ export function initDb(): void {
   db.exec(
     "UPDATE agent SET prompt_sections = json_object('background', prompt) WHERE prompt <> '' AND prompt_sections = '{}'"
   )
+  // 迁移（018 四、五、七、八节）：提醒消息行的种类；二级压缩位置与失败计数；本地查询表；上一轮的占用拆分；
+  // 服务上次拉到的工具清单（连不上时查询表从它取）
+  for (const col of [
+    'ALTER TABLE message ADD COLUMN kind TEXT',
+    'ALTER TABLE conversation ADD COLUMN compact_from INTEGER',
+    'ALTER TABLE conversation ADD COLUMN compact_failures INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE conversation ADD COLUMN deferred_tools TEXT',
+    'ALTER TABLE conversation ADD COLUMN last_context TEXT',
+    'ALTER TABLE mcp_service ADD COLUMN tools_json TEXT'
+  ]) {
+    try {
+      db.exec(col)
+    } catch {
+      // 列已存在
+    }
+  }
   // 迁移（016 轮状态拆两字段）：status 只记走到哪一步，为什么结束挪进 end_reason。
   // 旧值 stopped/error/interrupted 都是「已结束」，映射成 done + 对应原因，一次跑完
   const msgCols2 = db.prepare('PRAGMA table_info(message)').all() as { name: string }[]
@@ -610,11 +626,20 @@ export function listToolResults(conversationId: string): { id: number; content: 
 }
 
 export function getMessages(conversationId: string): MessageRow[] {
+  // 同毫秒写入的行按插入顺序排（018 四节：压缩重建的几行与本轮的行紧挨着写）
   return db
     .prepare(
-      'SELECT id, conversation_id AS conversationId, role, content, items, usage, status, end_reason AS endReason, created_at AS createdAt FROM message WHERE conversation_id = ? ORDER BY created_at'
+      'SELECT id, conversation_id AS conversationId, role, kind, content, items, usage, status, end_reason AS endReason, created_at AS createdAt FROM message WHERE conversation_id = ? ORDER BY created_at, rowid'
     )
     .all(conversationId) as MessageRow[]
+}
+
+// 会话中途点名的服务并入选用清单（018 Case 5）：只增不减，幂等
+export function addConversationMcpSelection(id: string, serviceIds: number[]): number[] {
+  const cur = getConversationMcpSelection(id)
+  const next = [...new Set([...cur, ...serviceIds])]
+  if (next.length !== cur.length) setConversationMcpSelection(id, next)
+  return next
 }
 
 export function getConversationMeta(id: string): { title: string; titleAuto: boolean } | null {
