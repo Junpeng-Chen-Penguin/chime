@@ -69,7 +69,8 @@ import {
   unmarkConvActive,
   type TurnItem,
   type EndReason,
-  type TurnUsage
+  type TurnUsage,
+  type StepUsage as StepUsageRecord
 } from './store'
 
 export type ChatEvent =
@@ -575,42 +576,30 @@ async function streamCore(core: {
       inputTokenDetails?: { cacheReadTokens?: number }
     }
   }
-  const firstStepOf = (st: StepUsage): NonNullable<TurnUsage['firstStep']> => ({
+  const stepOf = (st: StepUsage): StepUsageRecord => ({
     inputTokens: st.usage.inputTokens ?? 0,
+    outputTokens: st.usage.outputTokens ?? 0,
     cachedInputTokens: st.usage.inputTokenDetails?.cacheReadTokens ?? 0
   })
-  const sumSteps = (steps: readonly StepUsage[]): TurnUsage | undefined => {
+  // 各次请求的用量按顺序记全（018 一节），合计从它们加出来
+  const usageOf = (steps: readonly StepUsageRecord[]): TurnUsage | undefined => {
     if (!steps.length) return undefined
     return {
-      ...steps.reduce(
-        (acc, st) => ({
-          inputTokens: acc.inputTokens + (st.usage.inputTokens ?? 0),
-          outputTokens: acc.outputTokens + (st.usage.outputTokens ?? 0),
-          cachedInputTokens:
-            (acc.cachedInputTokens ?? 0) + (st.usage.inputTokenDetails?.cacheReadTokens ?? 0)
-        }),
-        { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 }
-      ),
-      firstStep: firstStepOf(steps[0])
+      inputTokens: steps.reduce((s, st) => s + st.inputTokens, 0),
+      outputTokens: steps.reduce((s, st) => s + st.outputTokens, 0),
+      cachedInputTokens: steps.reduce((s, st) => s + st.cachedInputTokens, 0),
+      steps: [...steps]
     }
   }
+  const sumSteps = (steps: readonly StepUsage[]): TurnUsage | undefined =>
+    usageOf(steps.map(stepOf))
   let abortedUsage: TurnUsage | undefined
   let stepsPromise: Promise<readonly StepUsage[]> | null = null
-  // finish-step 逐次累计（首选来源）：LLM 请求一结束就有该次 usage，不等这一步的工具跑完。
-  // 并行调用等授权时停止，onAbort 与 steps 都是空的，只有这里有数。
-  // firstStep 只在第一个 finish-step 赋值一次（018 一节）：缓存命中率按这一步算
-  const streamed: {
-    inputTokens: number
-    outputTokens: number
-    cachedInputTokens: number
-    seen: boolean
-    firstStep?: TurnUsage['firstStep']
-  } = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, seen: false }
+  // finish-step 逐次记录（首选来源）：LLM 请求一结束就有该次 usage，不等这一步的工具跑完。
+  // 并行调用等授权时停止，onAbort 与 steps 都是空的，只有这里有数
+  const streamed: StepUsageRecord[] = []
   const stoppedUsage = async (): Promise<TurnUsage | undefined> => {
-    if (streamed.seen) {
-      const { inputTokens, outputTokens, cachedInputTokens, firstStep } = streamed
-      return { inputTokens, outputTokens, cachedInputTokens, firstStep }
-    }
+    if (streamed.length) return usageOf(streamed)
     if (abortedUsage) return abortedUsage
     const st = stepsPromise ? await stepsPromise.catch(() => []) : []
     return sumSteps(st)
@@ -853,11 +842,7 @@ async function streamCore(core: {
           break
         }
         case 'finish-step':
-          if (!streamed.seen) streamed.firstStep = firstStepOf(part)
-          streamed.seen = true
-          streamed.inputTokens += part.usage.inputTokens ?? 0
-          streamed.outputTokens += part.usage.outputTokens ?? 0
-          streamed.cachedInputTokens += part.usage.inputTokenDetails?.cacheReadTokens ?? 0
+          streamed.push(stepOf(part))
           break
         case 'error':
           throw part.error
@@ -897,8 +882,8 @@ async function streamCore(core: {
         inputTokens: input,
         outputTokens: usage.outputTokens ?? 0,
         cachedInputTokens: usage.inputTokenDetails?.cacheReadTokens ?? 0,
-        // 正常收场也从流里取首步：result.usage 是全部步骤的合计（AI SDK 文档），没有分步
-        firstStep: streamed.firstStep
+        // 分步从流里取：result.usage 是全部步骤的合计（AI SDK 文档），没有分步
+        steps: [...streamed]
       },
       contextRatio
     )

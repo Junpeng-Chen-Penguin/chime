@@ -72,13 +72,21 @@ export type TurnPhase = 'running' | 'waiting' | 'done'
 // 空 = 正常完成；stopped = 用户停止；interrupted = 应用退出打断；error = 出错
 export type EndReason = 'stopped' | 'interrupted' | 'error'
 
-// 一轮的用量（018 一节）：整轮合计之外多带第一次模型请求的用量。
-// 缓存命中率按首步算才有意义——第二步起的输入几乎全是第一步的前缀，合计口径把命中率抬高了
+// 一次模型请求的用量
+export interface StepUsage {
+  inputTokens: number
+  outputTokens: number
+  cachedInputTokens: number
+}
+
+// 一轮的用量（018 一节）：整轮合计之外，按顺序带上这一轮每次模型请求的用量。
+// 缓存命中率按每轮第一次请求算才有意义——第二次起的输入几乎全是第一次的前缀，合计口径把命中率抬高了。
+// 记全每次请求而不只记第一次：统计口径以后再变不用再改采集（Claude Code 与 codex 都按请求记）
 export interface TurnUsage {
   inputTokens: number
   outputTokens: number
   cachedInputTokens?: number
-  firstStep?: { inputTokens: number; cachedInputTokens: number }
+  steps?: StepUsage[]
 }
 
 // 正在跑的会话集合：启动修复的排除名单（orchestrator 开轮登记、收场注销）。
@@ -140,16 +148,19 @@ export function saveAssistantTurn(
   const db = getDb()
   const now = Date.now()
   // 用量落库（PRD Case 5）：{input, output, cached}；中断轮 usage 为空存 NULL——没有就是没有，不估算。
-  // 018 起多两个键：firstInput / firstCached 是首步的输入与命中，一步都没完成时不写
+  // 018 起多一个键 steps：这一轮每次模型请求的 {input, output, cached}，按顺序；一次都没完成时不写
   const usageJson = turn.usage
     ? JSON.stringify({
         input: turn.usage.inputTokens,
         output: turn.usage.outputTokens,
         cached: turn.usage.cachedInputTokens ?? 0,
-        ...(turn.usage.firstStep
+        ...(turn.usage.steps?.length
           ? {
-              firstInput: turn.usage.firstStep.inputTokens,
-              firstCached: turn.usage.firstStep.cachedInputTokens
+              steps: turn.usage.steps.map((s) => ({
+                input: s.inputTokens,
+                output: s.outputTokens,
+                cached: s.cachedInputTokens
+              }))
             }
           : {})
       })

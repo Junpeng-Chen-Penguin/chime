@@ -103,7 +103,8 @@ export type ChatEvent =
         inputTokens: number
         outputTokens: number
         cachedInputTokens?: number
-        firstStep?: { inputTokens: number; cachedInputTokens: number } // 该轮第一次模型请求（018）
+        // 该轮每次模型请求的用量，按顺序（018）；缓存命中率按第一项算
+        steps?: { inputTokens: number; outputTokens: number; cachedInputTokens: number }[]
       }
       contextRatio: number
     }
