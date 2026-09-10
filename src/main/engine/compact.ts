@@ -17,6 +17,7 @@ import {
   setConversationCompaction,
   bumpConversationCompactFailures,
   getConversationSystemPrompt,
+  getConversationResidentServices,
   getConversationAgent,
   getAgent,
   getConversationMcpSelection,
@@ -44,7 +45,7 @@ import {
   REMINDER_ROLE,
   type SkillEntry
 } from './reminders'
-import { ensureDeferredTable, bareName, type DeferredTool } from './deferred'
+import { ensureDeferredTable, entriesOf, bareName, type DeferredTool } from './deferred'
 import { assembleTurnTools, definitionsOnly } from './toolset'
 import type { CardQueue } from './cards'
 import type { TurnToolContext } from './tools'
@@ -137,6 +138,7 @@ export function rebuildAfterSummary(o: {
   skillEntries: SkillEntry[] // 本会话的技能范围（skill_listing 重新生成）
   displayOf: (toolName: string) => string
   deferred: DeferredTool[] // 本会话的延迟工具查询表，工具名清单重发全量用
+  resident: DeferredTool[] // 常驻服务的工具，同样进工具名清单（标「直接调用」）
   createdAtBase?: number // 重试路径：该轮首行的 created_at − 7；缺省当前时间
 }): void {
   // 自动压缩：重建行的 created_at 从当前时间往前退 16 毫秒起逐行加 1。紧接着落库的追加消息与用户消息取当前时间，
@@ -193,10 +195,15 @@ export function rebuildAfterSummary(o: {
   for (const content of mcpAddedContents(o.convId))
     insertReminder(o.convId, 'mcp_replay', content, null, at + i++)
   // 工具名清单重发全量（照 Claude Code 压缩后重新播报全部延迟工具）：之前发过的都在摘要范围里没了
-  if (o.deferred.length) {
-    const groups = new Map<number, { serviceName: string; names: string[] }>()
+  if (o.deferred.length || o.resident.length) {
+    const groups = new Map<number, { serviceName: string; names: string[]; resident: boolean }>()
+    for (const e of o.resident) {
+      const g = groups.get(e.serviceId) ?? { serviceName: e.serviceName, names: [], resident: true }
+      g.names.push(e.key)
+      groups.set(e.serviceId, g)
+    }
     for (const e of o.deferred) {
-      const g = groups.get(e.serviceId) ?? { serviceName: e.serviceName, names: [] }
+      const g = groups.get(e.serviceId) ?? { serviceName: e.serviceName, names: [], resident: false }
       g.names.push(e.key)
       groups.set(e.serviceId, g)
     }
@@ -278,8 +285,10 @@ export async function compactIfNeeded(o: {
   signal: AbortSignal
   skillEntries: SkillEntry[]
   displayOf: (toolName: string) => string
-  keyOf: (fullName: string) => string
+  keyOf: (fullName: string) => string | null
   deferred: DeferredTool[]
+  resident: DeferredTool[]
+  residentIds: Set<number>
   retry: boolean
   onLevel2?: () => void // 一级清完仍超线、进入二级时回调一次：这一轮出一条压缩调用行（018 Case 9）
 }): Promise<CompactOutcome> {
@@ -346,6 +355,7 @@ export async function compactIfNeeded(o: {
         skillEntries: o.skillEntries,
         displayOf: o.displayOf,
         deferred: o.deferred,
+        resident: o.resident,
         createdAtBase: base
       })
       bundle = loadHistoryMessages(o.convId, o.keyOf)
@@ -408,13 +418,19 @@ export async function compactManually(
     ...getConversationMcpSelection(convId),
     ...(agent?.mcpSel ?? []).map((e) => e.id)
   ])
-  const deferred: DeferredTool[] = ensureDeferredTable(convId, mcpSelection)
-  const keyOf = (fullName: string): string =>
-    deferred.find((e) => e.fullName === fullName)?.key ?? bareName(fullName)
+  // 常驻还是延迟照会话行记的（没记的按全部延迟），与正常轮次同一份判定
+  const residentIds = new Set(getConversationResidentServices(convId) ?? [])
+  const resident: DeferredTool[] = entriesOf([...mcpSelection].filter((id) => residentIds.has(id)))
+  const deferred: DeferredTool[] = ensureDeferredTable(convId, [...mcpSelection].filter((id) => !residentIds.has(id)))
+  const keyOf = (fullName: string): string | null => {
+    const m = /^mcp__(\d+)__/.exec(fullName)
+    if (m && residentIds.has(Number(m[1]))) return null
+    return deferred.find((e) => e.fullName === fullName)?.key ?? bareName(fullName)
+  }
   const displayOf = (toolName: string): string =>
     builtinDisplay(toolName) ??
     (() => {
-      const e = deferred.find((x) => x.fullName === toolName)
+      const e = resident.find((x) => x.fullName === toolName) ?? deferred.find((x) => x.fullName === toolName)
       return e ? e.title || `${e.serviceName}:${bareName(e.fullName)}` : toolName
     })()
   const skillLib = new Map(listSkills().map((s) => [s.name, s.description]))
@@ -437,6 +453,7 @@ export async function compactManually(
       getHistory: () => bundle.messages,
       onArtifact: () => {},
       deferred,
+      resident,
       onInvokeAuth: () => {}
     })
   )
@@ -455,7 +472,8 @@ export async function compactManually(
     summarized: bundle.messages,
     skillEntries,
     displayOf,
-    deferred
+    deferred,
+    resident
   })
   const after = estimateTokensBase(JSON.stringify(loadHistoryMessages(convId, keyOf).messages))
   const saved = before - after

@@ -70,10 +70,16 @@ export const buildMcpAdded = (serviceName: string, instructions: string): string
 
 // 工具名清单：只列名字、按服务分组，说明与参数定义由模型调 tool_search 取（Claude Code 同样只播报名字）。
 // 分组标题是服务名，用户以「/服务名」开头的消息靠它对上是哪个服务
-export const buildToolListing = (groups: { serviceName: string; names: string[] }[]): string =>
+// 分组标题标明这个服务的定义在不在 tools 数组里（验收修订：常驻按门槛判）：常驻的直接调用，延迟的先查再转接
+export const buildToolListing = (
+  groups: { serviceName: string; names: string[]; resident: boolean }[]
+): string =>
   wrap(
-    `以下工具来自本会话接入的服务，现在可以用了：定义没有放进工具清单，用 tool_search 按名字或用途取得定义，再用 tool_invoke 调用。\n\n${groups
-      .map((g) => `## ${g.serviceName}\n${g.names.map((n) => `- ${n}`).join('\n')}`)
+    `以下工具来自本会话接入的服务，现在可以用了。\n\n${groups
+      .map(
+        (g) =>
+          `## ${g.serviceName}（${g.resident ? '定义已在工具清单里，直接调用' : '定义不在工具清单里，先用 tool_search 取定义，再用 tool_invoke 调用'}）\n${g.names.map((n) => `- ${n}`).join('\n')}`
+      )
       .join('\n\n')}`
   )
 

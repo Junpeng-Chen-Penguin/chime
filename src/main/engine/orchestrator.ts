@@ -70,7 +70,14 @@ import { listSkills } from '../skills'
 import { assembleTurnTools } from './toolset'
 import { compactIfNeeded, compactManually } from './compact'
 import { sessionFullResultChars, applyTotalGate, NON_DATA_TOOLS, type OverflowCtx } from './overflow'
-import { ensureDeferredTable, bareName, TOOL_INVOKE_NAME } from './deferred'
+import {
+  ensureDeferredTable,
+  entriesOf,
+  decideResidentServices,
+  definitionsTokens,
+  bareName,
+  TOOL_INVOKE_NAME
+} from './deferred'
 import {
   CardQueue,
   INTERRUPT_NOT_STARTED,
@@ -555,7 +562,8 @@ async function streamCore(core: {
   const skillLib = new Map(listSkills().map((s) => [s.name, s.description]))
   const skillEntries = (names: string[]): SkillEntry[] =>
     names.filter((n) => skillLib.has(n)).map((n) => ({ name: n, description: skillLib.get(n)! }))
-  if (!hasUserContext(convId)) {
+  const hadUserContext = hasUserContext(convId)
+  if (!hadUserContext) {
     const first = firstMessageAt(convId)
     const at = first === null ? Date.now() : first - 2
     const today = todayText()
@@ -569,8 +577,11 @@ async function streamCore(core: {
       emit({ type: 'context-note', streamId, kind: 'skill_listing', text: sl })
     }
   }
-  // 本会话的延迟工具查询表（018 五节）：会话开始与点名新服务时追加，只增不减
-  const deferred = ensureDeferredTable(convId, mcpSelection)
+  // 常驻还是延迟（018 五节，验收修订）：会话第一轮按门槛判一次记进会话行，中途点名的服务一律延迟。
+  // 常驻服务的定义每轮从缓存的工具清单重建挂进 tools 数组；延迟服务的进本会话的查询表，只增不减
+  const residentIds = decideResidentServices(convId, mcpSelection, model, hadUserContext)
+  const resident = entriesOf([...mcpSelection].filter((id) => residentIds.has(id)))
+  const deferred = ensureDeferredTable(convId, [...mcpSelection].filter((id) => !residentIds.has(id)))
   // 追加消息（018 四节）：这一刻算出本轮有哪些变化要告知模型，先放内存，压缩完再落库。
   // 次序固定：日期已变更 → 技能清单新增 → 用户新增了服务 → 工具名清单。
   // 工具名清单照 Claude Code 的 deferred_tools_delta：查询表里有、还没播报过名字的服务，把它们的工具名发一次——
@@ -593,8 +604,11 @@ async function streamCore(core: {
         content: buildSkillAdded(skillEntries([slashName])),
         items: { skills: [slashName] }
       })
+    // 服务说明的追加消息只给中途才进会话的服务：会话开始就有的服务，说明已在系统提示词的已连接服务说明段里。
+    // 第一轮（还没有会话背景消息）点名的服务同样算会话开始就有的；之后点名的，看它的工具名播报过没有
     const named = core.slashMcp !== undefined ? getMcpService(core.slashMcp) : null
-    if (named && !mcpAnnounced(convId, named.id)) {
+    const announcedBefore = toolsAnnounced(convId)
+    if (named && hadUserContext && !announcedBefore.has(named.id) && !mcpAnnounced(convId, named.id)) {
       const instr = getMcpInstructions(new Set([named.id]))[0]?.instructions ?? ''
       pendingRows.push({
         kind: 'mcp_added',
@@ -602,12 +616,16 @@ async function streamCore(core: {
         items: { serviceId: named.id }
       })
     }
-    const announced = toolsAnnounced(convId)
-    const fresh = process.env.CHIME_MCP_NATIVE ? [] : deferred.filter((e) => !announced.has(e.serviceId))
+    const announced = announcedBefore
+    const fresh = [...resident, ...deferred].filter((e) => !announced.has(e.serviceId))
     if (fresh.length) {
-      const groups = new Map<number, { serviceName: string; names: string[] }>()
+      const groups = new Map<number, { serviceName: string; names: string[]; resident: boolean }>()
       for (const e of fresh) {
-        const g = groups.get(e.serviceId) ?? { serviceName: e.serviceName, names: [] }
+        const g = groups.get(e.serviceId) ?? {
+          serviceName: e.serviceName,
+          names: [],
+          resident: residentIds.has(e.serviceId)
+        }
         g.names.push(e.key)
         groups.set(e.serviceId, g)
       }
@@ -623,8 +641,12 @@ async function streamCore(core: {
   // MCP 工具不进清单：定义存进本会话的查询表，模型用 tool_search 找回、tool_invoke 转接调用。
   // history 在下方组装后才赋值，激活工具经 getHistory 延迟取（执行必在流式循环内，晚于赋值）
   let history: ModelMessage[] = []
-  const keyOf = (fullName: string): string =>
-    deferred.find((e) => e.fullName === fullName)?.key ?? bareName(fullName)
+  // 历史还原：延迟服务的调用还原成转接（给出查询表里的名字），常驻服务的照原名（返回 null）
+  const keyOf = (fullName: string): string | null => {
+    const m = /^mcp__(\d+)__/.exec(fullName)
+    if (m && residentIds.has(Number(m[1]))) return null
+    return deferred.find((e) => e.fullName === fullName)?.key ?? bareName(fullName)
+  }
   // 转接调用要弹授权卡时先把调用行置 pending（渲染层靠它弹卡、禁用输入框）；行还没建时记下来，建行时补
   const invokePending = new Set<string>()
   const onInvokeAuth = (toolCallId: string): void => {
@@ -650,13 +672,14 @@ async function streamCore(core: {
     getHistory: () => history,
     onArtifact: (toolCallId, info) => artifacts.set(toolCallId, info),
     deferred,
+    resident,
     onInvokeAuth
   })
-  // 结果清单里的展示名（七节）：内置工具查登记表，MCP 工具查查询表
+  // 结果清单里的展示名（七节）：内置工具查登记表，MCP 工具查常驻条目与查询表
   const displayOf = (toolName: string): string =>
     builtinDisplay(toolName) ??
     (() => {
-      const e = deferred.find((x) => x.fullName === toolName)
+      const e = resident.find((x) => x.fullName === toolName) ?? deferred.find((x) => x.fullName === toolName)
       return e ? e.title || `${e.serviceName}:${bareName(e.fullName)}` : toolName
     })()
 
@@ -691,7 +714,9 @@ async function streamCore(core: {
   // 触发线（018 二节）：窗口 − 压缩预留。估算 = 工具清单 + 系统提示词 + 消息序列，各乘该模型的校准比值。
   // 工具清单改动前不进估算，它占单次请求的四成上下
   const line = triggerLine(model)
+  // 工具清单的估算拆两份：十二个内置工具归「内置工具」，常驻 MCP 工具的定义归「MCP 工具」（与工具名清单同类）
   const toolsTok = applyRatio(model, toolsTokens(turnTools))
+  const residentTok = resident.length ? definitionsTokens(model, resident) : 0
   // 历史里的 MCP 调用按查询表里的名字还原成 tool_invoke 转接（018 五节）
   let bundle = loadHistoryMessages(convId, keyOf)
   history = bundle.messages
@@ -733,6 +758,8 @@ async function streamCore(core: {
     displayOf,
     keyOf,
     deferred,
+    resident,
+    residentIds,
     retry: !core.saveUser
   })
   // 压缩调用行收尾（018 Case 9）：一级清完仍超线才有这一行；按走到哪一级填结果，渲染层据此换动词与描述
@@ -827,8 +854,8 @@ async function streamCore(core: {
   const ctxUsage: ContextUsage = {
     window: contextWindow(model),
     actualInput: null,
-    builtinTools: toolsTok,
-    mcpTools: mcpTok,
+    builtinTools: Math.max(0, toolsTok - residentTok),
+    mcpTools: mcpTok + residentTok,
     systemPrompt: estimateTokens(model, system),
     skills: skillTok,
     messages: Math.max(0, history.reduce((s, m) => s + sizeOf(m), 0) - skillTok - mcpTok),

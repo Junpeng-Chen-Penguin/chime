@@ -277,9 +277,10 @@ export interface HistoryBundle {
 // keyOf（018 五节）：MCP 工具的模型可见名 mcp__<id>__<name> → 本会话查询表里的名字。
 // 历史里的 MCP 调用一律还原成 tool_invoke 转接（MCP 工具不在 tools 数组里，直调形态模型无法复用），
 // 改动前会话里的直调记录也一并成了合法的转接调用。缺省按去掉前缀的原名
+// keyOf：延迟服务的工具给出 tool_search 里的名字（还原成转接调用）；常驻服务的工具返回 null（照原名还原）
 export function loadHistoryMessages(
   convId: string,
-  keyOf: (fullName: string) => string = (n) => n.replace(/^mcp__\d+__/, '')
+  keyOf: (fullName: string) => string | null = (n) => n.replace(/^mcp__\d+__/, '')
 ): HistoryBundle {
   const db = getDb()
   // 二级压缩之后（018 七节）：从最近一次重建的第一行起重建历史，之前的消息不再进模型上下文。
@@ -393,13 +394,14 @@ export function loadHistoryMessages(
         batchStep = it.step
         const callId = it.id ?? `hist_${++fallbackId}`
         const value = historyToolOutput(it)
-        const viaInvoke = /^mcp__\d+__/.test(it.name)
+        const key = /^mcp__\d+__/.test(it.name) ? keyOf(it.name) : null
+        const viaInvoke = key !== null
         const toolName = viaInvoke ? 'tool_invoke' : it.name
         asst.push({
           type: 'tool-call',
           toolCallId: callId,
           toolName,
-          input: viaInvoke ? { name: keyOf(it.name), arguments: it.args ?? {} } : (it.args ?? {})
+          input: viaInvoke ? { name: key, arguments: it.args ?? {} } : (it.args ?? {})
         })
         results.push({
           part: {

@@ -192,7 +192,8 @@ export function initDb(): void {
     'ALTER TABLE conversation ADD COLUMN compact_failures INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE conversation ADD COLUMN deferred_tools TEXT',
     'ALTER TABLE conversation ADD COLUMN last_context TEXT',
-    'ALTER TABLE mcp_service ADD COLUMN tools_json TEXT'
+    'ALTER TABLE mcp_service ADD COLUMN tools_json TEXT',
+    'ALTER TABLE conversation ADD COLUMN resident_services TEXT'
   ]) {
     try {
       db.exec(col)
@@ -1095,6 +1096,25 @@ export function getConversationDeferredTools<T>(id: string): T[] {
 
 export function setConversationDeferredTools(id: string, table: unknown[]): void {
   db.prepare('UPDATE conversation SET deferred_tools = ? WHERE id = ?').run(JSON.stringify(table), id)
+}
+
+// 常驻的 MCP 服务（018 五节，验收修订）：会话第一轮按门槛判一次写入的服务 id 数组。
+// NULL = 还没判（新会话第一轮，或本次改动前建的会话）；'[]' = 判过、全部延迟
+export function getConversationResidentServices(id: string): number[] | null {
+  const r = db.prepare('SELECT resident_services AS r FROM conversation WHERE id = ?').get(id) as
+    | { r: string | null }
+    | undefined
+  if (!r || r.r === null) return null
+  try {
+    const v = JSON.parse(r.r)
+    return Array.isArray(v) ? v.filter((x): x is number => typeof x === 'number') : []
+  } catch {
+    return []
+  }
+}
+
+export function setConversationResidentServices(id: string, ids: number[]): void {
+  db.prepare('UPDATE conversation SET resident_services = ? WHERE id = ?').run(JSON.stringify(ids), id)
 }
 
 // 清单变更：自动关信任、置提示标识，并把新指纹记为基线（否则每次重连都重复告警）

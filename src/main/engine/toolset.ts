@@ -38,7 +38,8 @@ export interface ToolsetInputs {
   skillNames: string[]
   getHistory: () => ModelMessage[]
   onArtifact: (toolCallId: string, info: { id: number; title: string; rowCount: number }) => void
-  deferred: DeferredTool[]
+  deferred: DeferredTool[] // 延迟服务的工具：进本地查询表，模型经 tool_search / tool_invoke 用
+  resident: DeferredTool[] // 常驻服务的工具：定义直接挂进 tools 数组
   onInvokeAuth: (toolCallId: string) => void
 }
 
@@ -63,15 +64,7 @@ export function assembleTurnTools(i: ToolsetInputs): Record<string, Tool> {
   t.search_knowledge_base = makeSearchTool(i.toolCtx)
   // 技能：范围为空时 execute 返回说明
   t[ACTIVATE_TOOL_NAME] = makeActivateSkillTool({ names: i.skillNames, getHistory: i.getHistory })
-  if (process.env.CHIME_MCP_NATIVE) {
-    // 调试对照：原生挂载，不走查找与转接
-    Object.assign(
-      t,
-      makeNativeMcpTools({ table: i.deferred, signal: i.signal, cards: i.cards, overflow: i.overflow, onAuthPending: i.onInvokeAuth })
-    )
-    return t
-  }
-  t[TOOL_SEARCH_NAME] = makeToolSearchTool(i.deferred)
+  t[TOOL_SEARCH_NAME] = makeToolSearchTool(i.deferred, i.resident)
   t[TOOL_INVOKE_NAME] = makeToolInvokeTool({
     table: i.deferred,
     signal: i.signal,
@@ -79,6 +72,12 @@ export function assembleTurnTools(i: ToolsetInputs): Record<string, Tool> {
     overflow: i.overflow,
     onAuthPending: i.onInvokeAuth
   })
+  // 常驻 MCP 工具排在十二个内置工具之后：内置那一段在所有会话里逐字相同
+  if (i.resident.length)
+    Object.assign(
+      t,
+      makeNativeMcpTools({ table: i.resident, signal: i.signal, cards: i.cards, overflow: i.overflow, onAuthPending: i.onInvokeAuth })
+    )
   return t
 }
 

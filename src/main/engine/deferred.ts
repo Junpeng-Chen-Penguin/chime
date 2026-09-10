@@ -8,9 +8,12 @@ import { getMcpToolList, type McpToolInfo } from '../mcp/client'
 import {
   getConversationDeferredTools,
   setConversationDeferredTools,
+  getConversationResidentServices,
+  setConversationResidentServices,
   getMcpToolsJson,
   getMcpService
 } from '../db'
+import { estimateTokens } from './budget'
 import { execMcpTool } from './tools'
 import { guardSingle, type OverflowCtx } from './overflow'
 import { AUTH_DENIED, INTERRUPT_NOT_STARTED, type CardQueue } from './cards'
@@ -76,6 +79,55 @@ function serviceTools(serviceId: number): McpToolInfo[] {
   } catch {
     return []
   }
+}
+
+// 常驻门槛（018 五节，验收修订）：会话第一轮把选用服务的工具定义合计估一次，不超过门槛全部常驻（定义进 tools 数组），
+// 超过全部延迟（定义进查询表）。20,000 是 Claude Code 自动模式在 200K 窗口下的实际数。调试开关可改，设 0 全延迟
+export const RESIDENT_MCP_LIMIT = 20_000
+function residentLimit(): number {
+  const n = Number(process.env.CHIME_MCP_DEFER_THRESHOLD)
+  return Number.isFinite(n) && process.env.CHIME_MCP_DEFER_THRESHOLD !== undefined ? n : RESIDENT_MCP_LIMIT
+}
+
+// 一组服务的工具条目（不落库）：常驻服务每轮据此挂进 tools 数组，估算门槛也用它
+export function entriesOf(serviceIds: Iterable<number>): DeferredTool[] {
+  const out: DeferredTool[] = []
+  const taken = new Set<string>()
+  for (const id of serviceIds)
+    for (const t of serviceTools(id)) {
+      const e = entryOf(t, taken)
+      taken.add(e.key)
+      out.push(e)
+    }
+  return out
+}
+
+// 定义合计的估算：按发给模型的形态（名字、说明、参数）序列化
+export function definitionsTokens(model: string, entries: DeferredTool[]): number {
+  return estimateTokens(
+    model,
+    JSON.stringify(entries.map((e) => ({ name: e.fullName, description: e.description, parameters: e.inputSchema })))
+  )
+}
+
+// 常驻服务：判过就照记录；没判过的分两种——会话还没有会话背景消息（新会话第一轮，或改动前建的会话）按门槛判并记下，
+// 已有会话背景消息（本次改动前用延迟加载跑过的会话）按全部延迟记下，与它已有的历史一致
+export function decideResidentServices(
+  convId: string,
+  serviceIds: Iterable<number>,
+  model: string,
+  hasBootstrapped: boolean
+): Set<number> {
+  const stored = getConversationResidentServices(convId)
+  if (stored !== null) return new Set(stored)
+  const ids = [...serviceIds]
+  let resident: number[] = []
+  if (!hasBootstrapped && ids.length) {
+    const total = definitionsTokens(model, entriesOf(ids))
+    if (total <= residentLimit()) resident = ids
+  }
+  setConversationResidentServices(convId, resident)
+  return new Set(resident)
 }
 
 // 查询表：读本会话已存的，缺的服务补进去（只追加），有变化就写回
@@ -182,7 +234,7 @@ export function paramList(schema: Record<string, unknown>): { name: string; type
 
 const PARAM_NOTE = '只填这次需要的参数：必填的，以及要改变默认行为的；没提到的不填，用默认值'
 
-export function makeToolSearchTool(table: DeferredTool[]): Tool {
+export function makeToolSearchTool(table: DeferredTool[], resident: DeferredTool[] = []): Tool {
   return tool({
     description: SEARCH_DESCRIPTION,
     // 类型上写成必填让 tool() 的重载能选中；JSON Schema 里不设 required，模型可以不传
@@ -194,18 +246,25 @@ export function makeToolSearchTool(table: DeferredTool[]): Tool {
     }),
     execute: async ({ query }): Promise<Record<string, unknown>> => {
       const q = typeof query === 'string' ? query.trim() : ''
+      // 常驻工具（定义已在 tools 数组里）：拿名字来查的直接告知，不返回定义
+      const residentHit = resident.find((e) => e.key === q || e.fullName === q || bareName(e.fullName) === q)
+      if (residentHit)
+        return { notice: `工具「${residentHit.key}」的定义已在工具清单里，直接调用，不用 tool_invoke` }
+      const residentNote = resident.length
+        ? `另有 ${[...new Set(resident.map((e) => e.serviceName))].join('、')} 的工具定义已在工具清单里，直接调用`
+        : ''
       if (!q) {
         const services = browseDeferred(table)
-        return services.length ? { services } : { notice: '本会话没有接入任何服务' }
+        if (services.length) return residentNote ? { services, note: residentNote } : { services }
+        return { notice: residentNote || '本会话没有接入任何服务' }
       }
       const hits = searchDeferred(table, q)
       if (!hits.length) {
         const services = [...new Set(table.map((e) => e.serviceName))]
-        return {
-          notice: services.length
-            ? `没有匹配的工具。本会话有这些服务：${services.join('、')}`
-            : '没有匹配的工具，本会话没有接入任何服务'
-        }
+        const base = services.length
+          ? `没有匹配的工具。本会话有这些服务：${services.join('、')}`
+          : '没有匹配的工具，本会话没有接入任何服务'
+        return { notice: residentNote ? `${base}。${residentNote}` : base }
       }
       return {
         note: PARAM_NOTE,
@@ -291,8 +350,7 @@ export function makeToolInvokeTool(opts: {
   })
 }
 
-// 调试对照（只给开发自测，CHIME_MCP_NATIVE=1 时用）：把查询表里的工具按改动前的样子直接挂进工具清单，
-// 执行路径与 tool_invoke 相同。用来在同一份系统提示词下对照「原生挂载」与「转接调用」的参数形态
+// 常驻 MCP 工具（018 五节，验收修订）：定义按改动前的样子直接挂进 tools 数组，模型原生调用，执行路径与 tool_invoke 相同
 export function makeNativeMcpTools(opts: {
   table: DeferredTool[]
   signal: AbortSignal
