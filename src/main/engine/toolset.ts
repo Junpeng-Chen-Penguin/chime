@@ -24,7 +24,8 @@ import {
   makeToolInvokeTool,
   TOOL_SEARCH_NAME,
   TOOL_INVOKE_NAME,
-  type DeferredTool
+  type DeferredTool,
+  makeNativeMcpTools
 } from './deferred'
 
 export interface ToolsetInputs {
@@ -62,6 +63,14 @@ export function assembleTurnTools(i: ToolsetInputs): Record<string, Tool> {
   t.search_knowledge_base = makeSearchTool(i.toolCtx)
   // 技能：范围为空时 execute 返回说明
   t[ACTIVATE_TOOL_NAME] = makeActivateSkillTool({ names: i.skillNames, getHistory: i.getHistory })
+  if (process.env.CHIME_MCP_NATIVE) {
+    // 调试对照：原生挂载，不走查找与转接
+    Object.assign(
+      t,
+      makeNativeMcpTools({ table: i.deferred, signal: i.signal, cards: i.cards, overflow: i.overflow, onAuthPending: i.onInvokeAuth })
+    )
+    return t
+  }
   t[TOOL_SEARCH_NAME] = makeToolSearchTool(i.deferred)
   t[TOOL_INVOKE_NAME] = makeToolInvokeTool({
     table: i.deferred,

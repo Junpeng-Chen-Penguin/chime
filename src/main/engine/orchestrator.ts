@@ -603,7 +603,7 @@ async function streamCore(core: {
       })
     }
     const announced = toolsAnnounced(convId)
-    const fresh = deferred.filter((e) => !announced.has(e.serviceId))
+    const fresh = process.env.CHIME_MCP_NATIVE ? [] : deferred.filter((e) => !announced.has(e.serviceId))
     if (fresh.length) {
       const groups = new Map<number, { serviceName: string; names: string[] }>()
       for (const e of fresh) {

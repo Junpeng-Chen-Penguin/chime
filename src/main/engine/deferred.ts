@@ -132,7 +132,7 @@ export function searchDeferred(table: DeferredTool[], query: string): DeferredTo
 }
 
 const SEARCH_DESCRIPTION = `查找本会话可用的其他工具。除清单里这些内置工具之外，会话里接入的服务还提供更多工具，它们的名字在对话里的工具名清单里，定义没有放进清单，需要时用本工具取得。
-用法：query 写工具名，或写你要做的事、要查的对象，如「查询项目的授权状态」「提交续签汇报」。一次最多返回 3 个最相关的工具，每个带名字、说明和完整参数定义；拿到定义后用 tool_invoke 调用，填工具名与参数。
+用法：query 写工具名，或写你要做的事、要查的对象，如「查询项目的授权状态」「提交续签汇报」。一次最多返回 3 个最相关的工具，每个带名字、说明和参数清单（名字、类型、必填与否、说明、默认值）；拿到定义后用 tool_invoke 调用，只填这次需要的参数。
 query 留空时返回本会话全部服务工具的名字和一句话说明，按服务分组，不带参数定义，用来浏览有什么可用。
 没有匹配时返回说明和本会话有哪些服务，可以换个说法再找；确实没有对应工具就如实告诉用户做不了。`
 
@@ -151,6 +151,36 @@ export function browseDeferred(table: DeferredTool[]): { service: string; tools:
   }
   return [...groups].map(([service, tools]) => ({ service, tools }))
 }
+
+// 参数清单（018 验收修订）：把 JSON Schema 摊成一行一个参数，标出必填与可选值。
+// 原样给 JSON Schema 时模型把枚举当清单逐个填满、可选参数全带上，结果集比默认大四倍（1.24.9 的 Tuner 对比查出）
+export function paramList(schema: Record<string, unknown>): { name: string; type: string; required: boolean; description: string }[] {
+  const props = (schema.properties ?? {}) as Record<string, Record<string, unknown>>
+  const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : [])
+  const typeOf = (p: Record<string, unknown>): string => {
+    const t = Array.isArray(p.type) ? (p.type as string[]).join('|') : typeof p.type === 'string' ? p.type : 'any'
+    if (t === 'array') {
+      const it = (p.items ?? {}) as Record<string, unknown>
+      const et = typeof it.type === 'string' ? it.type : 'any'
+      const en = Array.isArray(it.enum) ? `，可选值 ${(it.enum as unknown[]).join(' / ')}` : ''
+      return `${et} 数组${en}`
+    }
+    if (t === 'object' && p.properties) {
+      const inner = paramList(p)
+      return `对象，字段：${inner.map((x) => `${x.name}${x.required ? '(必填)' : ''}`).join('、')}`
+    }
+    const en = Array.isArray(p.enum) ? `，可选值 ${(p.enum as unknown[]).join(' / ')}` : ''
+    return `${t}${en}`
+  }
+  return Object.entries(props).map(([name, p]) => ({
+    name,
+    type: typeOf(p),
+    required: required.has(name),
+    description: typeof p.description === 'string' ? p.description : ''
+  }))
+}
+
+const PARAM_NOTE = '只填这次需要的参数：必填的，以及要改变默认行为的；没提到的不填，用默认值'
 
 export function makeToolSearchTool(table: DeferredTool[]): Tool {
   return tool({
@@ -178,15 +208,16 @@ export function makeToolSearchTool(table: DeferredTool[]): Tool {
         }
       }
       return {
-        tools: hits.map((e) => ({ name: e.key, description: e.description, parameters: e.inputSchema }))
+        note: PARAM_NOTE,
+        tools: hits.map((e) => ({ name: e.key, description: e.description, parameters: paramList(e.inputSchema) }))
       }
     }
   })
 }
 
 // ── tool_invoke ──────────────────────────────────────────────────
-const INVOKE_DESCRIPTION = `调用一个用 tool_search 找到的工具。name 填查找结果里的工具名，arguments 按该工具的参数定义填。
-名字不存在会返回说明，先用 tool_search 确认名字；参数缺项或类型不符会返回该工具的完整定义，照着改正后重调。`
+const INVOKE_DESCRIPTION = `调用一个用 tool_search 找到的工具。name 填查找结果里的工具名，arguments 只填这次需要的参数：必填的和这次要改变默认行为的；没提到的不填，用默认值。不要把可选值逐个填满，也不要为了「全面」加筛选条件。
+名字不存在会返回说明，先用 tool_search 确认名字；参数缺项或类型不符会返回该工具的参数清单，照着改正后重调。`
 
 const TYPE_OK: Record<string, (v: unknown) => boolean> = {
   string: (v) => typeof v === 'string',
@@ -241,7 +272,8 @@ export function makeToolInvokeTool(opts: {
       if (bad)
         return {
           error: `参数不符：${bad}`,
-          tool: { name: entry.key, description: entry.description, parameters: entry.inputSchema },
+          note: PARAM_NOTE,
+          tool: { name: entry.key, description: entry.description, parameters: paramList(entry.inputSchema) },
           userText: '参数不符'
         }
       // 分级授权与 makeMcpTools 时相同：服务开了信任只读声明且工具声明只读的直接执行，其余过卡片队列
@@ -257,4 +289,35 @@ export function makeToolInvokeTool(opts: {
       return guardSingle(overflow, toolCallId, entry.fullName, r.text, r.structured)
     }
   })
+}
+
+// 调试对照（只给开发自测，CHIME_MCP_NATIVE=1 时用）：把查询表里的工具按改动前的样子直接挂进工具清单，
+// 执行路径与 tool_invoke 相同。用来在同一份系统提示词下对照「原生挂载」与「转接调用」的参数形态
+export function makeNativeMcpTools(opts: {
+  table: DeferredTool[]
+  signal: AbortSignal
+  cards: CardQueue
+  overflow: OverflowCtx
+  onAuthPending: (toolCallId: string) => void
+}): Record<string, Tool> {
+  const out: Record<string, Tool> = {}
+  for (const entry of opts.table) {
+    out[entry.fullName] = tool({
+      description: entry.description,
+      inputSchema: jsonSchema(entry.inputSchema as Parameters<typeof jsonSchema>[0]),
+      execute: async (args, { toolCallId }) => {
+        const trusted = getMcpService(entry.serviceId)?.trusted ?? false
+        if (!(trusted && entry.readOnly)) {
+          opts.onAuthPending(toolCallId)
+          const decision = await opts.cards.request(toolCallId, opts.signal, bareName(entry.fullName))
+          if (decision === 'denied') return { denied: AUTH_DENIED }
+          if (decision === 'aborted') return { interrupted: INTERRUPT_NOT_STARTED }
+        }
+        const r = await execMcpTool(entry.fullName, (args ?? {}) as Record<string, unknown>, opts.signal)
+        if ('error' in r) return r
+        return guardSingle(opts.overflow, toolCallId, entry.fullName, r.text, r.structured)
+      }
+    })
+  }
+  return out
 }

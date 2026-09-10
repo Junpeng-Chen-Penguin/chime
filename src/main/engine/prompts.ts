@@ -5,6 +5,7 @@
 // 段名与正文照《上下文结构.md》system 区。
 
 import { basename } from 'path'
+import { readFileSync } from 'fs'
 import { agentWorkStyle, type PromptSections } from '../../shared/agentPrompt'
 
 export interface McpInstructionEntry {
@@ -172,6 +173,15 @@ const SECTIONS: Section[] = [
 ]
 
 export function buildSystemPrompt(i: PromptInputs): string {
+  // 调试对照（只给开发自测）：CHIME_SYSTEM_PROMPT_FILE=<路径> 时整段换成该文件内容，用来在同一版代码上对照旧提示词
+  const override = process.env.CHIME_SYSTEM_PROMPT_FILE
+  if (override) {
+    try {
+      return readFileSync(override, 'utf8').trim()
+    } catch {
+      /* 读不到就按正常拼 */
+    }
+  }
   return SECTIONS.filter((s) => s.when(i))
     .map((s) => s.body(i))
     .join('\n\n')
