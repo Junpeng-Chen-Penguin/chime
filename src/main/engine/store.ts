@@ -37,6 +37,7 @@ export type TurnItem =
       // ws-request = 申请授权卡（dirs + op）；write = 写授权卡（op 为新建/覆盖/修改 + path）
       fsCard?: { mode: 'ws-request' | 'write'; dirs?: string[]; op: string; path?: string }
       inputStreaming?: true // 参数流式中（016 二节）：行已出、参数未齐。内存态，落库前剥掉
+      step?: number // 这次调用发生在本轮第几次模型请求（从 0 起）：历史重建按它切 assistant 消息，与实际发出的请求逐字一致
       args: Record<string, unknown>
       result?: unknown
       userText?: string // 失败或中断时面向用户的那句（016 六节）；给模型的说明在 result 里
@@ -339,6 +340,7 @@ export function loadHistoryMessages(
       part: Record<string, unknown>
       meta: Omit<HistoryToolOutput, 'msgIdx' | 'partIdx'>
     }> = []
+    let batchStep: number | undefined // 当前 assistant 批次对应的模型请求序号
     const flush = (): void => {
       if (asst.length)
         messages.push({ role: 'assistant', content: asst } as unknown as ModelMessage)
@@ -354,7 +356,13 @@ export function loadHistoryMessages(
       results = []
     }
     for (const it of items) {
-      if (it.t === 'text') {
+      if (it.t === 'reasoning') {
+        // 思考正文照实发回（reasoning_content）。一轮内的后续请求由 SDK 带着它发，历史若不带，
+        // 每轮第一次请求从第一条 assistant 消息起就与上一轮发出的不同，前缀缓存在那里断掉（2026-09-10 抓请求体查出）
+        if (!it.text.trim()) continue
+        if (results.length) flush()
+        asst.push({ type: 'reasoning', text: it.text })
+      } else if (it.t === 'text') {
         if (!it.text.trim()) continue
         if (results.length) flush()
         asst.push({ type: 'text', text: it.text })
@@ -380,6 +388,9 @@ export function loadHistoryMessages(
           meta: { toolCallId: callId, toolName: ARTIFACT_TOOL_NAME, chars: value.length }
         })
       } else if (it.t === 'tool') {
+        // 不同次模型请求发出的调用不合并成一条 assistant 消息：实际发出时是「调用→返回→调用→返回」两批
+        if (results.length && it.step !== undefined && it.step !== batchStep) flush()
+        batchStep = it.step
         const callId = it.id ?? `hist_${++fallbackId}`
         const value = historyToolOutput(it)
         const viaInvoke = /^mcp__\d+__/.test(it.name)
@@ -405,7 +416,7 @@ export function loadHistoryMessages(
           }
         })
       }
-      // reasoning / sources / boundary 不进历史
+      // sources / boundary 不进历史
     }
     flush()
   }

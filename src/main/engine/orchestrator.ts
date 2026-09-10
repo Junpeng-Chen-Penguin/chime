@@ -7,6 +7,7 @@ import { streamText, isStepCount } from 'ai'
 import type { ModelMessage, Tool } from 'ai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { randomUUID } from 'crypto'
+import { appendFileSync } from 'fs'
 import { resolve } from 'path'
 import {
   resolveModelRef,
@@ -300,6 +301,22 @@ async function compactTurn(o: {
   const endReason: EndReason | undefined = item.outcome === 'aborted' ? 'stopped' : undefined
   saveAssistantTurn(convId, msgId, { content: '', items, status: 'done', endReason, kind: 'compact' })
   emit({ type: 'turn-done', streamId, endReason, status: endReason ?? 'done' })
+}
+
+// 调试开关（只给开发与自测）：CHIME_LOG_REQUESTS=<文件路径> 时把每次模型请求的 body 追加写进该文件，一行一个 JSON。
+// 用来核对相邻两次请求的消息序列逐字节是否一致（缓存命中排查），正常运行不设这个变量、不装 fetch
+function loggingFetch(): typeof fetch | undefined {
+  const path = process.env.CHIME_LOG_REQUESTS
+  if (!path) return undefined
+  return async (input, init) => {
+    try {
+      const body = typeof init?.body === 'string' ? init.body : null
+      if (body) appendFileSync(path, JSON.stringify({ at: Date.now(), body: JSON.parse(body) }) + '\n')
+    } catch {
+      /* 调试日志写不进去不影响请求 */
+    }
+    return fetch(input, init)
+  }
 }
 
 // 流式核心：工具组装、卡片队列、streamText 循环、来源结算、落库收场
@@ -691,7 +708,8 @@ async function streamCore(core: {
     name: 'chime',
     baseURL: p.baseUrl.trim().replace(/\/+$/, ''),
     apiKey: p.apiKey,
-    includeUsage: true
+    includeUsage: true,
+    fetch: loggingFetch()
   })
   // 附加参数（PRD Case 6）：某家独有的非标准开关随每次请求发出，靠配置不靠改代码
   const extraBody = Object.keys(p.extraParams).length ? p.extraParams : undefined
@@ -849,6 +867,7 @@ async function streamCore(core: {
   // finish-step 逐次记录（首选来源）：LLM 请求一结束就有该次 usage，不等这一步的工具跑完。
   // 并行调用等授权时停止，onAbort 与 steps 都是空的，只有这里有数
   const streamed: StepUsageRecord[] = []
+  let stepNo = 0 // 本轮第几次模型请求（从 0 起），挂到该请求发出的调用上
   const stoppedUsage = async (): Promise<TurnUsage | undefined> => {
     if (streamed.length) return usageOf(streamed)
     if (abortedUsage) return abortedUsage
@@ -995,6 +1014,7 @@ async function streamCore(core: {
             t: 'tool',
             name: part.toolName,
             id: part.id, // 与后续 tool-call 的 toolCallId 同值
+            step: stepNo,
             display: builtinDisplay(part.toolName),
             auth:
               invokePending.has(part.id) || fsEarly
@@ -1054,6 +1074,7 @@ async function streamCore(core: {
               t: 'tool',
               name: shown.name,
               id: part.toolCallId,
+              step: stepNo,
               display: shown.display,
               desc: shown.desc,
               auth:
@@ -1118,6 +1139,7 @@ async function streamCore(core: {
         }
         case 'finish-step':
           streamed.push(stepOf(part))
+          stepNo++
           break
         case 'error':
           throw part.error
