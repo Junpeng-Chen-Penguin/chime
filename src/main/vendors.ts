@@ -16,11 +16,13 @@ export const VENDORS: VendorPreset[] = [
     vendor: 'deepseek',
     name: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com',
-    // V4 两个型号都是 1M 上下文（2026-08-09 核对官方定价页）。deepseek-chat／deepseek-reasoner
-    // 已于 2026-07-24 下线，实测 GET /models 只返回下面两个，故不再预置
+    // 都是 1M 上下文。2026-09-10 起 V4.1 Flash 上线，模型名 deepseek-flash；旧名 deepseek-v4-flash、
+    // deepseek-v4-flash-vision-exp 仍可调用，请求路由到 V4.1 Flash。deepseek-v4-pro 定于 2026-09-14 12:00 起同样路由到 V4.1 Flash
     windows: {
+      'deepseek-flash': 1048576,
       'deepseek-v4-pro': 1048576,
-      'deepseek-v4-flash': 1048576
+      'deepseek-v4-flash': 1048576,
+      'deepseek-v4-flash-vision-exp': 1048576
     }
   },
   {
