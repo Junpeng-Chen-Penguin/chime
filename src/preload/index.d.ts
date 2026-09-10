@@ -100,6 +100,7 @@ export type ChatEvent =
   | { type: 'item-delta'; streamId: string; index: number; text: string }
   | { type: 'item-done'; streamId: string; index: number; item: TurnItem }
   | { type: 'item-update'; streamId: string; index: number; item: TurnItem }
+  | { type: 'context-note'; streamId: string; kind: string; text: string } // 本轮新写的提醒消息全文，渲染层不用（评估方用）
   | {
       type: 'turn-done'
       streamId: string

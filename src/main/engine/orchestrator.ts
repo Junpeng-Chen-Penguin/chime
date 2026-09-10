@@ -107,6 +107,9 @@ export type ChatEvent =
   | { type: 'item-delta'; streamId: string; index: number; text: string }
   | { type: 'item-done'; streamId: string; index: number; item: TurnItem }
   | { type: 'item-update'; streamId: string; index: number; item: TurnItem } // 状态流转（授权等），非终态
+  // 本轮新写进消息序列、模型看得到而对话流不显示的提醒消息（会话背景、技能清单、工具名清单、日期变更等）。
+  // 给评估方（Tuner）用：评审要看到模型看到的全部材料，否则模型提到工具名清单里的名字会被判成编造
+  | { type: 'context-note'; streamId: string; kind: string; text: string }
   | {
       type: 'turn-done'
       streamId: string
@@ -556,16 +559,15 @@ async function streamCore(core: {
     const first = firstMessageAt(convId)
     const at = first === null ? Date.now() : first - 2
     const today = todayText()
-    insertReminder(convId, 'user_context', buildUserContext(today), { date: dateKey(today) }, at)
+    const uc = buildUserContext(today)
+    insertReminder(convId, 'user_context', uc, { date: dateKey(today) }, at)
+    emit({ type: 'context-note', streamId, kind: 'user_context', text: uc })
     const initial = skillEntries(agent ? agent.skillSel : [...skillLib.keys()])
-    if (initial.length)
-      insertReminder(
-        convId,
-        'skill_listing',
-        buildSkillListing(initial),
-        { skills: initial.map((s) => s.name) },
-        at + 1
-      )
+    if (initial.length) {
+      const sl = buildSkillListing(initial)
+      insertReminder(convId, 'skill_listing', sl, { skills: initial.map((s) => s.name) }, at + 1)
+      emit({ type: 'context-note', streamId, kind: 'skill_listing', text: sl })
+    }
   }
   // 本会话的延迟工具查询表（018 五节）：会话开始与点名新服务时追加，只增不减
   const deferred = ensureDeferredTable(convId, mcpSelection)
@@ -758,7 +760,10 @@ async function streamCore(core: {
         if (ids.every((id) => done.has(id))) pendingRows.splice(i, 1)
       }
     }
-    for (const r of pendingRows) insertReminder(convId, r.kind, r.content, r.items)
+    for (const r of pendingRows) {
+      insertReminder(convId, r.kind, r.content, r.items)
+      emit({ type: 'context-note', streamId, kind: r.kind, text: r.content })
+    }
     saveUserMessage(convId, core.text, core.refs)
     history = [
       ...history,
