@@ -69,7 +69,12 @@ import type { FsCard } from './fs-tools'
 import { listSkills } from '../skills'
 import { assembleTurnTools } from './toolset'
 import { compactIfNeeded, compactManually } from './compact'
-import { sessionFullResultChars, applyTotalGate, NON_DATA_TOOLS, type OverflowCtx } from './overflow'
+import {
+  sessionFullResultChars,
+  applyTotalGate,
+  NON_DATA_TOOLS,
+  type OverflowCtx
+} from './overflow'
 import {
   ensureDeferredTable,
   entriesOf,
@@ -309,7 +314,13 @@ async function compactTurn(o: {
   }
   emit({ type: 'item-done', streamId, index: 0, item })
   const endReason: EndReason | undefined = item.outcome === 'aborted' ? 'stopped' : undefined
-  saveAssistantTurn(convId, msgId, { content: '', items, status: 'done', endReason, kind: 'compact' })
+  saveAssistantTurn(convId, msgId, {
+    content: '',
+    items,
+    status: 'done',
+    endReason,
+    kind: 'compact'
+  })
   emit({ type: 'turn-done', streamId, endReason, status: endReason ?? 'done' })
 }
 
@@ -321,7 +332,8 @@ function loggingFetch(): typeof fetch | undefined {
   return async (input, init) => {
     try {
       const body = typeof init?.body === 'string' ? init.body : null
-      if (body) appendFileSync(path, JSON.stringify({ at: Date.now(), body: JSON.parse(body) }) + '\n')
+      if (body)
+        appendFileSync(path, JSON.stringify({ at: Date.now(), body: JSON.parse(body) }) + '\n')
     } catch {
       /* 调试日志写不进去不影响请求 */
     }
@@ -395,7 +407,15 @@ async function streamCore(core: {
       context.actualInput = usage?.steps?.[0]?.inputTokens ?? context.actualInput
       setConversationLastContext(convId, JSON.stringify(context))
     }
-    emit({ type: 'turn-done', streamId, endReason, status: endReason ?? 'done', error, usage, context })
+    emit({
+      type: 'turn-done',
+      streamId,
+      endReason,
+      status: endReason ?? 'done',
+      error,
+      usage,
+      context
+    })
   }
   // 弹卡即落库 / 卡片回应后落库：等待中的快照（最终态由 finish 覆盖）
   const persistWaiting = (): void => {
@@ -581,15 +601,21 @@ async function streamCore(core: {
   // 常驻服务的定义每轮从缓存的工具清单重建挂进 tools 数组；延迟服务的进本会话的查询表，只增不减
   const residentIds = decideResidentServices(convId, mcpSelection, model, hadUserContext)
   const resident = entriesOf([...mcpSelection].filter((id) => residentIds.has(id)))
-  const deferred = ensureDeferredTable(convId, [...mcpSelection].filter((id) => !residentIds.has(id)))
+  const deferred = ensureDeferredTable(
+    convId,
+    [...mcpSelection].filter((id) => !residentIds.has(id))
+  )
   // 追加消息（018 四节）：这一刻算出本轮有哪些变化要告知模型，先放内存，压缩完再落库。
   // 次序固定：日期已变更 → 技能清单新增 → 用户新增了服务 → 工具名清单。
   // 工具名清单照 Claude Code 的 deferred_tools_delta：查询表里有、还没播报过名字的服务，把它们的工具名发一次——
   // 新会话第一轮就是全量，中途点名新服务就是那一个服务的。重试时这几条上一次已落库，不再生成
   const slashName = core.slashSkill && skillLib.has(core.slashSkill) ? core.slashSkill : null
   const scope = skillScope(convId)
-  const pendingRows: { kind: ReminderKind; content: string; items: Record<string, unknown> | null }[] =
-    []
+  const pendingRows: {
+    kind: ReminderKind
+    content: string
+    items: Record<string, unknown> | null
+  }[] = []
   if (core.saveUser) {
     const today = todayText()
     if (toldDate(convId) !== dateKey(today))
@@ -608,7 +634,12 @@ async function streamCore(core: {
     // 第一轮（还没有会话背景消息）点名的服务同样算会话开始就有的；之后点名的，看它的工具名播报过没有
     const named = core.slashMcp !== undefined ? getMcpService(core.slashMcp) : null
     const announcedBefore = toolsAnnounced(convId)
-    if (named && hadUserContext && !announcedBefore.has(named.id) && !mcpAnnounced(convId, named.id)) {
+    if (
+      named &&
+      hadUserContext &&
+      !announcedBefore.has(named.id) &&
+      !mcpAnnounced(convId, named.id)
+    ) {
       const instr = getMcpInstructions(new Set([named.id]))[0]?.instructions ?? ''
       pendingRows.push({
         kind: 'mcp_added',
@@ -679,7 +710,9 @@ async function streamCore(core: {
   const displayOf = (toolName: string): string =>
     builtinDisplay(toolName) ??
     (() => {
-      const e = resident.find((x) => x.fullName === toolName) ?? deferred.find((x) => x.fullName === toolName)
+      const e =
+        resident.find((x) => x.fullName === toolName) ??
+        deferred.find((x) => x.fullName === toolName)
       return e ? e.title || `${e.serviceName}:${bareName(e.fullName)}` : toolName
     })()
 
@@ -763,7 +796,9 @@ async function streamCore(core: {
     retry: !core.saveUser
   })
   // 压缩调用行收尾（018 Case 9）：一级清完仍超线才有这一行；按走到哪一级填结果，渲染层据此换动词与描述
-  const compRow = items.find((i): i is Extract<TurnItem, { t: 'compaction' }> => i.t === 'compaction')
+  const compRow = items.find(
+    (i): i is Extract<TurnItem, { t: 'compaction' }> => i.t === 'compaction'
+  )
   if (compRow) {
     if (outcome.aborted) compRow.outcome = 'aborted'
     else if (outcome.summarized) compRow.outcome = outcome.dropped ? 'ok_dropped' : 'ok'
@@ -829,7 +864,11 @@ async function streamCore(core: {
       return
     }
     if ((m as { role: string }).role !== 'tool' || !Array.isArray(m.content)) return
-    for (const part of m.content as { type?: string; toolName?: string; output?: { value?: unknown } }[]) {
+    for (const part of m.content as {
+      type?: string
+      toolName?: string
+      output?: { value?: unknown }
+    }[]) {
       if (part.type !== 'tool-result' || part.toolName !== 'activate_skill') continue
       if (typeof part.output?.value !== 'string') continue
       const t = estimateTokens(model, part.output.value)
@@ -906,297 +945,337 @@ async function streamCore(core: {
     const st = stepsPromise ? await stepsPromise.catch(() => []) : []
     return sumSteps(st)
   }
+  // 流停住保护（2026-09-11 Tuner 实测：19 秒后片段停发，240 秒被外部杀掉）：
+  // 连续 STALL_MS 没收到任何片段就中断这次请求。还没给用户看过内容的悄悄重来一次，
+  // 已经显示了半截回答的按出错收场——重来会把看过的内容作废
+  const STALL_MS = 90_000
+  const STALL_MSG = '模型连续 90 秒没有返回内容，这次请求已中断，重发这条消息即可'
+  let stalled = false
+  let streamAbort = new AbortController()
+  controller.signal.addEventListener('abort', () => streamAbort.abort())
+  const onStall = (): void => {
+    stalled = true
+    streamAbort.abort()
+  }
   try {
-    const result = streamText({
-      model: provider(p.model),
-      providerOptions: extraBody ? ({ chime: extraBody } as never) : undefined,
-      instructions: system,
-      messages: history,
-      abortSignal: controller.signal,
-      onAbort: ({ steps }) => {
-        abortedUsage = sumSteps(steps as readonly StepUsage[])
-      },
-      tools: Object.keys(turnTools).length ? turnTools : undefined,
-      // 三件事（07-13 修订：计轮 + 触顶告知，原为触顶静默摘工具清单——模型不知情会把调用吐进正文）：
-      // 接口级禁止（含工具调用的轮数触顶后保留清单但禁止选择 + 注入收尾指令，模型只能作答）+
-      // 额度过半预警（goose 同款，注入轻提示让模型收敛探索）+
-      // 总量闸（上一步结果集齐、交给模型之前统一判定——批内从大到小落库改摘要，已给过的不回头改）
-      prepareStep: ({ steps, messages }) => {
-        const rounds = steps.filter((st) => st.toolCalls.length > 0).length
-        // 触顶（rounds 达 16）：这一步放行、执行层拦截；再下一步（>16）接口级禁止
-        if (rounds >= TOOL_ROUND_HARD_LIMIT) overLimit.hit = true
-        const hardLimit = rounds > TOOL_ROUND_HARD_LIMIT
+    const startStream = () =>
+      streamText({
+        model: provider(p.model),
+        providerOptions: extraBody ? ({ chime: extraBody } as never) : undefined,
+        instructions: system,
+        messages: history,
+        abortSignal: streamAbort.signal,
+        onAbort: ({ steps }) => {
+          abortedUsage = sumSteps(steps as readonly StepUsage[])
+        },
+        tools: Object.keys(turnTools).length ? turnTools : undefined,
+        // 三件事（07-13 修订：计轮 + 触顶告知，原为触顶静默摘工具清单——模型不知情会把调用吐进正文）：
+        // 接口级禁止（含工具调用的轮数触顶后保留清单但禁止选择 + 注入收尾指令，模型只能作答）+
+        // 额度过半预警（goose 同款，注入轻提示让模型收敛探索）+
+        // 总量闸（上一步结果集齐、交给模型之前统一判定——批内从大到小落库改摘要，已给过的不回头改）
+        prepareStep: ({ steps, messages }) => {
+          const rounds = steps.filter((st) => st.toolCalls.length > 0).length
+          // 触顶（rounds 达 16）：这一步放行、执行层拦截；再下一步（>16）接口级禁止
+          if (rounds >= TOOL_ROUND_HARD_LIMIT) overLimit.hit = true
+          const hardLimit = rounds > TOOL_ROUND_HARD_LIMIT
 
-        const lastIdx = steps.length - 1
-        let gated: Map<string, string> | null = null
-        if (lastIdx >= 0 && !gatedSteps.has(lastIdx)) {
-          gatedSteps.add(lastIdx)
-          const batch = (
-            steps[lastIdx].toolResults as {
-              toolCallId: string
-              toolName: string
-              output: unknown
-            }[]
-          )
-            .filter(
-              (tr) =>
-                typeof tr.output === 'string' &&
-                !NON_DATA_TOOLS.has(tr.toolName) && // 非数据工具的返回不落库（018 五节）
-                !overflow.refs.has(tr.toolCallId) // 单结果闸已处理的不重复
+          const lastIdx = steps.length - 1
+          let gated: Map<string, string> | null = null
+          if (lastIdx >= 0 && !gatedSteps.has(lastIdx)) {
+            gatedSteps.add(lastIdx)
+            const batch = (
+              steps[lastIdx].toolResults as {
+                toolCallId: string
+                toolName: string
+                output: unknown
+              }[]
             )
-            .map((tr) => ({
-              toolCallId: tr.toolCallId,
-              // 转接调用落库时记真正的 MCP 工具名，结果清单的展示名靠它查（018 五节）
-              toolName: invokeNames.get(tr.toolCallId) ?? tr.toolName,
-              text: tr.output as string
-            }))
-          if (batch.length) {
-            const replaced = applyTotalGate(overflow, sessionBase, batch)
-            if (replaced.size) {
-              gated = replaced
-              for (const [callId, summary] of replaced) {
-                const idx = toolItemIndex.get(callId)
-                if (idx === undefined) {
-                  lateSummaries.set(callId, summary) // tool-result 事件还没到消费循环，建行时补
-                  continue
+              .filter(
+                (tr) =>
+                  typeof tr.output === 'string' &&
+                  !NON_DATA_TOOLS.has(tr.toolName) && // 非数据工具的返回不落库（018 五节）
+                  !overflow.refs.has(tr.toolCallId) // 单结果闸已处理的不重复
+              )
+              .map((tr) => ({
+                toolCallId: tr.toolCallId,
+                // 转接调用落库时记真正的 MCP 工具名，结果清单的展示名靠它查（018 五节）
+                toolName: invokeNames.get(tr.toolCallId) ?? tr.toolName,
+                text: tr.output as string
+              }))
+            if (batch.length) {
+              const replaced = applyTotalGate(overflow, sessionBase, batch)
+              if (replaced.size) {
+                gated = replaced
+                for (const [callId, summary] of replaced) {
+                  const idx = toolItemIndex.get(callId)
+                  if (idx === undefined) {
+                    lateSummaries.set(callId, summary) // tool-result 事件还没到消费循环，建行时补
+                    continue
+                  }
+                  const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
+                  item.result = summary
+                  item.resultRef = overflow.refs.get(callId)
+                  emit({ type: 'item-update', streamId, index: idx, item })
                 }
-                const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
-                item.result = summary
-                item.resultRef = overflow.refs.get(callId)
-                emit({ type: 'item-update', streamId, index: idx, item })
+                persistRunning() // 摘要替换是批量 item-update，收口写一次
               }
-              persistRunning() // 摘要替换是批量 item-update，收口写一次
             }
           }
-        }
 
-        // 额度信号（内部属性随行标注，且每步去旧注新，避免 override 带到后续步时重复累积）
-        const needNote = hardLimit || rounds * 2 >= TOOL_ROUND_HARD_LIMIT
-        if (!hardLimit && !gated && !needNote) return undefined
-        let msgs = messages
-        if (gated) {
-          // 改写消息序列：被落库的结果以摘要文本替代原文（override 会带到后续步）
-          msgs = msgs.map((m) => {
-            if (m.role !== 'tool' || !Array.isArray(m.content)) return m
-            return {
-              ...m,
-              content: m.content.map((part) => {
-                const p = part as { type: string; toolCallId?: string }
-                if (p.type === 'tool-result' && p.toolCallId && gated!.has(p.toolCallId)) {
-                  return { ...part, output: { type: 'text', value: gated!.get(p.toolCallId)! } }
-                }
-                return part
-              })
-            } as typeof m
-          })
-        }
-        if (needNote) {
-          msgs = msgs.filter(
-            (m) =>
-              !(
-                m.role === 'user' &&
-                typeof m.content === 'string' &&
-                m.content.startsWith(BUDGET_NOTE_PREFIX)
-              )
-          )
-          msgs = [
-            ...msgs,
-            {
-              role: 'user' as const,
-              content: hardLimit
-                ? `${BUDGET_NOTE_PREFIX}工具调用轮次已达上限，本轮不能再调用任何工具。请立即基于已获得的信息回答用户；信息不足则说明还缺什么，然后停止。）`
-                : // 07-14 修订：原文案「尽快基于已有信息收尾作答」会压过分页工作流条款——模型把取剩余分页也当探索砍掉，
-                  // 只答第一页就收场。预警只砍试探性调用，作答必需的取数（剩余分页、制品生成）明确豁免
-                  `${BUDGET_NOTE_PREFIX}工具调用额度已用 ${rounds}/${TOOL_ROUND_HARD_LIMIT} 轮。请把剩余额度用在回答必需的调用上：停止试探性的搜索和阅读；已知总页数的剩余分页在同一轮一次取完，不可只答部分页；该生成制品的照常生成；必需数据齐了立即作答。）`
-            }
-          ]
-        }
-        return {
-          ...(hardLimit ? { toolChoice: 'none' as const } : {}),
-          messages: msgs
-        }
-      },
-      stopWhen: isStepCount(STEP_COUNT_LIMIT) // 防御性兜底，正常永远先触发硬闸
-    })
-
-    stepsPromise = result.steps as unknown as Promise<readonly StepUsage[]>
-    for await (const part of result.fullStream) {
-      switch (part.type) {
-        case 'reasoning-start':
-          startItem('reasoning', { t: 'reasoning', text: '' })
-          break
-        case 'text-start':
-          startItem('text', { t: 'text', text: '' })
-          break
-        case 'reasoning-delta':
-        case 'text-delta':
-          appendText(part.text)
-          break
-        case 'reasoning-end':
-        case 'text-end':
-          endItem()
-          break
-        case 'tool-input-start': {
-          // 016 Case 6：参数开始生成就出调用行，不等参数齐。初始化只依赖 toolName，全在这里做；
-          // 需授权/提问的调用初始为 pending（排队/弹卡由渲染层从 items 推导）。
-          // 转接调用（018 五节）此时还不知道目标工具，先按 tool_invoke 建行，tool-call 时改写
-          const isAsk = part.toolName === ASK_TOOL_NAME
-          const fsEarly = earlyFsCard.get(part.id) // 文件工具的申请授权卡先于本事件挂载时
-          startItem('tool', {
-            t: 'tool',
-            name: part.toolName,
-            id: part.id, // 与后续 tool-call 的 toolCallId 同值
-            step: stepNo,
-            display: builtinDisplay(part.toolName),
-            auth:
-              invokePending.has(part.id) || fsEarly
-                ? (earlyAuth.get(part.id) ?? 'pending')
-                : undefined,
-            fsCard: fsEarly,
-            ask: isAsk ? (earlyAsk.get(part.id) ?? { state: 'pending' }) : undefined,
-            inputStreaming: true,
-            args: {}
-          })
-          toolItemIndex.set(part.id, cur)
-          const it = items[cur] as Extract<TurnItem, { t: 'tool' }>
-          if (it.auth === 'pending' || it.ask?.state === 'pending') persistWaiting() // 弹卡即落库
-          break
-        }
-        case 'tool-call': {
-          // 参数已齐。行在 tool-input-start 已建就补齐 args；没建过（SDK 修复调用等路径
-          // 单发 tool-call）就整行新建，兜底与旧行为一致。
-          // 转接调用（018 五节）：input.name 在查询表里就把这一行改写成目标工具——name 记 mcp__<id>__<name>、
-          // args 记真正的参数、display 用工具的展示名。item-done 带出的名字与改动前一致，Tuner 断言与渲染层都不用改
-          const isAsk = part.toolName === ASK_TOOL_NAME
-          const fsEarly = earlyFsCard.get(part.toolCallId)
-          const rawInput = (part.input ?? {}) as Record<string, unknown>
-          const entry =
-            part.toolName === TOOL_INVOKE_NAME
-              ? deferred.find((e) => e.key === rawInput.name)
-              : undefined
-          const shown = entry
-            ? {
-                name: entry.fullName,
-                args: (rawInput.arguments && typeof rawInput.arguments === 'object'
-                  ? rawInput.arguments
-                  : {}) as Record<string, unknown>,
-                display: entry.title || `${entry.serviceName}:${bareName(entry.fullName)}`,
-                desc: entry.description
+          // 额度信号（内部属性随行标注，且每步去旧注新，避免 override 带到后续步时重复累积）
+          const needNote = hardLimit || rounds * 2 >= TOOL_ROUND_HARD_LIMIT
+          if (!hardLimit && !gated && !needNote) return undefined
+          let msgs = messages
+          if (gated) {
+            // 改写消息序列：被落库的结果以摘要文本替代原文（override 会带到后续步）
+            msgs = msgs.map((m) => {
+              if (m.role !== 'tool' || !Array.isArray(m.content)) return m
+              return {
+                ...m,
+                content: m.content.map((part) => {
+                  const p = part as { type: string; toolCallId?: string }
+                  if (p.type === 'tool-result' && p.toolCallId && gated!.has(p.toolCallId)) {
+                    return { ...part, output: { type: 'text', value: gated!.get(p.toolCallId)! } }
+                  }
+                  return part
+                })
+              } as typeof m
+            })
+          }
+          if (needNote) {
+            msgs = msgs.filter(
+              (m) =>
+                !(
+                  m.role === 'user' &&
+                  typeof m.content === 'string' &&
+                  m.content.startsWith(BUDGET_NOTE_PREFIX)
+                )
+            )
+            msgs = [
+              ...msgs,
+              {
+                role: 'user' as const,
+                content: hardLimit
+                  ? `${BUDGET_NOTE_PREFIX}工具调用轮次已达上限，本轮不能再调用任何工具。请立即基于已获得的信息回答用户；信息不足则说明还缺什么，然后停止。）`
+                  : // 07-14 修订：原文案「尽快基于已有信息收尾作答」会压过分页工作流条款——模型把取剩余分页也当探索砍掉，
+                    // 只答第一页就收场。预警只砍试探性调用，作答必需的取数（剩余分页、制品生成）明确豁免
+                    `${BUDGET_NOTE_PREFIX}工具调用额度已用 ${rounds}/${TOOL_ROUND_HARD_LIMIT} 轮。请把剩余额度用在回答必需的调用上：停止试探性的搜索和阅读；已知总页数的剩余分页在同一轮一次取完，不可只答部分页；该生成制品的照常生成；必需数据齐了立即作答。）`
               }
-            : { name: part.toolName, args: rawInput, display: builtinDisplay(part.toolName), desc: undefined }
-          if (entry) invokeNames.set(part.toolCallId, entry.fullName)
-          const existing = toolItemIndex.get(part.toolCallId)
-          if (existing !== undefined && items[existing]?.t === 'tool') {
-            const it = items[existing] as Extract<TurnItem, { t: 'tool' }>
-            delete it.inputStreaming
-            it.name = shown.name
-            it.args = shown.args
-            it.display = shown.display
-            if (shown.desc) it.desc = shown.desc
-            // 参数期间可能有 early* 补挂到来，取最新
-            if (fsEarly) it.fsCard = fsEarly
-            const lateAuth = earlyAuth.get(part.toolCallId)
-            if (lateAuth) it.auth = lateAuth
-            else if (invokePending.has(part.toolCallId) && !it.auth) it.auth = 'pending'
-            const lateAsk = earlyAsk.get(part.toolCallId)
-            if (lateAsk) it.ask = lateAsk
-            emit({ type: 'item-update', streamId, index: existing, item: it })
-          } else {
+            ]
+          }
+          return {
+            ...(hardLimit ? { toolChoice: 'none' as const } : {}),
+            messages: msgs
+          }
+        },
+        stopWhen: isStepCount(STEP_COUNT_LIMIT) // 防御性兜底，正常永远先触发硬闸
+      })
+    let result = startStream()
+    const itemsBefore = items.length
+    for (let attempt = 1; ; attempt++) {
+      stalled = false
+      stepsPromise = result.steps as unknown as Promise<readonly StepUsage[]>
+      let watchdog = setTimeout(onStall, STALL_MS)
+      for await (const part of result.fullStream) {
+        clearTimeout(watchdog)
+        watchdog = setTimeout(onStall, STALL_MS)
+        switch (part.type) {
+          case 'reasoning-start':
+            startItem('reasoning', { t: 'reasoning', text: '' })
+            break
+          case 'text-start':
+            startItem('text', { t: 'text', text: '' })
+            break
+          case 'reasoning-delta':
+          case 'text-delta':
+            appendText(part.text)
+            break
+          case 'reasoning-end':
+          case 'text-end':
+            endItem()
+            break
+          case 'tool-input-start': {
+            // 016 Case 6：参数开始生成就出调用行，不等参数齐。初始化只依赖 toolName，全在这里做；
+            // 需授权/提问的调用初始为 pending（排队/弹卡由渲染层从 items 推导）。
+            // 转接调用（018 五节）此时还不知道目标工具，先按 tool_invoke 建行，tool-call 时改写
+            const isAsk = part.toolName === ASK_TOOL_NAME
+            const fsEarly = earlyFsCard.get(part.id) // 文件工具的申请授权卡先于本事件挂载时
             startItem('tool', {
               t: 'tool',
-              name: shown.name,
-              id: part.toolCallId,
+              name: part.toolName,
+              id: part.id, // 与后续 tool-call 的 toolCallId 同值
               step: stepNo,
-              display: shown.display,
-              desc: shown.desc,
+              display: builtinDisplay(part.toolName),
               auth:
-                invokePending.has(part.toolCallId) || fsEarly
-                  ? (earlyAuth.get(part.toolCallId) ?? 'pending')
+                invokePending.has(part.id) || fsEarly
+                  ? (earlyAuth.get(part.id) ?? 'pending')
                   : undefined,
               fsCard: fsEarly,
-              ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
-              args: shown.args
+              ask: isAsk ? (earlyAsk.get(part.id) ?? { state: 'pending' }) : undefined,
+              inputStreaming: true,
+              args: {}
             })
-            toolItemIndex.set(part.toolCallId, cur)
+            toolItemIndex.set(part.id, cur)
+            const it = items[cur] as Extract<TurnItem, { t: 'tool' }>
+            if (it.auth === 'pending' || it.ask?.state === 'pending') persistWaiting() // 弹卡即落库
+            break
           }
-          // 执行耗时从参数齐了才起算，参数生成时间不算进 ms
-          toolStartAt.set(part.toolCallId, Date.now())
-          const idx = toolItemIndex.get(part.toolCallId)!
-          const it = items[idx] as Extract<TurnItem, { t: 'tool' }>
-          if (it.auth === 'pending' || it.ask?.state === 'pending') persistWaiting() // 弹卡即落库
-          break
-        }
-        case 'tool-result': {
-          const idx = toolItemIndex.get(part.toolCallId)
-          if (idx === undefined) break
-          // 制品生成成功：工具步骤行原地换成制品卡（成果即过程；失败保持普通工具行带错误）
-          const art = artifacts.get(part.toolCallId)
-          if (art) {
-            // 内置工具规范：改写显示形态时保留这次调用的入参与返回，评分与回放靠它还原"用户看到了什么"，
-            // 下一轮的历史重建靠它把制品还原成一次工具调用（写成一句助手台词会被模型当成自己说过的话模仿）
-            const call = items[idx] as Extract<TurnItem, { t: 'tool' }>
-            items[idx] = {
-              t: 'artifact',
-              ...art,
-              args: call.args,
-              callId: part.toolCallId,
-              result: String(part.output)
+          case 'tool-call': {
+            // 参数已齐。行在 tool-input-start 已建就补齐 args；没建过（SDK 修复调用等路径
+            // 单发 tool-call）就整行新建，兜底与旧行为一致。
+            // 转接调用（018 五节）：input.name 在查询表里就把这一行改写成目标工具——name 记 mcp__<id>__<name>、
+            // args 记真正的参数、display 用工具的展示名。item-done 带出的名字与改动前一致，Tuner 断言与渲染层都不用改
+            const isAsk = part.toolName === ASK_TOOL_NAME
+            const fsEarly = earlyFsCard.get(part.toolCallId)
+            const rawInput = (part.input ?? {}) as Record<string, unknown>
+            const entry =
+              part.toolName === TOOL_INVOKE_NAME
+                ? deferred.find((e) => e.key === rawInput.name)
+                : undefined
+            const shown = entry
+              ? {
+                  name: entry.fullName,
+                  args: (rawInput.arguments && typeof rawInput.arguments === 'object'
+                    ? rawInput.arguments
+                    : {}) as Record<string, unknown>,
+                  display: entry.title || `${entry.serviceName}:${bareName(entry.fullName)}`,
+                  desc: entry.description
+                }
+              : {
+                  name: part.toolName,
+                  args: rawInput,
+                  display: builtinDisplay(part.toolName),
+                  desc: undefined
+                }
+            if (entry) invokeNames.set(part.toolCallId, entry.fullName)
+            const existing = toolItemIndex.get(part.toolCallId)
+            if (existing !== undefined && items[existing]?.t === 'tool') {
+              const it = items[existing] as Extract<TurnItem, { t: 'tool' }>
+              delete it.inputStreaming
+              it.name = shown.name
+              it.args = shown.args
+              it.display = shown.display
+              if (shown.desc) it.desc = shown.desc
+              // 参数期间可能有 early* 补挂到来，取最新
+              if (fsEarly) it.fsCard = fsEarly
+              const lateAuth = earlyAuth.get(part.toolCallId)
+              if (lateAuth) it.auth = lateAuth
+              else if (invokePending.has(part.toolCallId) && !it.auth) it.auth = 'pending'
+              const lateAsk = earlyAsk.get(part.toolCallId)
+              if (lateAsk) it.ask = lateAsk
+              emit({ type: 'item-update', streamId, index: existing, item: it })
+            } else {
+              startItem('tool', {
+                t: 'tool',
+                name: shown.name,
+                id: part.toolCallId,
+                step: stepNo,
+                display: shown.display,
+                desc: shown.desc,
+                auth:
+                  invokePending.has(part.toolCallId) || fsEarly
+                    ? (earlyAuth.get(part.toolCallId) ?? 'pending')
+                    : undefined,
+                fsCard: fsEarly,
+                ask: isAsk ? (earlyAsk.get(part.toolCallId) ?? { state: 'pending' }) : undefined,
+                args: shown.args
+              })
+              toolItemIndex.set(part.toolCallId, cur)
             }
-            emit({ type: 'item-done', streamId, index: idx, item: items[idx] })
+            // 执行耗时从参数齐了才起算，参数生成时间不算进 ms
+            toolStartAt.set(part.toolCallId, Date.now())
+            const idx = toolItemIndex.get(part.toolCallId)!
+            const it = items[idx] as Extract<TurnItem, { t: 'tool' }>
+            if (it.auth === 'pending' || it.ask?.state === 'pending') persistWaiting() // 弹卡即落库
+            break
+          }
+          case 'tool-result': {
+            const idx = toolItemIndex.get(part.toolCallId)
+            if (idx === undefined) break
+            // 制品生成成功：工具步骤行原地换成制品卡（成果即过程；失败保持普通工具行带错误）
+            const art = artifacts.get(part.toolCallId)
+            if (art) {
+              // 内置工具规范：改写显示形态时保留这次调用的入参与返回，评分与回放靠它还原"用户看到了什么"，
+              // 下一轮的历史重建靠它把制品还原成一次工具调用（写成一句助手台词会被模型当成自己说过的话模仿）
+              const call = items[idx] as Extract<TurnItem, { t: 'tool' }>
+              items[idx] = {
+                t: 'artifact',
+                ...art,
+                args: call.args,
+                callId: part.toolCallId,
+                result: String(part.output)
+              }
+              emit({ type: 'item-done', streamId, index: idx, item: items[idx] })
+              persistRunning()
+              break
+            }
+            const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
+            // 提问卡被校验拦下（014 Case 7）：卡片没弹出，tool-call 时预置的 pending 状态必须收掉，
+            // 否则界面留一张永远等不到回应的假卡，且落库后重开会话还在
+            if (
+              item.name === ASK_TOOL_NAME &&
+              typeof part.output === 'string' &&
+              part.output.startsWith('这次提问没有发出')
+            )
+              delete item.ask
+            // 超限结果：item 存摘要（全量在结果库），resultRef 指向结果编号
+            item.result = lateSummaries.get(part.toolCallId) ?? part.output
+            // 检索的完整来源条目随 item 落库（018 Case 7）：来源清单按整个会话查编号
+            const pool = toolCtx.poolByCall.get(part.toolCallId)
+            if (pool?.length) item.pool = pool
+            const userText = userTexts.get(part.toolCallId)
+            if (userText) item.userText = userText // 给用户的失败说明（016 六节）
+            const ref = overflow.refs.get(part.toolCallId)
+            if (ref !== undefined) item.resultRef = ref
+            item.ms = Date.now() - (toolStartAt.get(part.toolCallId) ?? Date.now())
+            emit({ type: 'item-done', streamId, index: idx, item })
             persistRunning()
             break
           }
-          const item = items[idx] as Extract<TurnItem, { t: 'tool' }>
-          // 提问卡被校验拦下（014 Case 7）：卡片没弹出，tool-call 时预置的 pending 状态必须收掉，
-          // 否则界面留一张永远等不到回应的假卡，且落库后重开会话还在
-          if (
-            item.name === ASK_TOOL_NAME &&
-            typeof part.output === 'string' &&
-            part.output.startsWith('这次提问没有发出')
-          )
-            delete item.ask
-          // 超限结果：item 存摘要（全量在结果库），resultRef 指向结果编号
-          item.result = lateSummaries.get(part.toolCallId) ?? part.output
-          // 检索的完整来源条目随 item 落库（018 Case 7）：来源清单按整个会话查编号
-          const pool = toolCtx.poolByCall.get(part.toolCallId)
-          if (pool?.length) item.pool = pool
-          const userText = userTexts.get(part.toolCallId)
-          if (userText) item.userText = userText // 给用户的失败说明（016 六节）
-          const ref = overflow.refs.get(part.toolCallId)
-          if (ref !== undefined) item.resultRef = ref
-          item.ms = Date.now() - (toolStartAt.get(part.toolCallId) ?? Date.now())
-          emit({ type: 'item-done', streamId, index: idx, item })
-          persistRunning()
-          break
+          case 'finish-step':
+            streamed.push(stepOf(part))
+            stepNo++
+            break
+          case 'error':
+            throw part.error
         }
-        case 'finish-step':
-          streamed.push(stepOf(part))
-          stepNo++
-          break
-        case 'error':
-          throw part.error
       }
+
+      // 来源结算：流式结束后扫描回答里的资料编号 [a3f2-1]，在整个会话的来源池里反查（018 Case 7：
+      // 追问时引用前几轮的资料也能列出来源）；找不到的编号正文照原样显示、清单里不列；无编号则无来源区
+      const answer = [...items]
+        .reverse()
+        .find((i): i is { t: 'text'; text: string } => i.t === 'text')
+      if (answer) {
+        const cited = new Set([...answer.text.matchAll(/\[([0-9a-f]{4}-\d+)\]/g)].map((m) => m[1]))
+        if (cited.size) {
+          const seen = new Set<string>()
+          const list = [...toolCtx.pool, ...loadSessionPool(convId)].filter((s) => {
+            if (!cited.has(s.n) || seen.has(s.n)) return false
+            seen.add(s.n)
+            return true
+          })
+          if (list.length) {
+            startItem('sources', { t: 'sources', list })
+            endItem()
+          }
+        }
+      }
+      clearTimeout(watchdog)
+      if (stalled && attempt === 1 && items.length === itemsBefore && streamed.length === 0) {
+        streamAbort = new AbortController()
+        controller.signal.addEventListener('abort', () => streamAbort.abort())
+        result = startStream()
+        continue
+      }
+      break
     }
 
-    // 来源结算：流式结束后扫描回答里的资料编号 [a3f2-1]，在整个会话的来源池里反查（018 Case 7：
-    // 追问时引用前几轮的资料也能列出来源）；找不到的编号正文照原样显示、清单里不列；无编号则无来源区
-    const answer = [...items]
-      .reverse()
-      .find((i): i is { t: 'text'; text: string } => i.t === 'text')
-    if (answer) {
-      const cited = new Set([...answer.text.matchAll(/\[([0-9a-f]{4}-\d+)\]/g)].map((m) => m[1]))
-      if (cited.size) {
-        const seen = new Set<string>()
-        const list = [...toolCtx.pool, ...loadSessionPool(convId)].filter((s) => {
-          if (!cited.has(s.n) || seen.has(s.n)) return false
-          seen.add(s.n)
-          return true
-        })
-        if (list.length) {
-          startItem('sources', { t: 'sources', list })
-          endItem()
-        }
-      }
+    if (stalled) {
+      settleUnfinished('出错中止')
+      items.push({ t: 'boundary', kind: 'error', text: STALL_MSG })
+      finish('error', STALL_MSG, await stoppedUsage(), ctxUsage)
+      return
     }
 
     // abort 后 fullStream 不抛错、正常关闭；已有完成步时 result.usage 也能解析出值，
@@ -1226,7 +1305,11 @@ async function streamCore(core: {
       ctxUsage
     )
   } catch (e) {
-    if (controller.signal.aborted) {
+    if (stalled) {
+      settleUnfinished('出错中止')
+      items.push({ t: 'boundary', kind: 'error', text: STALL_MSG })
+      finish('error', STALL_MSG, await stoppedUsage(), ctxUsage)
+    } else if (controller.signal.aborted) {
       // 等授权中停止、一步没完成的停止都从这里进
       settleUnfinished('用户停止')
       finish('stopped', undefined, await stoppedUsage(), ctxUsage)
