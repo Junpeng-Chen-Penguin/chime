@@ -199,6 +199,20 @@ app.whenReady().then(() => {
               .prepare("SELECT value FROM settings WHERE key = 'default_model'")
               .get() as { value: string } | undefined
             defaultModel = dm?.value ?? null
+            // 与运行时同一条兜底（db.ts getDefaultModelRef）：存的默认模型已取消勾选或服务商停用，
+            // 实际用的是首个已启用服务商的首个勾选模型。自报也给实际用的，Tuner 显示与跑测才对得上
+            // （2026-09-11 换模型后 Tuner 芯片显示旧名字，跑测也拿旧名字去请求）
+            const picked = (ref: string | null): boolean => {
+              if (!ref) return false
+              const i = ref.indexOf(':')
+              if (i < 0) return false
+              const v = vendors.find((x) => x.vendor === ref.slice(0, i))
+              return !!v && v.enabled && v.models.includes(ref.slice(i + 1))
+            }
+            if (!picked(defaultModel)) {
+              const v = vendors.find((x) => x.enabled && x.models.length)
+              if (v) defaultModel = `${v.vendor}:${v.models[0]}`
+            }
           } catch {
             // 旧库结构：按未配置处理
           }
