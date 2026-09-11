@@ -45,8 +45,9 @@ mac:
     - NSDocumentsFolderUsageDescription: Chime 需要读取文稿目录中的知识库文档。
     - NSDownloadsFolderUsageDescription: Chime 需要读取下载目录中的知识库文档。
   notarize: false
-dmg:
-  artifactName: ${name}-${version}.${ext}
+  # 只出 zip：装机用 ditto 解 zip，dmg 从没用过，每版白占 210 MB
+  target:
+    - zip
 linux:
   target:
     - AppImage
